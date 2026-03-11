@@ -1,5 +1,10 @@
 # layerv-qurl
 
+[![PyPI](https://img.shields.io/pypi/v/layerv-qurl)](https://pypi.org/project/layerv-qurl/)
+[![CI](https://github.com/layervai/qurl-python/actions/workflows/ci.yml/badge.svg)](https://github.com/layervai/qurl-python/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/pypi/pyversions/layerv-qurl)](https://pypi.org/project/layerv-qurl/)
+[![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
+
 Python SDK for the [QURL API](https://docs.layerv.ai) — secure, time-limited access links for AI agents.
 
 ## Installation
