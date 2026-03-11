@@ -1,5 +1,6 @@
 """QURL Python SDK — secure, time-limited access links for AI agents."""
 
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from layerv_qurl.async_client import AsyncQURLClient
@@ -58,5 +59,5 @@ __all__ = [
 
 try:
     __version__ = _pkg_version("layerv-qurl")
-except Exception:
+except PackageNotFoundError:
     __version__ = "dev"

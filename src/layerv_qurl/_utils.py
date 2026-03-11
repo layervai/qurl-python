@@ -8,6 +8,7 @@ import logging
 import random
 import re
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any
 
@@ -62,7 +63,7 @@ def default_user_agent() -> str:
     """Return the default User-Agent string, caching the version lookup."""
     try:
         v = _pkg_version("layerv-qurl")
-    except Exception:
+    except PackageNotFoundError:
         v = "dev"
     return f"qurl-python-sdk/{v}"
 
@@ -88,9 +89,9 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
             body[k] = v.isoformat()
         elif dataclasses.is_dataclass(v) and not isinstance(v, type):
             body[k] = {
-                fk: fv
-                for fk, fv in dataclasses.asdict(v).items()
-                if fv is not None
+                f.name: getattr(v, f.name)
+                for f in dataclasses.fields(v)
+                if getattr(v, f.name) is not None
             }
         else:
             body[k] = v
@@ -228,7 +229,7 @@ def parse_error(response: httpx.Response) -> QURLError:
             request_id=envelope.get("meta", {}).get("request_id"),
             retry_after=retry_after,
         )
-    except (ValueError, KeyError, AttributeError):
+    except (ValueError, KeyError, TypeError):
         return cls(
             status=response.status_code,
             code="unknown",
@@ -245,6 +246,28 @@ def retry_delay(attempt: int, last_error: Exception | None) -> float:
     base: float = 0.5 * (2 ** (attempt - 1))
     jitter = random.random() * base * 0.5  # noqa: S311
     return min(base + jitter, 30.0)
+
+
+def build_list_params(
+    limit: int | None,
+    cursor: str | None,
+    status: str | None,
+    q: str | None,
+    sort: str | None,
+) -> dict[str, str]:
+    """Build query params for list endpoints, dropping None values."""
+    params: dict[str, str] = {}
+    if limit is not None:
+        params["limit"] = str(limit)
+    if cursor:
+        params["cursor"] = cursor
+    if status:
+        params["status"] = status
+    if q:
+        params["q"] = q
+    if sort:
+        params["sort"] = sort
+    return params
 
 
 def mask_key(api_key: str) -> str:

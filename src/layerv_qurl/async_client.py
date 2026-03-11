@@ -1,4 +1,7 @@
-"""Asynchronous QURL API client."""
+"""Asynchronous QURL API client.
+
+NOTE: Business logic mirrors client.py — keep both in sync.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from layerv_qurl._utils import (
     RETRYABLE_STATUS,
     RETRYABLE_STATUS_POST,
     build_body,
+    build_list_params,
     default_user_agent,
     logger,
     mask_key,
@@ -165,18 +169,7 @@ class AsyncQURLClient:
             q: Search query string.
             sort: Sort order (e.g. ``"created_at"``, ``"-created_at"``).
         """
-        params: dict[str, str] = {}
-        if limit is not None:
-            params["limit"] = str(limit)
-        if cursor:
-            params["cursor"] = cursor
-        if status:
-            params["status"] = status
-        if q:
-            params["q"] = q
-        if sort:
-            params["sort"] = sort
-
+        params = build_list_params(limit, cursor, status, q, sort)
         data, meta = await self._raw_request("GET", "/v1/qurls", params=params)
         return parse_list_output(data, meta)
 

@@ -65,6 +65,13 @@ def client() -> QURLClient:
 
 
 @pytest.fixture
+async def async_client() -> AsyncQURLClient:
+    client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0)
+    yield client  # type: ignore[misc]
+    await client.close()
+
+
+@pytest.fixture
 def retry_client() -> QURLClient:
     return QURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=2)
 
@@ -761,7 +768,7 @@ def test_post_request_has_content_type(client: QURLClient) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_create() -> None:
+async def test_async_create(async_client: AsyncQURLClient) -> None:
     respx.post(f"{BASE_URL}/v1/qurl").mock(
         return_value=httpx.Response(
             201,
@@ -776,16 +783,14 @@ async def test_async_create() -> None:
         )
     )
 
-    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
-        result = await client.create(target_url="https://example.com", expires_in="24h")
-
+    result = await async_client.create(target_url="https://example.com", expires_in="24h")
     assert result.resource_id == "r_async"
     assert isinstance(result.expires_at, datetime)
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_resolve() -> None:
+async def test_async_resolve(async_client: AsyncQURLClient) -> None:
     respx.post(f"{BASE_URL}/v1/resolve").mock(
         return_value=httpx.Response(
             200,
@@ -803,9 +808,7 @@ async def test_async_resolve() -> None:
         )
     )
 
-    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
-        result = await client.resolve("at_test_token")
-
+    result = await async_client.resolve("at_test_token")
     assert result.target_url == "https://api.example.com/data"
     assert result.access_grant is not None
     assert result.access_grant.expires_in == 305
@@ -813,7 +816,7 @@ async def test_async_resolve() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_list_all() -> None:
+async def test_async_list_all(async_client: AsyncQURLClient) -> None:
     route = respx.get(f"{BASE_URL}/v1/qurls")
     route.side_effect = [
         httpx.Response(200, json={
@@ -826,49 +829,44 @@ async def test_async_list_all() -> None:
         }),
     ]
 
-    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
-        all_qurls = [q async for q in client.list_all(status="active", page_size=1)]
-
+    all_qurls = [q async for q in async_client.list_all(status="active", page_size=1)]
     assert len(all_qurls) == 2
     assert [q.resource_id for q in all_qurls] == ["r_1", "r_2"]
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_network_error_wrapped() -> None:
+async def test_async_network_error_wrapped(async_client: AsyncQURLClient) -> None:
     respx.get(f"{BASE_URL}/v1/quota").mock(
         side_effect=httpx.ConnectError("Connection refused")
     )
 
-    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
-        with pytest.raises(QURLNetworkError, match="Connection refused"):
-            await client.get_quota()
+    with pytest.raises(QURLNetworkError, match="Connection refused"):
+        await async_client.get_quota()
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_timeout_error_wrapped() -> None:
+async def test_async_timeout_error_wrapped(async_client: AsyncQURLClient) -> None:
     """Async: httpx.TimeoutException is wrapped in QURLTimeoutError."""
     respx.get(f"{BASE_URL}/v1/quota").mock(
         side_effect=httpx.ReadTimeout("Read timed out")
     )
 
-    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
-        with pytest.raises(QURLTimeoutError, match="Read timed out"):
-            await client.get_quota()
+    with pytest.raises(QURLTimeoutError, match="Read timed out"):
+        await async_client.get_quota()
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_timeout_is_network_error() -> None:
+async def test_async_timeout_is_network_error(async_client: AsyncQURLClient) -> None:
     """Async: QURLTimeoutError is caught by except QURLNetworkError."""
     respx.get(f"{BASE_URL}/v1/quota").mock(
         side_effect=httpx.ReadTimeout("Read timed out")
     )
 
-    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
-        with pytest.raises(QURLNetworkError):
-            await client.get_quota()
+    with pytest.raises(QURLNetworkError):
+        await async_client.get_quota()
 
 
 def test_async_repr() -> None:
@@ -1051,7 +1049,7 @@ def test_extend(client: QURLClient) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_extend() -> None:
+async def test_async_extend(async_client: AsyncQURLClient) -> None:
     """Async extend() delegates to update(extend_by=...)."""
     route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
         return_value=httpx.Response(
@@ -1068,9 +1066,7 @@ async def test_async_extend() -> None:
         )
     )
 
-    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
-        result = await client.extend("r_abc", "24h")
-
+    result = await async_client.extend("r_abc", "24h")
     assert result.resource_id == "r_abc"
     body = json.loads(route.calls[0].request.content)
     assert body == {"extend_by": "24h"}
