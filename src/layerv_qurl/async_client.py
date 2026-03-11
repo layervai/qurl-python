@@ -15,6 +15,7 @@ from layerv_qurl._utils import (
     RETRYABLE_STATUS_POST,
     build_body,
     default_user_agent,
+    logger,
     mask_key,
     parse_create_output,
     parse_error,
@@ -114,6 +115,10 @@ class AsyncQURLClient:
     ) -> CreateOutput:
         """Create a new QURL.
 
+        Returns a :class:`CreateOutput` with the ``resource_id``, ``qurl_link``,
+        ``qurl_site``, and ``expires_at``. Use :meth:`get` to fetch the full
+        :class:`QURL` object with status, timestamps, and policy details.
+
         Args:
             target_url: The URL to protect.
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``).
@@ -202,6 +207,17 @@ class AsyncQURLClient:
         """Delete (revoke) a QURL."""
         validate_id(resource_id)
         await self._request("DELETE", f"/v1/qurls/{resource_id}")
+
+    async def extend(self, resource_id: str, duration: str) -> QURL:
+        """Extend a QURL's expiration.
+
+        Convenience method — equivalent to ``await update(resource_id, extend_by=duration)``.
+
+        Args:
+            resource_id: QURL resource ID.
+            duration: Duration to add (e.g. ``"7d"``, ``"24h"``).
+        """
+        return await self.update(resource_id, extend_by=duration)
 
     async def update(
         self,
@@ -295,7 +311,10 @@ class AsyncQURLClient:
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
                 delay = retry_delay(attempt, last_error)
+                logger.debug("Retry %d/%d after %.1fs", attempt, self._max_retries, delay)
                 await asyncio.sleep(delay)
+
+            logger.debug("%s %s", method, url)
 
             try:
                 response = await self._client.request(
@@ -306,15 +325,19 @@ class AsyncQURLClient:
                     headers=self._base_headers,
                 )
             except httpx.TimeoutException as exc:
+                logger.debug("%s %s timed out", method, url)
                 if attempt < self._max_retries:
                     last_error = exc
                     continue
                 raise QURLTimeoutError(str(exc), cause=exc) from exc
             except httpx.TransportError as exc:
+                logger.debug("%s %s transport error: %s", method, url, exc)
                 if attempt < self._max_retries:
                     last_error = exc
                     continue
                 raise QURLNetworkError(str(exc), cause=exc) from exc
+
+            logger.debug("%s %s → %d", method, url, response.status_code)
 
             if response.status_code < 400:
                 if response.status_code == 204 or not response.content:

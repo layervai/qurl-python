@@ -15,6 +15,7 @@ from layerv_qurl._utils import (
     RETRYABLE_STATUS_POST,
     build_body,
     default_user_agent,
+    logger,
     mask_key,
     parse_create_output,
     parse_error,
@@ -59,12 +60,20 @@ class QURLClient:
         # Resolve an access token (opens firewall for your IP)
         access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 
-        # Update a QURL (extend, change description, etc.)
-        qurl = client.update("r_xxx", extend_by="7d", description="updated")
+        # Extend a QURL's expiration
+        qurl = client.extend("r_xxx", "7d")
+
+        # Update metadata
+        qurl = client.update("r_xxx", description="updated")
 
         # Iterate all active QURLs
         for qurl in client.list_all(status="active"):
             print(qurl.resource_id)
+
+    Enable debug logging to see requests::
+
+        import logging
+        logging.getLogger("layerv_qurl").setLevel(logging.DEBUG)
     """
 
     def __init__(
@@ -120,6 +129,10 @@ class QURLClient:
         access_policy: AccessPolicy | None = None,
     ) -> CreateOutput:
         """Create a new QURL.
+
+        Returns a :class:`CreateOutput` with the ``resource_id``, ``qurl_link``,
+        ``qurl_site``, and ``expires_at``. Use :meth:`get` to fetch the full
+        :class:`QURL` object with status, timestamps, and policy details.
 
         Args:
             target_url: The URL to protect.
@@ -215,6 +228,17 @@ class QURLClient:
         validate_id(resource_id)
         self._request("DELETE", f"/v1/qurls/{resource_id}")
 
+    def extend(self, resource_id: str, duration: str) -> QURL:
+        """Extend a QURL's expiration.
+
+        Convenience method — equivalent to ``update(resource_id, extend_by=duration)``.
+
+        Args:
+            resource_id: QURL resource ID.
+            duration: Duration to add (e.g. ``"7d"``, ``"24h"``).
+        """
+        return self.update(resource_id, extend_by=duration)
+
     def update(
         self,
         resource_id: str,
@@ -226,7 +250,6 @@ class QURLClient:
     ) -> QURL:
         """Update a QURL — extend expiration, change description, etc.
 
-        Combines the old ``extend()`` and ``update()`` into a single method.
         All fields are optional; only provided fields are sent.
 
         Args:
@@ -308,7 +331,10 @@ class QURLClient:
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
                 delay = retry_delay(attempt, last_error)
+                logger.debug("Retry %d/%d after %.1fs", attempt, self._max_retries, delay)
                 time.sleep(delay)
+
+            logger.debug("%s %s", method, url)
 
             try:
                 response = self._client.request(
@@ -319,15 +345,19 @@ class QURLClient:
                     headers=self._base_headers,
                 )
             except httpx.TimeoutException as exc:
+                logger.debug("%s %s timed out", method, url)
                 if attempt < self._max_retries:
                     last_error = exc
                     continue
                 raise QURLTimeoutError(str(exc), cause=exc) from exc
             except httpx.TransportError as exc:
+                logger.debug("%s %s transport error: %s", method, url, exc)
                 if attempt < self._max_retries:
                     last_error = exc
                     continue
                 raise QURLNetworkError(str(exc), cause=exc) from exc
+
+            logger.debug("%s %s → %d", method, url, response.status_code)
 
             if response.status_code < 400:
                 if response.status_code == 204 or not response.content:

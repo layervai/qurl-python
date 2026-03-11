@@ -4,7 +4,17 @@ from importlib.metadata import version as _pkg_version
 
 from layerv_qurl.async_client import AsyncQURLClient
 from layerv_qurl.client import QURLClient
-from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
+from layerv_qurl.errors import (
+    AuthenticationError,
+    AuthorizationError,
+    NotFoundError,
+    QURLError,
+    QURLNetworkError,
+    QURLTimeoutError,
+    RateLimitError,
+    ServerError,
+    ValidationError,
+)
 from layerv_qurl.types import (
     QURL,
     AccessGrant,
@@ -22,10 +32,18 @@ from layerv_qurl.types import (
 __all__ = [
     "AsyncQURLClient",
     "QURLClient",
+    # Errors
+    "AuthenticationError",
+    "AuthorizationError",
+    "NotFoundError",
     "QURLError",
     "QURLNetworkError",
-    "QURLStatus",
     "QURLTimeoutError",
+    "RateLimitError",
+    "ServerError",
+    "ValidationError",
+    # Types
+    "QURLStatus",
     "AccessGrant",
     "AccessPolicy",
     "CreateOutput",

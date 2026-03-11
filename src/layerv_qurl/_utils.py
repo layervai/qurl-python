@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
+import logging
 import random
 import re
 from datetime import datetime
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any
 
-from layerv_qurl.errors import QURLError
+from layerv_qurl.errors import (
+    AuthenticationError,
+    AuthorizationError,
+    NotFoundError,
+    QURLError,
+    RateLimitError,
+    ServerError,
+    ValidationError,
+)
 from layerv_qurl.types import (
     QURL,
     AccessGrant,
@@ -27,26 +37,34 @@ from layerv_qurl.types import (
 if TYPE_CHECKING:
     import httpx
 
+logger = logging.getLogger("layerv_qurl")
+
 DEFAULT_BASE_URL = "https://api.layerv.ai"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 3
 RETRYABLE_STATUS = {429, 502, 503, 504}
 RETRYABLE_STATUS_POST = {429}  # POST is not idempotent — only retry rate limits
 
-_cached_user_agent: str | None = None
 _RESOURCE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
+_ERROR_CLASS_MAP: dict[int, type[QURLError]] = {
+    400: ValidationError,
+    401: AuthenticationError,
+    403: AuthorizationError,
+    404: NotFoundError,
+    422: ValidationError,
+    429: RateLimitError,
+}
 
+
+@functools.lru_cache(maxsize=1)
 def default_user_agent() -> str:
     """Return the default User-Agent string, caching the version lookup."""
-    global _cached_user_agent  # noqa: PLW0603
-    if _cached_user_agent is None:
-        try:
-            v = _pkg_version("layerv-qurl")
-        except Exception:
-            v = "dev"
-        _cached_user_agent = f"qurl-python-sdk/{v}"
-    return _cached_user_agent
+    try:
+        v = _pkg_version("layerv-qurl")
+    except Exception:
+        v = "dev"
+    return f"qurl-python-sdk/{v}"
 
 
 def validate_id(value: str, name: str = "resource_id") -> str:
@@ -184,17 +202,24 @@ def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
 
 
 def parse_error(response: httpx.Response) -> QURLError:
-    """Parse an API error response into a QURLError."""
+    """Parse an API error response into the appropriate QURLError subclass."""
     retry_after = None
     if response.status_code == 429:
         ra = response.headers.get("Retry-After")
         if ra and ra.isdigit():
             retry_after = int(ra)
 
+    # Pick the right subclass, defaulting to ServerError for 5xx or QURLError
+    cls: type[QURLError]
+    if response.status_code >= 500:
+        cls = ServerError
+    else:
+        cls = _ERROR_CLASS_MAP.get(response.status_code, QURLError)
+
     try:
         envelope = response.json()
         err = envelope.get("error", {})
-        return QURLError(
+        return cls(
             status=err.get("status", response.status_code),
             code=err.get("code", "unknown"),
             title=err.get("title", response.reason_phrase or ""),
@@ -204,7 +229,7 @@ def parse_error(response: httpx.Response) -> QURLError:
             retry_after=retry_after,
         )
     except (ValueError, KeyError, AttributeError):
-        return QURLError(
+        return cls(
             status=response.status_code,
             code="unknown",
             title=response.reason_phrase or "",

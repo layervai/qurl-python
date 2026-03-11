@@ -17,6 +17,15 @@ from layerv_qurl import (
     QURLNetworkError,
     QURLTimeoutError,
 )
+from layerv_qurl.errors import (
+    AuthenticationError,
+    AuthorizationError,
+    NotFoundError,
+    RateLimitError,
+    ServerError,
+    ValidationError,
+)
+from layerv_qurl.types import AccessPolicy
 
 BASE_URL = "https://api.test.layerv.ai"
 
@@ -869,3 +878,261 @@ def test_async_repr() -> None:
     assert "lv_l" in r
     assert "ghij" in r
     assert "abcdefghij" not in r
+
+
+# --- Error subclass tests ---
+
+
+@respx.mock
+def test_401_raises_authentication_error(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            401,
+            json={
+                "error": {
+                    "status": 401, "code": "unauthorized",
+                    "title": "Unauthorized", "detail": "Invalid API key",
+                },
+            },
+        )
+    )
+
+    with pytest.raises(AuthenticationError) as exc_info:
+        client.get_quota()
+    assert exc_info.value.status == 401
+    # Also caught by parent QURLError
+    with pytest.raises(QURLError):
+        client.get_quota()
+
+
+@respx.mock
+def test_403_raises_authorization_error(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            403,
+            json={
+                "error": {
+                    "status": 403, "code": "forbidden",
+                    "title": "Forbidden", "detail": "Insufficient scope",
+                },
+            },
+        )
+    )
+
+    with pytest.raises(AuthorizationError) as exc_info:
+        client.get_quota()
+    assert exc_info.value.status == 403
+
+
+@respx.mock
+def test_404_raises_not_found_error(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/qurls/r_notfound0000").mock(
+        return_value=httpx.Response(
+            404,
+            json={
+                "error": {
+                    "status": 404, "code": "not_found",
+                    "title": "Not Found", "detail": "QURL not found",
+                },
+                "meta": {"request_id": "req_err"},
+            },
+        )
+    )
+
+    with pytest.raises(NotFoundError) as exc_info:
+        client.get("r_notfound0000")
+    assert exc_info.value.status == 404
+    assert exc_info.value.request_id == "req_err"
+
+
+@respx.mock
+def test_422_raises_validation_error(client: QURLClient) -> None:
+    respx.post(f"{BASE_URL}/v1/qurl").mock(
+        return_value=httpx.Response(
+            422,
+            json={
+                "error": {
+                    "status": 422, "code": "validation_error",
+                    "title": "Validation Error", "detail": "Invalid target_url",
+                    "invalid_fields": {"target_url": "must be a valid URL"},
+                },
+            },
+        )
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        client.create(target_url="not-a-url")
+    assert exc_info.value.invalid_fields == {"target_url": "must be a valid URL"}
+
+
+@respx.mock
+def test_429_raises_rate_limit_error(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            429,
+            headers={"Retry-After": "10"},
+            json={
+                "error": {
+                    "status": 429, "code": "rate_limited",
+                    "title": "Rate Limited", "detail": "Slow down",
+                },
+            },
+        )
+    )
+
+    with pytest.raises(RateLimitError) as exc_info:
+        client.get_quota()
+    assert exc_info.value.retry_after == 10
+
+
+@respx.mock
+def test_500_raises_server_error(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            500,
+            json={
+                "error": {
+                    "status": 500, "code": "internal",
+                    "title": "Internal Server Error", "detail": "Something broke",
+                },
+            },
+        )
+    )
+
+    with pytest.raises(ServerError) as exc_info:
+        client.get_quota()
+    assert exc_info.value.status == 500
+
+
+@respx.mock
+def test_400_raises_validation_error(client: QURLClient) -> None:
+    respx.post(f"{BASE_URL}/v1/qurl").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": {
+                    "status": 400, "code": "bad_request",
+                    "title": "Bad Request", "detail": "Missing target_url",
+                },
+            },
+        )
+    )
+
+    with pytest.raises(ValidationError):
+        client.create(target_url="")
+
+
+# --- extend() convenience method ---
+
+
+@respx.mock
+def test_extend(client: QURLClient) -> None:
+    """extend() delegates to update(extend_by=...)."""
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "expires_at": "2026-03-20T10:00:00Z",
+                },
+            },
+        )
+    )
+
+    result = client.extend("r_abc123def45", "7d")
+    assert isinstance(result.expires_at, datetime)
+    body = json.loads(route.calls[0].request.content)
+    assert body == {"extend_by": "7d"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_extend() -> None:
+    """Async extend() delegates to update(extend_by=...)."""
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "expires_at": "2026-03-20T10:00:00Z",
+                },
+            },
+        )
+    )
+
+    async with AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0) as client:
+        result = await client.extend("r_abc", "24h")
+
+    assert result.resource_id == "r_abc"
+    body = json.loads(route.calls[0].request.content)
+    assert body == {"extend_by": "24h"}
+
+
+# --- AccessPolicy serialization ---
+
+
+@respx.mock
+def test_access_policy_serialized(client: QURLClient) -> None:
+    """AccessPolicy dataclass is serialized correctly in create()."""
+    route = respx.post(f"{BASE_URL}/v1/qurl").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_policy",
+                    "qurl_link": "https://qurl.link/#at_test",
+                    "qurl_site": "https://r_policy.qurl.site",
+                },
+            },
+        )
+    )
+
+    policy = AccessPolicy(
+        ip_allowlist=["10.0.0.0/8"],
+        geo_denylist=["CN", "RU"],
+    )
+    client.create(target_url="https://example.com", access_policy=policy)
+    body = json.loads(route.calls[0].request.content)
+    assert body["access_policy"] == {
+        "ip_allowlist": ["10.0.0.0/8"],
+        "geo_denylist": ["CN", "RU"],
+    }
+    # None fields should be omitted from the serialized policy
+    assert "ip_denylist" not in body["access_policy"]
+    assert "geo_allowlist" not in body["access_policy"]
+
+
+@respx.mock
+def test_access_policy_in_update(client: QURLClient) -> None:
+    """AccessPolicy can also be passed to update()."""
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "access_policy": {
+                        "user_agent_deny_regex": "curl.*",
+                    },
+                },
+            },
+        )
+    )
+
+    policy = AccessPolicy(user_agent_deny_regex="curl.*")
+    result = client.update("r_abc", access_policy=policy)
+    assert result.access_policy is not None
+    assert result.access_policy.user_agent_deny_regex == "curl.*"
+    body = json.loads(route.calls[0].request.content)
+    assert body["access_policy"] == {"user_agent_deny_regex": "curl.*"}
