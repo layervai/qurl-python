@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
-pytest.importorskip("langchain_core", reason="langchain-core not installed")
-
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
