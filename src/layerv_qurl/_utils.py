@@ -217,7 +217,7 @@ def retry_delay(attempt: int, last_error: Exception | None) -> float:
     """Compute retry delay with exponential backoff, jitter, and Retry-After cap."""
     if isinstance(last_error, QURLError) and last_error.retry_after:
         return min(float(last_error.retry_after), 30.0)
-    base = 0.5 * (2 ** (attempt - 1))
+    base: float = 0.5 * (2 ** (attempt - 1))
     jitter = random.random() * base * 0.5  # noqa: S311
     return min(base + jitter, 30.0)
 
