@@ -898,9 +898,7 @@ def test_401_raises_authentication_error(client: QURLClient) -> None:
     with pytest.raises(AuthenticationError) as exc_info:
         client.get_quota()
     assert exc_info.value.status == 401
-    # Also caught by parent QURLError
-    with pytest.raises(QURLError):
-        client.get_quota()
+    assert isinstance(exc_info.value, QURLError)
 
 
 @respx.mock

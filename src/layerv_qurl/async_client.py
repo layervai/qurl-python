@@ -313,7 +313,7 @@ class AsyncQURLClient:
                 response = await self._client.request(
                     method,
                     url,
-                    json=body if body is not None else None,
+                    json=body,
                     params=params,
                     headers=self._base_headers,
                 )
