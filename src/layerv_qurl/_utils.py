@@ -25,6 +25,10 @@ from layerv_qurl.types import (
     QURL,
     AccessGrant,
     AccessPolicy,
+    AIAgentPolicy,
+    BatchCreateOutput,
+    BatchItemError,
+    BatchItemResult,
     CreateOutput,
     ListOutput,
     MintOutput,
@@ -98,31 +102,39 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
+    """Parse an AccessPolicy from API response data."""
+    ai_policy = None
+    if data.get("ai_agent_policy"):
+        ap = data["ai_agent_policy"]
+        ai_policy = AIAgentPolicy(
+            block_all=ap.get("block_all"),
+            deny_categories=ap.get("deny_categories"),
+            allow_categories=ap.get("allow_categories"),
+        )
+    return AccessPolicy(
+        ip_allowlist=data.get("ip_allowlist"),
+        ip_denylist=data.get("ip_denylist"),
+        geo_allowlist=data.get("geo_allowlist"),
+        geo_denylist=data.get("geo_denylist"),
+        user_agent_allow_regex=data.get("user_agent_allow_regex"),
+        user_agent_deny_regex=data.get("user_agent_deny_regex"),
+        ai_agent_policy=ai_policy,
+    )
+
+
 def parse_qurl(data: dict[str, Any]) -> QURL:
     """Parse a QURL resource from API response data."""
-    policy = None
-    if data.get("access_policy"):
-        p = data["access_policy"]
-        policy = AccessPolicy(
-            ip_allowlist=p.get("ip_allowlist"),
-            ip_denylist=p.get("ip_denylist"),
-            geo_allowlist=p.get("geo_allowlist"),
-            geo_denylist=p.get("geo_denylist"),
-            user_agent_allow_regex=p.get("user_agent_allow_regex"),
-            user_agent_deny_regex=p.get("user_agent_deny_regex"),
-        )
     return QURL(
         resource_id=data["resource_id"],
         target_url=data["target_url"],
         status=data["status"],
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
-        one_time_use=data.get("one_time_use", False),
-        max_sessions=data.get("max_sessions"),
         description=data.get("description"),
+        tags=data.get("tags", []),
         qurl_site=data.get("qurl_site"),
-        qurl_link=data.get("qurl_link"),
-        access_policy=policy,
+        custom_domain=data.get("custom_domain"),
     )
 
 
@@ -133,6 +145,8 @@ def parse_create_output(data: dict[str, Any]) -> CreateOutput:
         qurl_link=data["qurl_link"],
         qurl_site=data["qurl_site"],
         expires_at=_parse_dt(data.get("expires_at")),
+        qurl_id=data.get("qurl_id", ""),
+        label=data.get("label"),
     )
 
 
@@ -173,6 +187,7 @@ def parse_quota(data: dict[str, Any]) -> Quota:
             resolve_per_minute=r.get("resolve_per_minute", 0),
             max_active_qurls=r.get("max_active_qurls", 0),
             max_tokens_per_qurl=r.get("max_tokens_per_qurl", 0),
+            max_expiry_seconds=r.get("max_expiry_seconds", 0),
         )
     usage = None
     if data.get("usage"):
@@ -180,7 +195,7 @@ def parse_quota(data: dict[str, Any]) -> Quota:
         usage = Usage(
             qurls_created=u.get("qurls_created", 0),
             active_qurls=u.get("active_qurls", 0),
-            active_qurls_percent=u.get("active_qurls_percent", 0.0),
+            active_qurls_percent=u.get("active_qurls_percent"),
             total_accesses=u.get("total_accesses", 0),
         )
     return Quota(
@@ -199,6 +214,35 @@ def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
         qurls=qurls,
         next_cursor=meta.get("next_cursor") if meta else None,
         has_more=meta.get("has_more", False) if meta else False,
+    )
+
+
+def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
+    """Parse a BatchCreateOutput from API response data."""
+    results: list[BatchItemResult] = []
+    for item in data.get("results", []):
+        err = None
+        if item.get("error"):
+            e = item["error"]
+            err = BatchItemError(
+                code=e.get("code", ""),
+                message=e.get("message", ""),
+            )
+        results.append(
+            BatchItemResult(
+                index=item.get("index", 0),
+                success=item.get("success", False),
+                resource_id=item.get("resource_id"),
+                qurl_link=item.get("qurl_link"),
+                qurl_site=item.get("qurl_site"),
+                expires_at=_parse_dt(item.get("expires_at")),
+                error=err,
+            )
+        )
+    return BatchCreateOutput(
+        succeeded=data.get("succeeded", 0),
+        failed=data.get("failed", 0),
+        results=results,
     )
 
 
@@ -254,6 +298,10 @@ def build_list_params(
     status: str | None,
     q: str | None,
     sort: str | None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    expires_before: str | None = None,
+    expires_after: str | None = None,
 ) -> dict[str, str]:
     """Build query params for list endpoints, dropping None values."""
     params: dict[str, str] = {}
@@ -267,6 +315,14 @@ def build_list_params(
         params["q"] = q
     if sort:
         params["sort"] = sort
+    if created_after:
+        params["created_after"] = created_after
+    if created_before:
+        params["created_before"] = created_before
+    if expires_before:
+        params["expires_before"] = expires_before
+    if expires_after:
+        params["expires_after"] = expires_after
     return params
 
 

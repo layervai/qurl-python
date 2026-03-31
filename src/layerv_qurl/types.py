@@ -8,7 +8,7 @@ from typing import Literal
 
 #: Valid QURL status values. Accepts known values for IDE autocomplete,
 #: plus ``str`` for forward compatibility with new API statuses.
-QURLStatus = Literal["active", "expired", "revoked", "consumed", "frozen"] | str
+QURLStatus = Literal["active", "revoked"] | str
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -21,6 +21,15 @@ def _parse_dt(s: str | None) -> datetime | None:
 
 
 @dataclass
+class AIAgentPolicy:
+    """Structured policy for controlling AI agent access."""
+
+    block_all: bool | None = None
+    deny_categories: list[str] | None = None
+    allow_categories: list[str] | None = None
+
+
+@dataclass
 class AccessPolicy:
     """Access control policy for a QURL."""
 
@@ -30,6 +39,7 @@ class AccessPolicy:
     geo_denylist: list[str] | None = None
     user_agent_allow_regex: str | None = None
     user_agent_deny_regex: str | None = None
+    ai_agent_policy: AIAgentPolicy | None = None
 
 
 @dataclass
@@ -41,12 +51,10 @@ class QURL:
     status: QURLStatus
     created_at: datetime | None = None
     expires_at: datetime | None = None
-    one_time_use: bool = False
-    max_sessions: int | None = None
     description: str | None = None
+    tags: list[str] = field(default_factory=list)
     qurl_site: str | None = None
-    qurl_link: str | None = None
-    access_policy: AccessPolicy | None = None
+    custom_domain: str | None = None
 
 
 @dataclass
@@ -57,6 +65,8 @@ class CreateOutput:
     qurl_link: str
     qurl_site: str
     expires_at: datetime | None = None
+    qurl_id: str = ""
+    label: str | None = None
 
 
 @dataclass
@@ -104,6 +114,7 @@ class RateLimits:
     resolve_per_minute: int = 0
     max_active_qurls: int = 0
     max_tokens_per_qurl: int = 0
+    max_expiry_seconds: int = 0
 
 
 @dataclass
@@ -112,7 +123,7 @@ class Usage:
 
     qurls_created: int = 0
     active_qurls: int = 0
-    active_qurls_percent: float = 0.0
+    active_qurls_percent: float | None = None
     total_accesses: int = 0
 
 
@@ -125,3 +136,33 @@ class Quota:
     period_end: datetime | None = None
     rate_limits: RateLimits | None = None
     usage: Usage | None = None
+
+
+@dataclass
+class BatchItemError:
+    """Error details for a failed batch item."""
+
+    code: str = ""
+    message: str = ""
+
+
+@dataclass
+class BatchItemResult:
+    """Result for a single item in a batch create."""
+
+    index: int = 0
+    success: bool = False
+    resource_id: str | None = None
+    qurl_link: str | None = None
+    qurl_site: str | None = None
+    expires_at: datetime | None = None
+    error: BatchItemError | None = None
+
+
+@dataclass
+class BatchCreateOutput:
+    """Response from batch creating QURLs."""
+
+    succeeded: int = 0
+    failed: int = 0
+    results: list[BatchItemResult] = field(default_factory=list)

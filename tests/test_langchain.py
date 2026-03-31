@@ -42,9 +42,7 @@ def test_create_qurl_tool() -> None:
     client.create.assert_called_once_with(
         target_url="https://example.com",
         expires_in="24h",
-        description=None,
-        one_time_use=None,
-        max_sessions=None,
+        label=None,
     )
 
 

@@ -31,14 +31,18 @@ BASE_URL = "https://api.test.layerv.ai"
 
 _ERR_429 = {
     "error": {
-        "status": 429, "code": "rate_limited",
-        "title": "Rate Limited", "detail": "Slow down",
+        "status": 429,
+        "code": "rate_limited",
+        "title": "Rate Limited",
+        "detail": "Slow down",
     },
 }
 _ERR_503 = {
     "error": {
-        "status": 503, "code": "unavailable",
-        "title": "Unavailable", "detail": "Down",
+        "status": 503,
+        "code": "unavailable",
+        "title": "Unavailable",
+        "detail": "Down",
     },
 }
 _QUOTA_OK = {
@@ -56,6 +60,7 @@ def _qurl_item(rid: str, url: str) -> dict:
         "target_url": url,
         "status": "active",
         "created_at": "2026-03-10T10:00:00Z",
+        "tags": [],
     }
 
 
@@ -123,7 +128,7 @@ def test_repr_short_api_key() -> None:
 
 @respx.mock
 def test_create(client: QURLClient) -> None:
-    respx.post(f"{BASE_URL}/v1/qurl").mock(
+    respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             201,
             json={
@@ -132,6 +137,7 @@ def test_create(client: QURLClient) -> None:
                     "qurl_link": "https://qurl.link/#at_test",
                     "qurl_site": "https://r_abc123def45.qurl.site",
                     "expires_at": "2026-03-15T10:00:00Z",
+                    "qurl_id": "q_abc",
                 },
                 "meta": {"request_id": "req_1"},
             },
@@ -143,11 +149,12 @@ def test_create(client: QURLClient) -> None:
     assert result.qurl_link == "https://qurl.link/#at_test"
     assert result.qurl_site == "https://r_abc123def45.qurl.site"
     assert isinstance(result.expires_at, datetime)
+    assert result.qurl_id == "q_abc"
 
 
 @respx.mock
 def test_create_sends_correct_body(client: QURLClient) -> None:
-    route = respx.post(f"{BASE_URL}/v1/qurl").mock(
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             201,
             json={
@@ -155,6 +162,7 @@ def test_create_sends_correct_body(client: QURLClient) -> None:
                     "resource_id": "r_abc",
                     "qurl_link": "https://qurl.link/#at_test",
                     "qurl_site": "https://r_abc.qurl.site",
+                    "qurl_id": "q_abc",
                 },
             },
         )
@@ -163,21 +171,19 @@ def test_create_sends_correct_body(client: QURLClient) -> None:
     client.create(
         target_url="https://example.com",
         expires_in="24h",
-        description="test",
-        one_time_use=True,
+        label="test",
     )
     body = json.loads(route.calls[0].request.content)
     assert body == {
         "target_url": "https://example.com",
         "expires_in": "24h",
-        "description": "test",
-        "one_time_use": True,
+        "label": "test",
     }
 
 
 @respx.mock
 def test_create_omits_none_values(client: QURLClient) -> None:
-    route = respx.post(f"{BASE_URL}/v1/qurl").mock(
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             201,
             json={
@@ -185,6 +191,7 @@ def test_create_omits_none_values(client: QURLClient) -> None:
                     "resource_id": "r_abc",
                     "qurl_link": "https://qurl.link/#at_test",
                     "qurl_site": "https://r_abc.qurl.site",
+                    "qurl_id": "",
                 },
             },
         )
@@ -194,7 +201,7 @@ def test_create_omits_none_values(client: QURLClient) -> None:
     body = json.loads(route.calls[0].request.content)
     assert body == {"target_url": "https://example.com"}
     assert "expires_in" not in body
-    assert "description" not in body
+    assert "label" not in body
 
 
 @respx.mock
@@ -209,7 +216,7 @@ def test_get(client: QURLClient) -> None:
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-15T10:00:00Z",
-                    "one_time_use": False,
+                    "tags": [],
                 },
                 "meta": {"request_id": "req_2"},
             },
@@ -235,6 +242,7 @@ def test_list(client: QURLClient) -> None:
                         "target_url": "https://example.com",
                         "status": "active",
                         "created_at": "2026-03-10T10:00:00Z",
+                        "tags": [],
                     }
                 ],
                 "meta": {"has_more": False, "page_size": 20},
@@ -252,14 +260,20 @@ def test_list(client: QURLClient) -> None:
 def test_list_all_paginates(client: QURLClient) -> None:
     route = respx.get(f"{BASE_URL}/v1/qurls")
     route.side_effect = [
-        httpx.Response(200, json={
-            "data": [_qurl_item("r_1", "https://1.com"), _qurl_item("r_2", "https://2.com")],
-            "meta": {"has_more": True, "next_cursor": "cur_abc"},
-        }),
-        httpx.Response(200, json={
-            "data": [_qurl_item("r_3", "https://3.com")],
-            "meta": {"has_more": False},
-        }),
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_1", "https://1.com"), _qurl_item("r_2", "https://2.com")],
+                "meta": {"has_more": True, "next_cursor": "cur_abc"},
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_3", "https://3.com")],
+                "meta": {"has_more": False},
+            },
+        ),
     ]
 
     all_qurls = list(client.list_all(status="active", page_size=2))
@@ -270,9 +284,7 @@ def test_list_all_paginates(client: QURLClient) -> None:
 
 @respx.mock
 def test_delete(client: QURLClient) -> None:
-    respx.delete(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(
-        return_value=httpx.Response(204)
-    )
+    respx.delete(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(return_value=httpx.Response(204))
     client.delete("r_abc123def45")  # Should not raise
 
 
@@ -288,6 +300,7 @@ def test_update_with_extend(client: QURLClient) -> None:
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-20T10:00:00Z",
+                    "tags": [],
                 },
             },
         )
@@ -311,6 +324,7 @@ def test_update_with_description(client: QURLClient) -> None:
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
                     "description": "new desc",
+                    "tags": [],
                 },
             },
         )
@@ -336,6 +350,7 @@ def test_update_combined(client: QURLClient) -> None:
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-20T10:00:00Z",
                     "description": "updated",
+                    "tags": [],
                 },
             },
         )
@@ -553,7 +568,9 @@ def test_retry_after_header_respected(retry_client: QURLClient) -> None:
     route = respx.get(f"{BASE_URL}/v1/quota")
     route.side_effect = [
         httpx.Response(
-            429, headers={"Retry-After": "5"}, json=_ERR_429,
+            429,
+            headers={"Retry-After": "5"},
+            json=_ERR_429,
         ),
         httpx.Response(200, json=_QUOTA_OK),
     ]
@@ -570,7 +587,9 @@ def test_retry_after_capped_at_30s(retry_client: QURLClient) -> None:
     route = respx.get(f"{BASE_URL}/v1/quota")
     route.side_effect = [
         httpx.Response(
-            429, headers={"Retry-After": "120"}, json=_ERR_429,
+            429,
+            headers={"Retry-After": "120"},
+            json=_ERR_429,
         ),
         httpx.Response(200, json=_QUOTA_OK),
     ]
@@ -609,9 +628,7 @@ def test_non_json_error_response(client: QURLClient) -> None:
 @respx.mock
 def test_network_error_wrapped(client: QURLClient) -> None:
     """httpx errors are wrapped in QURLNetworkError."""
-    respx.get(f"{BASE_URL}/v1/quota").mock(
-        side_effect=httpx.ConnectError("Connection refused")
-    )
+    respx.get(f"{BASE_URL}/v1/quota").mock(side_effect=httpx.ConnectError("Connection refused"))
 
     with pytest.raises(QURLNetworkError, match="Connection refused"):
         client.get_quota()
@@ -620,9 +637,7 @@ def test_network_error_wrapped(client: QURLClient) -> None:
 @respx.mock
 def test_network_error_preserves_cause(client: QURLClient) -> None:
     """QURLNetworkError preserves the original httpx exception as __cause__."""
-    respx.get(f"{BASE_URL}/v1/quota").mock(
-        side_effect=httpx.ConnectError("DNS lookup failed")
-    )
+    respx.get(f"{BASE_URL}/v1/quota").mock(side_effect=httpx.ConnectError("DNS lookup failed"))
 
     with pytest.raises(QURLNetworkError) as exc_info:
         client.get_quota()
@@ -633,9 +648,7 @@ def test_network_error_preserves_cause(client: QURLClient) -> None:
 @respx.mock
 def test_timeout_error_wrapped(client: QURLClient) -> None:
     """httpx.TimeoutException is wrapped in QURLTimeoutError."""
-    respx.get(f"{BASE_URL}/v1/quota").mock(
-        side_effect=httpx.ReadTimeout("Read timed out")
-    )
+    respx.get(f"{BASE_URL}/v1/quota").mock(side_effect=httpx.ReadTimeout("Read timed out"))
 
     with pytest.raises(QURLTimeoutError, match="Read timed out"):
         client.get_quota()
@@ -644,9 +657,7 @@ def test_timeout_error_wrapped(client: QURLClient) -> None:
 @respx.mock
 def test_timeout_error_is_network_error(client: QURLClient) -> None:
     """QURLTimeoutError is a subclass of QURLNetworkError."""
-    respx.get(f"{BASE_URL}/v1/quota").mock(
-        side_effect=httpx.ReadTimeout("Read timed out")
-    )
+    respx.get(f"{BASE_URL}/v1/quota").mock(side_effect=httpx.ReadTimeout("Read timed out"))
 
     with pytest.raises(QURLNetworkError):
         client.get_quota()
@@ -732,6 +743,7 @@ def test_get_request_has_no_content_type(client: QURLClient) -> None:
                     "target_url": "https://example.com",
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
+                    "tags": [],
                 },
             },
         )
@@ -745,7 +757,7 @@ def test_get_request_has_no_content_type(client: QURLClient) -> None:
 @respx.mock
 def test_post_request_has_content_type(client: QURLClient) -> None:
     """POST requests with body should send Content-Type: application/json."""
-    route = respx.post(f"{BASE_URL}/v1/qurl").mock(
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             201,
             json={
@@ -753,6 +765,7 @@ def test_post_request_has_content_type(client: QURLClient) -> None:
                     "resource_id": "r_abc",
                     "qurl_link": "https://qurl.link/#at_test",
                     "qurl_site": "https://r_abc.qurl.site",
+                    "qurl_id": "",
                 },
             },
         )
@@ -769,7 +782,7 @@ def test_post_request_has_content_type(client: QURLClient) -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_async_create(async_client: AsyncQURLClient) -> None:
-    respx.post(f"{BASE_URL}/v1/qurl").mock(
+    respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             201,
             json={
@@ -778,6 +791,7 @@ async def test_async_create(async_client: AsyncQURLClient) -> None:
                     "qurl_link": "https://qurl.link/#at_async",
                     "qurl_site": "https://r_async.qurl.site",
                     "expires_at": "2026-03-15T10:00:00Z",
+                    "qurl_id": "q_async",
                 },
             },
         )
@@ -819,14 +833,20 @@ async def test_async_resolve(async_client: AsyncQURLClient) -> None:
 async def test_async_list_all(async_client: AsyncQURLClient) -> None:
     route = respx.get(f"{BASE_URL}/v1/qurls")
     route.side_effect = [
-        httpx.Response(200, json={
-            "data": [_qurl_item("r_1", "https://1.com")],
-            "meta": {"has_more": True, "next_cursor": "cur_abc"},
-        }),
-        httpx.Response(200, json={
-            "data": [_qurl_item("r_2", "https://2.com")],
-            "meta": {"has_more": False},
-        }),
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_1", "https://1.com")],
+                "meta": {"has_more": True, "next_cursor": "cur_abc"},
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_2", "https://2.com")],
+                "meta": {"has_more": False},
+            },
+        ),
     ]
 
     all_qurls = [q async for q in async_client.list_all(status="active", page_size=1)]
@@ -837,9 +857,7 @@ async def test_async_list_all(async_client: AsyncQURLClient) -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_async_network_error_wrapped(async_client: AsyncQURLClient) -> None:
-    respx.get(f"{BASE_URL}/v1/quota").mock(
-        side_effect=httpx.ConnectError("Connection refused")
-    )
+    respx.get(f"{BASE_URL}/v1/quota").mock(side_effect=httpx.ConnectError("Connection refused"))
 
     with pytest.raises(QURLNetworkError, match="Connection refused"):
         await async_client.get_quota()
@@ -849,9 +867,7 @@ async def test_async_network_error_wrapped(async_client: AsyncQURLClient) -> Non
 @pytest.mark.asyncio
 async def test_async_timeout_error_wrapped(async_client: AsyncQURLClient) -> None:
     """Async: httpx.TimeoutException is wrapped in QURLTimeoutError."""
-    respx.get(f"{BASE_URL}/v1/quota").mock(
-        side_effect=httpx.ReadTimeout("Read timed out")
-    )
+    respx.get(f"{BASE_URL}/v1/quota").mock(side_effect=httpx.ReadTimeout("Read timed out"))
 
     with pytest.raises(QURLTimeoutError, match="Read timed out"):
         await async_client.get_quota()
@@ -861,9 +877,7 @@ async def test_async_timeout_error_wrapped(async_client: AsyncQURLClient) -> Non
 @pytest.mark.asyncio
 async def test_async_timeout_is_network_error(async_client: AsyncQURLClient) -> None:
     """Async: QURLTimeoutError is caught by except QURLNetworkError."""
-    respx.get(f"{BASE_URL}/v1/quota").mock(
-        side_effect=httpx.ReadTimeout("Read timed out")
-    )
+    respx.get(f"{BASE_URL}/v1/quota").mock(side_effect=httpx.ReadTimeout("Read timed out"))
 
     with pytest.raises(QURLNetworkError):
         await async_client.get_quota()
@@ -888,8 +902,10 @@ def test_401_raises_authentication_error(client: QURLClient) -> None:
             401,
             json={
                 "error": {
-                    "status": 401, "code": "unauthorized",
-                    "title": "Unauthorized", "detail": "Invalid API key",
+                    "status": 401,
+                    "code": "unauthorized",
+                    "title": "Unauthorized",
+                    "detail": "Invalid API key",
                 },
             },
         )
@@ -908,8 +924,10 @@ def test_403_raises_authorization_error(client: QURLClient) -> None:
             403,
             json={
                 "error": {
-                    "status": 403, "code": "forbidden",
-                    "title": "Forbidden", "detail": "Insufficient scope",
+                    "status": 403,
+                    "code": "forbidden",
+                    "title": "Forbidden",
+                    "detail": "Insufficient scope",
                 },
             },
         )
@@ -927,8 +945,10 @@ def test_404_raises_not_found_error(client: QURLClient) -> None:
             404,
             json={
                 "error": {
-                    "status": 404, "code": "not_found",
-                    "title": "Not Found", "detail": "QURL not found",
+                    "status": 404,
+                    "code": "not_found",
+                    "title": "Not Found",
+                    "detail": "QURL not found",
                 },
                 "meta": {"request_id": "req_err"},
             },
@@ -943,13 +963,15 @@ def test_404_raises_not_found_error(client: QURLClient) -> None:
 
 @respx.mock
 def test_422_raises_validation_error(client: QURLClient) -> None:
-    respx.post(f"{BASE_URL}/v1/qurl").mock(
+    respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             422,
             json={
                 "error": {
-                    "status": 422, "code": "validation_error",
-                    "title": "Validation Error", "detail": "Invalid target_url",
+                    "status": 422,
+                    "code": "validation_error",
+                    "title": "Validation Error",
+                    "detail": "Invalid target_url",
                     "invalid_fields": {"target_url": "must be a valid URL"},
                 },
             },
@@ -969,8 +991,10 @@ def test_429_raises_rate_limit_error(client: QURLClient) -> None:
             headers={"Retry-After": "10"},
             json={
                 "error": {
-                    "status": 429, "code": "rate_limited",
-                    "title": "Rate Limited", "detail": "Slow down",
+                    "status": 429,
+                    "code": "rate_limited",
+                    "title": "Rate Limited",
+                    "detail": "Slow down",
                 },
             },
         )
@@ -988,8 +1012,10 @@ def test_500_raises_server_error(client: QURLClient) -> None:
             500,
             json={
                 "error": {
-                    "status": 500, "code": "internal",
-                    "title": "Internal Server Error", "detail": "Something broke",
+                    "status": 500,
+                    "code": "internal",
+                    "title": "Internal Server Error",
+                    "detail": "Something broke",
                 },
             },
         )
@@ -1002,13 +1028,15 @@ def test_500_raises_server_error(client: QURLClient) -> None:
 
 @respx.mock
 def test_400_raises_validation_error(client: QURLClient) -> None:
-    respx.post(f"{BASE_URL}/v1/qurl").mock(
+    respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             400,
             json={
                 "error": {
-                    "status": 400, "code": "bad_request",
-                    "title": "Bad Request", "detail": "Missing target_url",
+                    "status": 400,
+                    "code": "bad_request",
+                    "title": "Bad Request",
+                    "detail": "Missing target_url",
                 },
             },
         )
@@ -1034,6 +1062,7 @@ def test_extend(client: QURLClient) -> None:
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-20T10:00:00Z",
+                    "tags": [],
                 },
             },
         )
@@ -1059,6 +1088,7 @@ async def test_async_extend(async_client: AsyncQURLClient) -> None:
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-20T10:00:00Z",
+                    "tags": [],
                 },
             },
         )
@@ -1070,43 +1100,175 @@ async def test_async_extend(async_client: AsyncQURLClient) -> None:
     assert body == {"extend_by": "24h"}
 
 
-# --- AccessPolicy serialization ---
+# --- Batch create ---
 
 
 @respx.mock
-def test_access_policy_serialized(client: QURLClient) -> None:
-    """AccessPolicy dataclass is serialized correctly in create()."""
-    route = respx.post(f"{BASE_URL}/v1/qurl").mock(
+def test_batch_create_all_succeed(client: QURLClient) -> None:
+    """batch_create() parses a fully successful batch response."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
         return_value=httpx.Response(
-            201,
+            200,
             json={
                 "data": {
-                    "resource_id": "r_policy",
-                    "qurl_link": "https://qurl.link/#at_test",
-                    "qurl_site": "https://r_policy.qurl.site",
+                    "succeeded": 2,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_batch1",
+                            "qurl_link": "https://qurl.link/#at_b1",
+                            "qurl_site": "https://r_batch1.qurl.site",
+                            "expires_at": "2026-04-01T00:00:00Z",
+                        },
+                        {
+                            "index": 1,
+                            "success": True,
+                            "resource_id": "r_batch2",
+                            "qurl_link": "https://qurl.link/#at_b2",
+                            "qurl_site": "https://r_batch2.qurl.site",
+                        },
+                    ],
                 },
             },
         )
     )
 
-    policy = AccessPolicy(
-        ip_allowlist=["10.0.0.0/8"],
-        geo_denylist=["CN", "RU"],
+    result = client.batch_create(
+        [
+            {"target_url": "https://a.com", "expires_in": "24h"},
+            {"target_url": "https://b.com"},
+        ]
     )
-    client.create(target_url="https://example.com", access_policy=policy)
-    body = json.loads(route.calls[0].request.content)
-    assert body["access_policy"] == {
-        "ip_allowlist": ["10.0.0.0/8"],
-        "geo_denylist": ["CN", "RU"],
-    }
-    # None fields should be omitted from the serialized policy
-    assert "ip_denylist" not in body["access_policy"]
-    assert "geo_allowlist" not in body["access_policy"]
+    assert result.succeeded == 2
+    assert result.failed == 0
+    assert len(result.results) == 2
+    assert result.results[0].resource_id == "r_batch1"
+    assert result.results[0].success is True
+    assert isinstance(result.results[0].expires_at, datetime)
+    assert result.results[1].resource_id == "r_batch2"
+    assert result.results[1].expires_at is None
 
 
 @respx.mock
-def test_access_policy_in_update(client: QURLClient) -> None:
-    """AccessPolicy can also be passed to update()."""
+def test_batch_create_partial_failure(client: QURLClient) -> None:
+    """batch_create() correctly parses partial failures."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 1,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_ok",
+                            "qurl_link": "https://qurl.link/#at_ok",
+                            "qurl_site": "https://r_ok.qurl.site",
+                        },
+                        {
+                            "index": 1,
+                            "success": False,
+                            "error": {
+                                "code": "validation_error",
+                                "message": "Invalid target_url",
+                            },
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    result = client.batch_create(
+        [
+            {"target_url": "https://good.com"},
+            {"target_url": "bad"},
+        ]
+    )
+    assert result.succeeded == 1
+    assert result.failed == 1
+    assert result.results[0].success is True
+    assert result.results[1].success is False
+    assert result.results[1].error is not None
+    assert result.results[1].error.code == "validation_error"
+    assert result.results[1].error.message == "Invalid target_url"
+
+
+# --- Date filter tests ---
+
+
+@respx.mock
+def test_list_with_date_filters(client: QURLClient) -> None:
+    """list() passes date filter params to the request."""
+    route = respx.get(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_filtered", "https://filtered.com")],
+                "meta": {"has_more": False},
+            },
+        )
+    )
+
+    result = client.list(
+        status="active",
+        created_after="2026-03-01T00:00:00Z",
+        expires_before="2026-04-01T00:00:00Z",
+    )
+    assert len(result.qurls) == 1
+    req = route.calls[0].request
+    assert "created_after=2026-03-01T00%3A00%3A00Z" in str(req.url)
+    assert "expires_before=2026-04-01T00%3A00%3A00Z" in str(req.url)
+
+
+# --- Mint link full input ---
+
+
+@respx.mock
+def test_mint_link_full_input(client: QURLClient) -> None:
+    """mint_link() sends all expanded params."""
+    route = respx.post(f"{BASE_URL}/v1/qurls/r_abc/mint_link").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurl_link": "https://qurl.link/#at_full",
+                    "expires_at": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+    )
+
+    policy = AccessPolicy(ip_allowlist=["10.0.0.0/8"])
+    result = client.mint_link(
+        "r_abc",
+        expires_in="12h",
+        label="my-link",
+        one_time_use=True,
+        max_sessions=5,
+        session_duration="30m",
+        access_policy=policy,
+    )
+    assert result.qurl_link == "https://qurl.link/#at_full"
+    body = json.loads(route.calls[0].request.content)
+    assert body["expires_in"] == "12h"
+    assert body["label"] == "my-link"
+    assert body["one_time_use"] is True
+    assert body["max_sessions"] == 5
+    assert body["session_duration"] == "30m"
+    assert body["access_policy"] == {"ip_allowlist": ["10.0.0.0/8"]}
+
+
+# --- Update with tags ---
+
+
+@respx.mock
+def test_update_with_tags(client: QURLClient) -> None:
+    """update() sends tags in the request body."""
     route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
         return_value=httpx.Response(
             200,
@@ -1116,17 +1278,177 @@ def test_access_policy_in_update(client: QURLClient) -> None:
                     "target_url": "https://example.com",
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
-                    "access_policy": {
-                        "user_agent_deny_regex": "curl.*",
-                    },
+                    "tags": ["team:engineering", "env:prod"],
                 },
             },
         )
     )
 
-    policy = AccessPolicy(user_agent_deny_regex="curl.*")
-    result = client.update("r_abc", access_policy=policy)
-    assert result.access_policy is not None
-    assert result.access_policy.user_agent_deny_regex == "curl.*"
+    result = client.update("r_abc", tags=["team:engineering", "env:prod"])
+    assert result.tags == ["team:engineering", "env:prod"]
     body = json.loads(route.calls[0].request.content)
-    assert body["access_policy"] == {"user_agent_deny_regex": "curl.*"}
+    assert body == {"tags": ["team:engineering", "env:prod"]}
+
+
+# --- Create with label and session_duration ---
+
+
+@respx.mock
+def test_create_with_label_and_session_duration(client: QURLClient) -> None:
+    """create() sends label and session_duration in the body."""
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_new",
+                    "qurl_link": "https://qurl.link/#at_new",
+                    "qurl_site": "https://r_new.qurl.site",
+                    "qurl_id": "q_new",
+                    "label": "my label",
+                    "expires_at": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+    )
+
+    result = client.create(
+        target_url="https://example.com",
+        expires_in="7d",
+        label="my label",
+        session_duration="1h",
+    )
+    assert result.resource_id == "r_new"
+    assert result.label == "my label"
+    assert result.qurl_id == "q_new"
+    body = json.loads(route.calls[0].request.content)
+    assert body["label"] == "my label"
+    assert body["session_duration"] == "1h"
+
+
+# --- Async batch create ---
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_batch_create(async_client: AsyncQURLClient) -> None:
+    """Async batch_create() works correctly."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_async_batch",
+                            "qurl_link": "https://qurl.link/#at_ab",
+                            "qurl_site": "https://r_async_batch.qurl.site",
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    result = await async_client.batch_create(
+        [
+            {"target_url": "https://async.com"},
+        ]
+    )
+    assert result.succeeded == 1
+    assert result.results[0].resource_id == "r_async_batch"
+
+
+# --- Async date filters ---
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_list_with_date_filters(async_client: AsyncQURLClient) -> None:
+    """Async list() passes date filter params."""
+    route = respx.get(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_af", "https://af.com")],
+                "meta": {"has_more": False},
+            },
+        )
+    )
+
+    result = await async_client.list(
+        created_before="2026-03-15T00:00:00Z",
+        expires_after="2026-03-01T00:00:00Z",
+    )
+    assert len(result.qurls) == 1
+    req = route.calls[0].request
+    assert "created_before=2026-03-15T00%3A00%3A00Z" in str(req.url)
+    assert "expires_after=2026-03-01T00%3A00%3A00Z" in str(req.url)
+
+
+# --- Async mint link full input ---
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_mint_link_full_input(async_client: AsyncQURLClient) -> None:
+    """Async mint_link() sends all expanded params."""
+    route = respx.post(f"{BASE_URL}/v1/qurls/r_abc/mint_link").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurl_link": "https://qurl.link/#at_afull",
+                    "expires_at": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+    )
+
+    result = await async_client.mint_link(
+        "r_abc",
+        expires_in="6h",
+        label="async-link",
+        one_time_use=False,
+        max_sessions=3,
+        session_duration="15m",
+    )
+    assert result.qurl_link == "https://qurl.link/#at_afull"
+    body = json.loads(route.calls[0].request.content)
+    assert body["expires_in"] == "6h"
+    assert body["label"] == "async-link"
+    assert body["one_time_use"] is False
+    assert body["max_sessions"] == 3
+    assert body["session_duration"] == "15m"
+
+
+# --- Async update with tags ---
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_update_with_tags(async_client: AsyncQURLClient) -> None:
+    """Async update() sends tags."""
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "tags": ["internal"],
+                },
+            },
+        )
+    )
+
+    result = await async_client.update("r_abc", tags=["internal"])
+    assert result.tags == ["internal"]
+    body = json.loads(route.calls[0].request.content)
+    assert body == {"tags": ["internal"]}

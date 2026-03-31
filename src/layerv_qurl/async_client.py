@@ -21,6 +21,7 @@ from layerv_qurl._utils import (
     default_user_agent,
     logger,
     mask_key,
+    parse_batch_create_output,
     parse_create_output,
     parse_error,
     parse_list_output,
@@ -34,12 +35,14 @@ from layerv_qurl._utils import (
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
 if TYPE_CHECKING:
+    import builtins
     from collections.abc import AsyncIterator
     from datetime import datetime
 
     from layerv_qurl.types import (
         QURL,
         AccessPolicy,
+        BatchCreateOutput,
         CreateOutput,
         ListOutput,
         MintOutput,
@@ -112,10 +115,9 @@ class AsyncQURLClient:
         *,
         expires_in: str | None = None,
         expires_at: datetime | str | None = None,
-        description: str | None = None,
-        one_time_use: bool | None = None,
-        max_sessions: int | None = None,
-        access_policy: AccessPolicy | None = None,
+        label: str | None = None,
+        session_duration: str | None = None,
+        custom_domain: str | None = None,
     ) -> CreateOutput:
         """Create a new QURL.
 
@@ -127,21 +129,21 @@ class AsyncQURLClient:
             target_url: The URL to protect.
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``).
             expires_at: Absolute expiry as datetime or ISO string.
-            description: Human-readable description.
-            one_time_use: If True, the QURL can only be used once.
-            max_sessions: Maximum concurrent sessions allowed.
-            access_policy: IP/geo/user-agent access restrictions.
+            label: Human-readable label for the QURL.
+            session_duration: Duration string for sessions (e.g. ``"1h"``).
+            custom_domain: Custom domain for the QURL link.
         """
-        body = build_body({
-            "target_url": target_url,
-            "expires_in": expires_in,
-            "expires_at": expires_at,
-            "description": description,
-            "one_time_use": one_time_use,
-            "max_sessions": max_sessions,
-            "access_policy": access_policy,
-        })
-        resp = await self._request("POST", "/v1/qurl", body=body)
+        body = build_body(
+            {
+                "target_url": target_url,
+                "expires_in": expires_in,
+                "expires_at": expires_at,
+                "label": label,
+                "session_duration": session_duration,
+                "custom_domain": custom_domain,
+            }
+        )
+        resp = await self._request("POST", "/v1/qurls", body=body)
         return parse_create_output(resp)
 
     async def get(self, resource_id: str) -> QURL:
@@ -158,18 +160,35 @@ class AsyncQURLClient:
         status: QURLStatus | None = None,
         q: str | None = None,
         sort: str | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        expires_before: str | None = None,
+        expires_after: str | None = None,
     ) -> ListOutput:
         """List QURLs with optional filters.
 
         Args:
             limit: Maximum number of results per page.
             cursor: Pagination cursor from a previous response.
-            status: Filter by QURL status
-                (``"active"``, ``"expired"``, ``"revoked"``, ``"consumed"``, ``"frozen"``).
+            status: Filter by QURL status (``"active"``, ``"revoked"``).
             q: Search query string.
             sort: Sort order (e.g. ``"created_at"``, ``"-created_at"``).
+            created_after: Filter QURLs created after this ISO timestamp.
+            created_before: Filter QURLs created before this ISO timestamp.
+            expires_before: Filter QURLs expiring before this ISO timestamp.
+            expires_after: Filter QURLs expiring after this ISO timestamp.
         """
-        params = build_list_params(limit, cursor, status, q, sort)
+        params = build_list_params(
+            limit,
+            cursor,
+            status,
+            q,
+            sort,
+            created_after=created_after,
+            created_before=created_before,
+            expires_before=expires_before,
+            expires_after=expires_after,
+        )
         data, meta = await self._raw_request("GET", "/v1/qurls", params=params)
         return parse_list_output(data, meta)
 
@@ -180,6 +199,10 @@ class AsyncQURLClient:
         q: str | None = None,
         sort: str | None = None,
         page_size: int = 50,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        expires_before: str | None = None,
+        expires_after: str | None = None,
     ) -> AsyncIterator[QURL]:
         """Iterate over all QURLs, automatically paginating.
 
@@ -188,7 +211,15 @@ class AsyncQURLClient:
         cursor: str | None = None
         while True:
             page = await self.list(
-                limit=page_size, cursor=cursor, status=status, q=q, sort=sort,
+                limit=page_size,
+                cursor=cursor,
+                status=status,
+                q=q,
+                sort=sort,
+                created_after=created_after,
+                created_before=created_before,
+                expires_before=expires_before,
+                expires_after=expires_after,
             )
             for qurl in page.qurls:
                 yield qurl
@@ -219,7 +250,7 @@ class AsyncQURLClient:
         extend_by: str | None = None,
         expires_at: datetime | str | None = None,
         description: str | None = None,
-        access_policy: AccessPolicy | None = None,
+        tags: builtins.list[str] | None = None,
     ) -> QURL:
         """Update a QURL — extend expiration, change description, etc.
 
@@ -230,15 +261,17 @@ class AsyncQURLClient:
             extend_by: Duration to add (e.g. ``"7d"``).
             expires_at: New absolute expiry.
             description: New description.
-            access_policy: New access restrictions.
+            tags: Tags to set on the QURL.
         """
         validate_id(resource_id)
-        body = build_body({
-            "extend_by": extend_by,
-            "expires_at": expires_at,
-            "description": description,
-            "access_policy": access_policy,
-        })
+        body = build_body(
+            {
+                "extend_by": extend_by,
+                "expires_at": expires_at,
+                "description": description,
+                "tags": tags,
+            }
+        )
         resp = await self._request("PATCH", f"/v1/qurls/{resource_id}", body=body)
         return parse_qurl(resp)
 
@@ -247,17 +280,51 @@ class AsyncQURLClient:
         resource_id: str,
         *,
         expires_at: datetime | str | None = None,
+        expires_in: str | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | None = None,
+        access_policy: AccessPolicy | None = None,
     ) -> MintOutput:
         """Mint a new access link for a QURL.
 
         Args:
             resource_id: QURL resource ID.
             expires_at: Optional expiry override for the minted link.
+            expires_in: Duration string for the link (e.g. ``"24h"``).
+            label: Human-readable label for the link.
+            one_time_use: If True, the link can only be used once.
+            max_sessions: Maximum concurrent sessions allowed.
+            session_duration: Duration string for sessions (e.g. ``"1h"``).
+            access_policy: IP/geo/user-agent access restrictions.
         """
         validate_id(resource_id)
-        body = build_body({"expires_at": expires_at})
+        body = build_body(
+            {
+                "expires_at": expires_at,
+                "expires_in": expires_in,
+                "label": label,
+                "one_time_use": one_time_use,
+                "max_sessions": max_sessions,
+                "session_duration": session_duration,
+                "access_policy": access_policy,
+            }
+        )
         resp = await self._request("POST", f"/v1/qurls/{resource_id}/mint_link", body=body)
         return parse_mint_output(resp)
+
+    async def batch_create(
+        self,
+        items: builtins.list[dict[str, Any]],
+    ) -> BatchCreateOutput:
+        """Create multiple QURLs at once (1-100 items).
+
+        Args:
+            items: List of dicts, each with at least ``target_url``.
+        """
+        resp = await self._request("POST", "/v1/qurls/batch", body={"items": items})
+        return parse_batch_create_output(resp)
 
     async def resolve(self, access_token: str) -> ResolveOutput:
         """Resolve a QURL access token (headless).
