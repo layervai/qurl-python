@@ -89,6 +89,8 @@ def _serialize_value(v: Any) -> Any:
             for f in dataclasses.fields(v)
             if getattr(v, f.name) is not None
         }
+    if isinstance(v, list):
+        return [_serialize_value(item) for item in v]
     return v
 
 
@@ -288,26 +290,18 @@ def build_list_params(
     expires_after: str | None = None,
 ) -> dict[str, str]:
     """Build query params for list endpoints, dropping None values."""
-    params: dict[str, str] = {}
-    if limit is not None:
-        params["limit"] = str(limit)
-    if cursor:
-        params["cursor"] = cursor
-    if status:
-        params["status"] = status
-    if q:
-        params["q"] = q
-    if sort:
-        params["sort"] = sort
-    if created_after:
-        params["created_after"] = created_after
-    if created_before:
-        params["created_before"] = created_before
-    if expires_before:
-        params["expires_before"] = expires_before
-    if expires_after:
-        params["expires_after"] = expires_after
-    return params
+    pairs: dict[str, str | int | None] = {
+        "limit": limit,
+        "cursor": cursor,
+        "status": status,
+        "q": q,
+        "sort": sort,
+        "created_after": created_after,
+        "created_before": created_before,
+        "expires_before": expires_before,
+        "expires_after": expires_after,
+    }
+    return {k: str(v) for k, v in pairs.items() if v is not None}
 
 
 def mask_key(api_key: str) -> str:

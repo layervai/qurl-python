@@ -91,9 +91,7 @@ class ListQURLsTool(BaseTool):
     """List active QURL links."""
 
     name: str = "list_qurls"
-    description: str = (
-        "List active QURL links. Optionally filter by status (active, expired, revoked, consumed)."
-    )
+    description: str = "List active QURL links. Optionally filter by status (active, revoked)."
     client: Any = None
 
     def _run(
