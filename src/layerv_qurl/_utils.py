@@ -24,8 +24,6 @@ from layerv_qurl.errors import (
 from layerv_qurl.types import (
     QURL,
     AccessGrant,
-    AccessPolicy,
-    AIAgentPolicy,
     BatchCreateOutput,
     BatchItemError,
     BatchItemResult,
@@ -79,48 +77,34 @@ def validate_id(value: str, name: str = "resource_id") -> str:
     return value
 
 
+def _serialize_value(v: Any) -> Any:
+    """Serialize a single value for JSON, handling dataclasses and datetimes recursively."""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return {
+            f.name: _serialize_value(getattr(v, f.name))
+            for f in dataclasses.fields(v)
+            if getattr(v, f.name) is not None
+        }
+    return v
+
+
 def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Build a request body dict from kwargs, dropping None values.
 
     Always returns a dict (at least ``{}``) so POST/PATCH endpoints
-    receive a valid JSON body.
+    receive a valid JSON body.  Nested dataclasses are recursively
+    serialized to dicts.
     """
     body: dict[str, Any] = {}
     for k, v in kwargs.items():
         if v is None:
             continue
-        if isinstance(v, datetime):
-            body[k] = v.isoformat()
-        elif dataclasses.is_dataclass(v) and not isinstance(v, type):
-            body[k] = {
-                f.name: getattr(v, f.name)
-                for f in dataclasses.fields(v)
-                if getattr(v, f.name) is not None
-            }
-        else:
-            body[k] = v
+        body[k] = _serialize_value(v)
     return body
-
-
-def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
-    """Parse an AccessPolicy from API response data."""
-    ai_policy = None
-    if data.get("ai_agent_policy"):
-        ap = data["ai_agent_policy"]
-        ai_policy = AIAgentPolicy(
-            block_all=ap.get("block_all"),
-            deny_categories=ap.get("deny_categories"),
-            allow_categories=ap.get("allow_categories"),
-        )
-    return AccessPolicy(
-        ip_allowlist=data.get("ip_allowlist"),
-        ip_denylist=data.get("ip_denylist"),
-        geo_allowlist=data.get("geo_allowlist"),
-        geo_denylist=data.get("geo_denylist"),
-        user_agent_allow_regex=data.get("user_agent_allow_regex"),
-        user_agent_deny_regex=data.get("user_agent_deny_regex"),
-        ai_agent_policy=ai_policy,
-    )
 
 
 def parse_qurl(data: dict[str, Any]) -> QURL:

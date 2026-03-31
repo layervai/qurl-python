@@ -25,7 +25,7 @@ from layerv_qurl.errors import (
     ServerError,
     ValidationError,
 )
-from layerv_qurl.types import AccessPolicy
+from layerv_qurl.types import AccessPolicy, AIAgentPolicy
 
 BASE_URL = "https://api.test.layerv.ai"
 
@@ -1263,6 +1263,40 @@ def test_mint_link_full_input(client: QURLClient) -> None:
     assert body["access_policy"] == {"ip_allowlist": ["10.0.0.0/8"]}
 
 
+@respx.mock
+def test_mint_link_nested_ai_agent_policy(client: QURLClient) -> None:
+    """mint_link() correctly serializes nested AIAgentPolicy inside AccessPolicy."""
+    route = respx.post(f"{BASE_URL}/v1/qurls/r_abc/mint_link").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurl_link": "https://qurl.link/#at_ai",
+                    "expires_at": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+    )
+
+    policy = AccessPolicy(
+        ip_allowlist=["10.0.0.0/8"],
+        ai_agent_policy=AIAgentPolicy(
+            block_all=True,
+            deny_categories=["scraping"],
+        ),
+    )
+    result = client.mint_link("r_abc", access_policy=policy)
+    assert result.qurl_link == "https://qurl.link/#at_ai"
+    body = json.loads(route.calls[0].request.content)
+    assert body["access_policy"] == {
+        "ip_allowlist": ["10.0.0.0/8"],
+        "ai_agent_policy": {
+            "block_all": True,
+            "deny_categories": ["scraping"],
+        },
+    }
+
+
 # --- Update with tags ---
 
 
@@ -1324,6 +1358,37 @@ def test_create_with_label_and_session_duration(client: QURLClient) -> None:
     body = json.loads(route.calls[0].request.content)
     assert body["label"] == "my label"
     assert body["session_duration"] == "1h"
+
+
+# --- Create with custom_domain ---
+
+
+@respx.mock
+def test_create_with_custom_domain(client: QURLClient) -> None:
+    """create() sends custom_domain in the body."""
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_cd",
+                    "qurl_link": "https://links.example.com/#at_cd",
+                    "qurl_site": "https://r_cd.qurl.site",
+                    "qurl_id": "q_cd",
+                    "expires_at": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+    )
+
+    result = client.create(
+        target_url="https://example.com",
+        expires_in="7d",
+        custom_domain="links.example.com",
+    )
+    assert result.resource_id == "r_cd"
+    body = json.loads(route.calls[0].request.content)
+    assert body["custom_domain"] == "links.example.com"
 
 
 # --- Async batch create ---
