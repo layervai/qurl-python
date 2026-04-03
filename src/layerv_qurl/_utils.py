@@ -173,11 +173,11 @@ def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
     """Parse a ResolveOutput from API response data."""
     grant = None
     if data.get("access_grant"):
-        g = data["access_grant"]
+        grant_data = data["access_grant"]
         grant = AccessGrant(
-            expires_in=g["expires_in"],
-            granted_at=_parse_dt(g.get("granted_at")),
-            src_ip=g.get("src_ip", ""),
+            expires_in=grant_data["expires_in"],
+            granted_at=_parse_dt(grant_data.get("granted_at")),
+            src_ip=grant_data.get("src_ip", ""),
         )
     return ResolveOutput(
         target_url=data["target_url"],
@@ -188,31 +188,31 @@ def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
 
 def parse_quota(data: dict[str, Any]) -> Quota:
     """Parse a Quota from API response data."""
-    rl = None
+    rate_limits = None
     if data.get("rate_limits"):
-        r = data["rate_limits"]
-        rl = RateLimits(
-            create_per_minute=r.get("create_per_minute", 0),
-            create_per_hour=r.get("create_per_hour", 0),
-            list_per_minute=r.get("list_per_minute", 0),
-            resolve_per_minute=r.get("resolve_per_minute", 0),
-            max_active_qurls=r.get("max_active_qurls", 0),
-            max_tokens_per_qurl=r.get("max_tokens_per_qurl", 0),
+        limits_data = data["rate_limits"]
+        rate_limits = RateLimits(
+            create_per_minute=limits_data.get("create_per_minute", 0),
+            create_per_hour=limits_data.get("create_per_hour", 0),
+            list_per_minute=limits_data.get("list_per_minute", 0),
+            resolve_per_minute=limits_data.get("resolve_per_minute", 0),
+            max_active_qurls=limits_data.get("max_active_qurls", 0),
+            max_tokens_per_qurl=limits_data.get("max_tokens_per_qurl", 0),
         )
     usage = None
     if data.get("usage"):
-        u = data["usage"]
+        usage_data = data["usage"]
         usage = Usage(
-            qurls_created=u.get("qurls_created", 0),
-            active_qurls=u.get("active_qurls", 0),
-            active_qurls_percent=u.get("active_qurls_percent", 0.0),
-            total_accesses=u.get("total_accesses", 0),
+            qurls_created=usage_data.get("qurls_created", 0),
+            active_qurls=usage_data.get("active_qurls", 0),
+            active_qurls_percent=usage_data.get("active_qurls_percent", 0.0),
+            total_accesses=usage_data.get("total_accesses", 0),
         )
     return Quota(
         plan=data.get("plan", ""),
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
-        rate_limits=rl,
+        rate_limits=rate_limits,
         usage=usage,
     )
 
@@ -231,9 +231,9 @@ def parse_error(response: httpx.Response) -> QURLError:
     """Parse an API error response into the appropriate QURLError subclass."""
     retry_after = None
     if response.status_code == 429:
-        ra = response.headers.get("Retry-After")
-        if ra and ra.isdigit():
-            retry_after = int(ra)
+        retry_after_header = response.headers.get("Retry-After")
+        if retry_after_header and retry_after_header.isdigit():
+            retry_after = int(retry_after_header)
 
     # Pick the right subclass, defaulting to ServerError for 5xx or QURLError
     cls: type[QURLError]
