@@ -207,6 +207,16 @@ class AsyncQURLClient:
         """Iterate over all QURLs, automatically paginating.
 
         Yields individual :class:`QURL` objects, fetching pages transparently.
+
+        Args:
+            status: Filter by status (``"active"``, ``"revoked"``).
+            q: Search query string.
+            sort: Sort order.
+            page_size: Number of items per page (default 50).
+            created_after: Filter QURLs created after this ISO timestamp.
+            created_before: Filter QURLs created before this ISO timestamp.
+            expires_before: Filter QURLs expiring before this ISO timestamp.
+            expires_after: Filter QURLs expiring after this ISO timestamp.
         """
         cursor: str | None = None
         while True:
