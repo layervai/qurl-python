@@ -12,9 +12,13 @@ permissions:
 jobs:
   age-gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # uv is used here only as a resolver to validate dependency ages.
+      # The project's package manager is pip/hatchling — uv is not used
+      # for builds or installs.
       - name: Install uv
         uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
 
