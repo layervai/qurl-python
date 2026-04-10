@@ -113,6 +113,16 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
 
 def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
     """Parse an AccessPolicy from API response data."""
+    from layerv_qurl.types import AIAgentPolicy
+
+    ai_policy = None
+    if data.get("ai_agent_policy") is not None:
+        ap = data["ai_agent_policy"]
+        ai_policy = AIAgentPolicy(
+            block_all=ap.get("block_all"),
+            deny_categories=ap.get("deny_categories"),
+            allow_categories=ap.get("allow_categories"),
+        )
     return AccessPolicy(
         ip_allowlist=data.get("ip_allowlist"),
         ip_denylist=data.get("ip_denylist"),
@@ -120,6 +130,7 @@ def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
         geo_denylist=data.get("geo_denylist"),
         user_agent_allow_regex=data.get("user_agent_allow_regex"),
         user_agent_deny_regex=data.get("user_agent_deny_regex"),
+        ai_agent_policy=ai_policy,
     )
 
 
@@ -325,13 +336,13 @@ def build_list_params(
     status: str | None,
     q: str | None,
     sort: str | None,
-    created_after: str | None = None,
-    created_before: str | None = None,
-    expires_before: str | None = None,
-    expires_after: str | None = None,
+    created_after: datetime | str | None = None,
+    created_before: datetime | str | None = None,
+    expires_before: datetime | str | None = None,
+    expires_after: datetime | str | None = None,
 ) -> dict[str, str]:
     """Build query params for list endpoints, dropping None values."""
-    pairs: dict[str, str | int | None] = {
+    pairs: dict[str, str | int | datetime | None] = {
         "limit": limit,
         "cursor": cursor,
         "status": status,
@@ -342,7 +353,11 @@ def build_list_params(
         "expires_before": expires_before,
         "expires_after": expires_after,
     }
-    return {k: str(v) for k, v in pairs.items() if v is not None}
+    return {
+        k: v.isoformat() if isinstance(v, datetime) else str(v)
+        for k, v in pairs.items()
+        if v is not None
+    }
 
 
 def mask_key(api_key: str) -> str:

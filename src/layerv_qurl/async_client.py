@@ -35,7 +35,6 @@ from layerv_qurl._utils import (
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
 if TYPE_CHECKING:
-    import builtins
     from collections.abc import AsyncIterator
     from datetime import datetime
 
@@ -116,7 +115,10 @@ class AsyncQURLClient:
         expires_in: str | None = None,
         expires_at: datetime | str | None = None,
         label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
         session_duration: str | None = None,
+        access_policy: AccessPolicy | None = None,
         custom_domain: str | None = None,
     ) -> CreateOutput:
         """Create a new QURL.
@@ -130,7 +132,10 @@ class AsyncQURLClient:
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``).
             expires_at: Absolute expiry as datetime or ISO string.
             label: Human-readable label for the QURL.
+            one_time_use: If True, the QURL is consumed on first access.
+            max_sessions: Maximum concurrent sessions (0 = unlimited).
             session_duration: Duration string for sessions (e.g. ``"1h"``).
+            access_policy: IP/geo/user-agent access restrictions.
             custom_domain: Custom domain for the QURL link.
         """
         body = build_body(
@@ -139,7 +144,10 @@ class AsyncQURLClient:
                 "expires_in": expires_in,
                 "expires_at": expires_at,
                 "label": label,
+                "one_time_use": one_time_use,
+                "max_sessions": max_sessions,
                 "session_duration": session_duration,
+                "access_policy": access_policy,
                 "custom_domain": custom_domain,
             }
         )
@@ -160,10 +168,10 @@ class AsyncQURLClient:
         status: QURLStatus | None = None,
         q: str | None = None,
         sort: str | None = None,
-        created_after: str | None = None,
-        created_before: str | None = None,
-        expires_before: str | None = None,
-        expires_after: str | None = None,
+        created_after: datetime | str | None = None,
+        created_before: datetime | str | None = None,
+        expires_before: datetime | str | None = None,
+        expires_after: datetime | str | None = None,
     ) -> ListOutput:
         """List QURLs with optional filters.
 
@@ -199,10 +207,10 @@ class AsyncQURLClient:
         q: str | None = None,
         sort: str | None = None,
         page_size: int = 50,
-        created_after: str | None = None,
-        created_before: str | None = None,
-        expires_before: str | None = None,
-        expires_after: str | None = None,
+        created_after: datetime | str | None = None,
+        created_before: datetime | str | None = None,
+        expires_before: datetime | str | None = None,
+        expires_after: datetime | str | None = None,
     ) -> AsyncIterator[QURL]:
         """Iterate over all QURLs, automatically paginating.
 
@@ -260,7 +268,7 @@ class AsyncQURLClient:
         extend_by: str | None = None,
         expires_at: datetime | str | None = None,
         description: str | None = None,
-        tags: builtins.list[str] | None = None,
+        tags: list[str] | None = None,
     ) -> QURL:
         """Update a QURL — extend expiration, change description, etc.
 
@@ -326,13 +334,20 @@ class AsyncQURLClient:
 
     async def batch_create(
         self,
-        items: builtins.list[dict[str, Any]],
+        items: list[dict[str, Any]],
     ) -> BatchCreateOutput:
         """Create multiple QURLs at once (1-100 items).
 
         Args:
             items: List of dicts, each with at least ``target_url``.
+
+        Raises:
+            ValueError: If items is empty or exceeds 100 items.
         """
+        if not items:
+            raise ValueError("items must not be empty")
+        if len(items) > 100:
+            raise ValueError("batch_create supports at most 100 items")
         resp = await self._request("POST", "/v1/qurls/batch", body={"items": items})
         return parse_batch_create_output(resp)
 
