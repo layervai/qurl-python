@@ -78,7 +78,12 @@ class QURL:
 
 @dataclass
 class CreateOutput:
-    """Response from creating a QURL."""
+    """Response from creating a QURL.
+
+    ``resource_id`` identifies the resource container (grouped by target URL).
+    ``qurl_id`` identifies the specific access token created (``q_`` prefix).
+    Multiple QURLs for the same target URL share one ``resource_id``.
+    """
 
     resource_id: str
     qurl_link: str
@@ -142,7 +147,7 @@ class Usage:
 
     qurls_created: int = 0
     active_qurls: int = 0
-    active_qurls_percent: float | None = None
+    active_qurls_percent: float | None = None  # Changed from float=0.0; None-check before arithmetic
     total_accesses: int = 0
 
 

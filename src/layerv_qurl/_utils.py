@@ -94,6 +94,8 @@ def _serialize_value(v: Any) -> Any:
         }
     if isinstance(v, list):
         return [_serialize_value(item) for item in v]
+    if isinstance(v, dict):
+        return {k: _serialize_value(val) for k, val in v.items() if val is not None}
     return v
 
 

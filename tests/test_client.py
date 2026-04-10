@@ -1628,6 +1628,36 @@ def test_batch_create_over_100_raises(client: QURLClient) -> None:
         client.batch_create(items)
 
 
+@respx.mock
+def test_batch_create_serializes_datetime_in_items(client: QURLClient) -> None:
+    """batch_create items with datetime values are properly serialized."""
+    route = respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_dt",
+                            "qurl_link": "https://qurl.link/#at_dt",
+                            "qurl_site": "https://r_dt.qurl.site",
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    exp = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+    client.batch_create([{"target_url": "https://example.com", "expires_at": exp}])
+    body = json.loads(route.calls[0].request.content)
+    assert body["items"][0]["expires_at"] == "2026-06-01T00:00:00+00:00"
+
+
 # --- create() with access_policy serialization ---
 
 
