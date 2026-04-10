@@ -25,7 +25,7 @@ from layerv_qurl.errors import (
     ServerError,
     ValidationError,
 )
-from layerv_qurl.types import AccessPolicy
+from layerv_qurl.types import AccessPolicy, AccessToken
 
 BASE_URL = "https://api.test.layerv.ai"
 
@@ -209,7 +209,21 @@ def test_get(client: QURLClient) -> None:
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-15T10:00:00Z",
-                    "one_time_use": False,
+                    "qurl_count": 2,
+                    "access_tokens": [
+                        {
+                            "qurl_id": "at_abc",
+                            "status": "active",
+                            "one_time_use": True,
+                            "max_sessions": 5,
+                            "session_duration": 300,
+                            "use_count": 1,
+                            "label": "test token",
+                            "qurl_site": "https://r_abc123def45.qurl.site",
+                            "created_at": "2026-03-10T10:00:00Z",
+                            "expires_at": "2026-03-15T10:00:00Z",
+                        },
+                    ],
                 },
                 "meta": {"request_id": "req_2"},
             },
@@ -221,6 +235,17 @@ def test_get(client: QURLClient) -> None:
     assert result.status == "active"
     assert isinstance(result.created_at, datetime)
     assert result.created_at == datetime(2026, 3, 10, 10, 0, 0, tzinfo=timezone.utc)
+    assert result.qurl_count == 2
+    assert result.access_tokens is not None
+    assert len(result.access_tokens) == 1
+    token = result.access_tokens[0]
+    assert isinstance(token, AccessToken)
+    assert token.qurl_id == "at_abc"
+    assert token.one_time_use is True
+    assert token.max_sessions == 5
+    assert token.session_duration == 300
+    assert token.use_count == 1
+    assert token.label == "test token"
 
 
 @respx.mock
@@ -1116,9 +1141,6 @@ def test_access_policy_in_update(client: QURLClient) -> None:
                     "target_url": "https://example.com",
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
-                    "access_policy": {
-                        "user_agent_deny_regex": "curl.*",
-                    },
                 },
             },
         )
@@ -1126,7 +1148,6 @@ def test_access_policy_in_update(client: QURLClient) -> None:
 
     policy = AccessPolicy(user_agent_deny_regex="curl.*")
     result = client.update("r_abc", access_policy=policy)
-    assert result.access_policy is not None
-    assert result.access_policy.user_agent_deny_regex == "curl.*"
+    assert result.resource_id == "r_abc"
     body = json.loads(route.calls[0].request.content)
     assert body["access_policy"] == {"user_agent_deny_regex": "curl.*"}
