@@ -27,7 +27,14 @@ jobs:
           # Reject any dependency published in the last 7 days.
           # Newly published or hijacked packages are typically detected
           # and removed within days. This acts as a supply chain quarantine.
+          #
+          # Override for emergencies: re-run with CUTOFF set to now:
+          #   uv lock --exclude-newer "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           CUTOFF=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')
           echo "Resolving dependencies with exclude-newer=$CUTOFF"
-          uv lock --exclude-newer "$CUTOFF"
+          if ! uv lock --exclude-newer "$CUTOFF"; then
+            echo "::error::Dependency age check failed. A dependency was published less than 7 days ago."
+            echo "::error::If this is an urgent update, see the override instructions in this workflow file."
+            exit 1
+          fi
           echo "All dependencies passed 7-day age gate"
