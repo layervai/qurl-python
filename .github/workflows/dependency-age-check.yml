@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: read
 
 jobs:
   age-gate:
@@ -12,15 +16,14 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
 
       - name: Check dependency age (7-day quarantine)
         run: |
           # Reject any dependency published in the last 7 days.
           # Newly published or hijacked packages are typically detected
           # and removed within days. This acts as a supply chain quarantine.
-          CUTOFF=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
-                || date -u -v-7d '+%Y-%m-%dT%H:%M:%SZ')
+          CUTOFF=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')
           echo "Resolving dependencies with exclude-newer=$CUTOFF"
           uv lock --exclude-newer "$CUTOFF"
           echo "All dependencies passed 7-day age gate"
