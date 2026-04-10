@@ -43,6 +43,23 @@ class AccessPolicy:
 
 
 @dataclass
+class AccessToken:
+    """An individual access token within a QURL."""
+
+    qurl_id: str
+    status: QURLStatus
+    one_time_use: bool = False
+    max_sessions: int = 0
+    session_duration: int = 0
+    use_count: int = 0
+    label: str | None = None
+    qurl_site: str | None = None
+    access_policy: AccessPolicy | None = None
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+@dataclass
 class QURL:
     """A QURL resource as returned by the API."""
 
@@ -55,6 +72,8 @@ class QURL:
     tags: list[str] = field(default_factory=list)
     qurl_site: str | None = None
     custom_domain: str | None = None
+    qurl_count: int | None = None
+    access_tokens: list[AccessToken] | None = None
 
 
 @dataclass

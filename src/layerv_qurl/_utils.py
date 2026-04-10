@@ -24,6 +24,8 @@ from layerv_qurl.errors import (
 from layerv_qurl.types import (
     QURL,
     AccessGrant,
+    AccessPolicy,
+    AccessToken,
     BatchCreateOutput,
     BatchItemError,
     BatchItemResult,
@@ -109,8 +111,45 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
+    """Parse an AccessPolicy from API response data."""
+    return AccessPolicy(
+        ip_allowlist=data.get("ip_allowlist"),
+        ip_denylist=data.get("ip_denylist"),
+        geo_allowlist=data.get("geo_allowlist"),
+        geo_denylist=data.get("geo_denylist"),
+        user_agent_allow_regex=data.get("user_agent_allow_regex"),
+        user_agent_deny_regex=data.get("user_agent_deny_regex"),
+    )
+
+
+def _parse_access_token(data: dict[str, Any]) -> AccessToken:
+    """Parse an AccessToken from API response data."""
+    policy = None
+    if data.get("access_policy") is not None:
+        policy = _parse_access_policy(data["access_policy"])
+    return AccessToken(
+        qurl_id=data["qurl_id"],
+        status=data["status"],
+        one_time_use=data.get("one_time_use", False),
+        max_sessions=data.get("max_sessions", 0),
+        session_duration=data.get("session_duration", 0),
+        use_count=data.get("use_count", 0),
+        label=data.get("label"),
+        qurl_site=data.get("qurl_site"),
+        access_policy=policy,
+        created_at=_parse_dt(data.get("created_at")),
+        expires_at=_parse_dt(data.get("expires_at")),
+    )
+
+
 def parse_qurl(data: dict[str, Any]) -> QURL:
     """Parse a QURL resource from API response data."""
+    tokens = None
+    # API returns "qurls" array; SDK exposes as "access_tokens" for clarity.
+    raw_tokens = data.get("qurls") if "qurls" in data else data.get("access_tokens")
+    if raw_tokens is not None:
+        tokens = [_parse_access_token(t) for t in raw_tokens]
     return QURL(
         resource_id=data["resource_id"],
         target_url=data["target_url"],
@@ -121,6 +160,8 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
         tags=data.get("tags", []),
         qurl_site=data.get("qurl_site"),
         custom_domain=data.get("custom_domain"),
+        qurl_count=data.get("qurl_count"),
+        access_tokens=tokens,
     )
 
 

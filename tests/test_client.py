@@ -25,7 +25,7 @@ from layerv_qurl.errors import (
     ServerError,
     ValidationError,
 )
-from layerv_qurl.types import AccessPolicy, AIAgentPolicy
+from layerv_qurl.types import AccessPolicy, AccessToken, AIAgentPolicy
 
 BASE_URL = "https://api.test.layerv.ai"
 
@@ -217,6 +217,22 @@ def test_get(client: QURLClient) -> None:
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-15T10:00:00Z",
                     "tags": [],
+                    "qurl_count": 2,
+                    # API wire format uses "qurls"; parse_qurl maps to access_tokens
+                    "qurls": [
+                        {
+                            "qurl_id": "at_abc",
+                            "status": "active",
+                            "one_time_use": True,
+                            "max_sessions": 5,
+                            "session_duration": 300,
+                            "use_count": 1,
+                            "label": "test token",
+                            "qurl_site": "https://r_abc123def45.qurl.site",
+                            "created_at": "2026-03-10T10:00:00Z",
+                            "expires_at": "2026-03-15T10:00:00Z",
+                        },
+                    ],
                 },
                 "meta": {"request_id": "req_2"},
             },
@@ -228,6 +244,85 @@ def test_get(client: QURLClient) -> None:
     assert result.status == "active"
     assert isinstance(result.created_at, datetime)
     assert result.created_at == datetime(2026, 3, 10, 10, 0, 0, tzinfo=timezone.utc)
+    assert result.qurl_count == 2
+    assert result.access_tokens is not None
+    assert len(result.access_tokens) == 1
+    token = result.access_tokens[0]
+    assert isinstance(token, AccessToken)
+    assert token.qurl_id == "at_abc"
+    assert token.one_time_use is True
+    assert token.max_sessions == 5
+    assert token.session_duration == 300
+    assert token.use_count == 1
+    assert token.label == "test token"
+
+
+@respx.mock
+def test_get_token_with_access_policy(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "qurls": [
+                        {
+                            "qurl_id": "q_abc12345678",
+                            "status": "active",
+                            "access_policy": {
+                                "ip_allowlist": ["10.0.0.0/8"],
+                                "geo_denylist": ["CN"],
+                            },
+                        },
+                    ],
+                },
+                "meta": {"request_id": "req_p"},
+            },
+        )
+    )
+
+    result = client.get("r_abc123def45")
+    assert result.access_tokens is not None
+    token = result.access_tokens[0]
+    assert token.access_policy is not None
+    assert token.access_policy.ip_allowlist == ["10.0.0.0/8"]
+    assert token.access_policy.geo_denylist == ["CN"]
+    # Verify defaults on sparse token
+    assert token.one_time_use is False
+    assert token.max_sessions == 0
+    assert token.session_duration == 0
+    assert token.use_count == 0
+    assert token.label is None
+    assert token.qurl_site is None
+    assert token.created_at is None
+    assert token.expires_at is None
+
+
+@respx.mock
+def test_get_without_tokens(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "qurl_count": 0,
+                },
+                "meta": {"request_id": "req_x"},
+            },
+        )
+    )
+
+    result = client.get("r_abc123def45")
+    assert result.resource_id == "r_abc123def45"
+    assert result.qurl_count == 0
+    assert result.access_tokens is None
 
 
 @respx.mock
