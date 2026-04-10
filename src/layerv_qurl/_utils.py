@@ -172,7 +172,7 @@ def parse_mint_output(data: dict[str, Any]) -> MintOutput:
 def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
     """Parse a ResolveOutput from API response data."""
     grant = None
-    if data.get("access_grant"):
+    if data.get("access_grant") is not None:
         grant_data = data["access_grant"]
         grant = AccessGrant(
             expires_in=grant_data["expires_in"],
@@ -189,7 +189,7 @@ def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
 def parse_quota(data: dict[str, Any]) -> Quota:
     """Parse a Quota from API response data."""
     rate_limits = None
-    if data.get("rate_limits"):
+    if data.get("rate_limits") is not None:
         limits_data = data["rate_limits"]
         rate_limits = RateLimits(
             create_per_minute=limits_data.get("create_per_minute", 0),
@@ -200,7 +200,7 @@ def parse_quota(data: dict[str, Any]) -> Quota:
             max_tokens_per_qurl=limits_data.get("max_tokens_per_qurl", 0),
         )
     usage = None
-    if data.get("usage"):
+    if data.get("usage") is not None:
         usage_data = data["usage"]
         usage = Usage(
             qurls_created=usage_data.get("qurls_created", 0),
