@@ -135,8 +135,8 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
     """Parse a QURL resource from API response data."""
     tokens = None
     # API returns "qurls" array; SDK exposes as "access_tokens" for clarity.
-    raw_tokens = data.get("qurls") or data.get("access_tokens")
-    if raw_tokens:
+    raw_tokens = data.get("qurls") if "qurls" in data else data.get("access_tokens")
+    if raw_tokens is not None:
         tokens = [_parse_access_token(t) for t in raw_tokens]
     return QURL(
         resource_id=data["resource_id"],

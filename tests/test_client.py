@@ -210,7 +210,8 @@ def test_get(client: QURLClient) -> None:
                     "created_at": "2026-03-10T10:00:00Z",
                     "expires_at": "2026-03-15T10:00:00Z",
                     "qurl_count": 2,
-                    "access_tokens": [
+                    # API wire format uses "qurls"; parse_qurl maps to access_tokens
+                    "qurls": [
                         {
                             "qurl_id": "at_abc",
                             "status": "active",
@@ -246,6 +247,30 @@ def test_get(client: QURLClient) -> None:
     assert token.session_duration == 300
     assert token.use_count == 1
     assert token.label == "test token"
+
+
+@respx.mock
+def test_get_without_tokens(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "qurl_count": 0,
+                },
+                "meta": {"request_id": "req_x"},
+            },
+        )
+    )
+
+    result = client.get("r_abc123def45")
+    assert result.resource_id == "r_abc123def45"
+    assert result.qurl_count == 0
+    assert result.access_tokens is None
 
 
 @respx.mock
