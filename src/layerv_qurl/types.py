@@ -147,7 +147,8 @@ class Usage:
 
     qurls_created: int = 0
     active_qurls: int = 0
-    active_qurls_percent: float | None = None  # Changed from float=0.0; None-check before arithmetic
+    # Changed from float=0.0 — callers must None-check before arithmetic.
+    active_qurls_percent: float | None = None
     total_accesses: int = 0
 
 
