@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
   workflow_dispatch:
 
 permissions:
