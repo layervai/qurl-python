@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "pyproject.toml"
-      - "uv.lock"
+  workflow_dispatch:
 
 permissions:
   contents: read
