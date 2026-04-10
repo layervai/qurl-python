@@ -32,6 +32,7 @@ from layerv_qurl._utils import (
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
 if TYPE_CHECKING:
+    import builtins
     from collections.abc import Iterator
     from datetime import datetime
 
@@ -279,7 +280,7 @@ class QURLClient:
         extend_by: str | None = None,
         expires_at: datetime | str | None = None,
         description: str | None = None,
-        tags: list[str] | None = None,
+        tags: builtins.list[str] | None = None,
     ) -> QURL:
         """Update a QURL — extend expiration, change description, etc.
 
@@ -345,7 +346,7 @@ class QURLClient:
 
     def batch_create(
         self,
-        items: list[dict[str, Any]],
+        items: builtins.list[dict[str, Any]],
     ) -> BatchCreateOutput:
         """Create multiple QURLs at once (1-100 items).
 
