@@ -92,68 +92,45 @@ jobs:
             HEADER="QURL Python SDK"; STATUS_TEXT="incomplete"
           fi
 
-          # Build the blocks array
-          BLOCKS="[
-            {
-              \"type\": \"section\",
-              \"text\": {
-                \"type\": \"mrkdwn\",
-                \"text\": \":$EMOJI: *$HEADER* $STATUS_TEXT\"
-              }
-            },
-            {
-              \"type\": \"section\",
-              \"fields\": [
-                {
-                  \"type\": \"mrkdwn\",
-                  \"text\": \"*Branch:*\n\`$GH_REF_NAME\` ($SHORT_SHA)\"
-                },
-                {
-                  \"type\": \"mrkdwn\",
-                  \"text\": \"*Trigger:*\n$TRIGGER_TEXT by $GH_ACTOR\"
-                },
-                {
-                  \"type\": \"mrkdwn\",
-                  \"text\": \"*Tests:*\n$(if [[ \"$TEST_RESULT\" == \"success\" ]]; then echo \":white_check_mark:\"; elif [[ \"$TEST_RESULT\" == \"failure\" ]]; then echo \":x:\"; else echo \":warning:\"; fi)\"
-                },
-                {
-                  \"type\": \"mrkdwn\",
-                  \"text\": \"*Python:*\n3.10, 3.12, 3.13\"
-                }
-              ]
-            }"
+          # Determine test emoji
+          case "$TEST_RESULT" in
+            success) TEST_EMOJI=":white_check_mark:" ;;
+            failure) TEST_EMOJI=":x:" ;;
+            *) TEST_EMOJI=":warning:" ;;
+          esac
 
-          # Add commit message (sed escapes characters that break JSON strings)
-          if [[ -n "$COMMIT_MESSAGE" ]]; then
-            FIRST_LINE=$(echo "$COMMIT_MESSAGE" | head -n1 | cut -c1-100 | tr '`' "'" | sed 's/\\/\\\\/g; s/"/\\"/g')
-            BLOCKS="$BLOCKS,
-            {
-              \"type\": \"section\",
-              \"text\": {
-                \"type\": \"mrkdwn\",
-                \"text\": \"*Commit:* \`$FIRST_LINE\`\"
-              }
-            }"
-          fi
+          # Extract first line of commit message (safe for any content)
+          FIRST_LINE=$(echo "$COMMIT_MESSAGE" | head -n1 | cut -c1-100)
 
-          # Footer with commit link and workflow link
-          BLOCKS="$BLOCKS,
-            {
-              \"type\": \"context\",
-              \"elements\": [
-                {
-                  \"type\": \"mrkdwn\",
-                  \"text\": \"<$COMMIT_URL|$SHORT_SHA>  |  <$WORKFLOW_URL|View workflow>\"
-                }
-              ]
-            }
-          ]"
+          # Build payload with jq — handles all JSON escaping automatically.
+          # Shell string concatenation broke on commit messages with special chars.
+          PAYLOAD=$(jq -n \
+            --arg color "$COLOR" \
+            --arg emoji "$EMOJI" \
+            --arg header "$HEADER" \
+            --arg status "$STATUS_TEXT" \
+            --arg branch "$GH_REF_NAME" \
+            --arg sha "$SHORT_SHA" \
+            --arg trigger "$TRIGGER_TEXT" \
+            --arg actor "$GH_ACTOR" \
+            --arg test_emoji "$TEST_EMOJI" \
+            --arg commit "$FIRST_LINE" \
+            --arg commit_url "$COMMIT_URL" \
+            --arg workflow_url "$WORKFLOW_URL" \
+            '{attachments: [{color: $color, blocks: [
+              {type: "section", text: {type: "mrkdwn", text: (":\($emoji): *\($header)* \($status)")}},
+              {type: "section", fields: [
+                {type: "mrkdwn", text: ("*Branch:*\n`\($branch)` (\($sha))")},
+                {type: "mrkdwn", text: ("*Trigger:*\n\($trigger) by \($actor)")},
+                {type: "mrkdwn", text: ("*Tests:*\n\($test_emoji)")},
+                {type: "mrkdwn", text: "*Python:*\n3.10, 3.12, 3.13"}
+              ]},
+              {type: "section", text: {type: "mrkdwn", text: ("*Commit:* `\($commit)`")}},
+              {type: "context", elements: [
+                {type: "mrkdwn", text: ("<\($commit_url)|\($sha)>  |  <\($workflow_url)|View workflow>")}
+              ]}
+            ]}]}')
 
           curl -sfS -X POST "$SLACK_WEBHOOK" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"attachments\": [{
-                \"color\": \"$COLOR\",
-                \"blocks\": $BLOCKS
-              }]
-            }" || echo "Slack notification failed (non-critical)"
+            -d "$PAYLOAD" || echo "Slack notification failed (non-critical)"
