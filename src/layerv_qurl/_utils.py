@@ -26,6 +26,7 @@ from layerv_qurl.types import (
     AccessGrant,
     AccessPolicy,
     AccessToken,
+    AIAgentPolicy,
     BatchCreateOutput,
     BatchItemError,
     BatchItemResult,
@@ -113,8 +114,6 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
 
 def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
     """Parse an AccessPolicy from API response data."""
-    from layerv_qurl.types import AIAgentPolicy
-
     ai_policy = None
     if data.get("ai_agent_policy") is not None:
         ap = data["ai_agent_policy"]
@@ -183,7 +182,7 @@ def parse_create_output(data: dict[str, Any]) -> CreateOutput:
         qurl_link=data["qurl_link"],
         qurl_site=data["qurl_site"],
         expires_at=_parse_dt(data.get("expires_at")),
-        qurl_id=data.get("qurl_id", ""),
+        qurl_id=data.get("qurl_id"),
         label=data.get("label"),
     )
 

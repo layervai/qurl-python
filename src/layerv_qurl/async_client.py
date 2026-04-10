@@ -349,7 +349,8 @@ class AsyncQURLClient:
             raise ValueError("items must not be empty")
         if len(items) > 100:
             raise ValueError("batch_create supports at most 100 items")
-        resp = await self._request("POST", "/v1/qurls/batch", body={"items": items})
+        serialized = [build_body(item) for item in items]
+        resp = await self._request("POST", "/v1/qurls/batch", body={"items": serialized})
         return parse_batch_create_output(resp)
 
     async def resolve(self, access_token: str) -> ResolveOutput:

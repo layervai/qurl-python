@@ -84,7 +84,7 @@ class CreateOutput:
     qurl_link: str
     qurl_site: str
     expires_at: datetime | None = None
-    qurl_id: str = ""
+    qurl_id: str | None = None
     label: str | None = None
 
 

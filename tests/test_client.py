@@ -1612,3 +1612,95 @@ async def test_async_update_with_tags(async_client: AsyncQURLClient) -> None:
     assert result.tags == ["internal"]
     body = json.loads(route.calls[0].request.content)
     assert body == {"tags": ["internal"]}
+
+
+# --- batch_create validation ---
+
+
+def test_batch_create_empty_raises(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        client.batch_create([])
+
+
+def test_batch_create_over_100_raises(client: QURLClient) -> None:
+    items = [{"target_url": f"https://{i}.com"} for i in range(101)]
+    with pytest.raises(ValueError, match="at most 100"):
+        client.batch_create(items)
+
+
+# --- create() with access_policy serialization ---
+
+
+@respx.mock
+def test_create_with_access_policy(client: QURLClient) -> None:
+    """create() correctly serializes AccessPolicy including nested AIAgentPolicy."""
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_pol",
+                    "qurl_link": "https://qurl.link/#at_pol",
+                    "qurl_site": "https://r_pol.qurl.site",
+                    "qurl_id": "q_pol",
+                },
+            },
+        )
+    )
+
+    policy = AccessPolicy(
+        ip_allowlist=["10.0.0.0/8"],
+        ai_agent_policy=AIAgentPolicy(
+            block_all=True,
+            deny_categories=["scraping"],
+        ),
+    )
+    result = client.create(
+        target_url="https://example.com",
+        one_time_use=True,
+        max_sessions=3,
+        access_policy=policy,
+    )
+    assert result.resource_id == "r_pol"
+    body = json.loads(route.calls[0].request.content)
+    assert body["target_url"] == "https://example.com"
+    assert body["one_time_use"] is True
+    assert body["max_sessions"] == 3
+    assert body["access_policy"] == {
+        "ip_allowlist": ["10.0.0.0/8"],
+        "ai_agent_policy": {
+            "block_all": True,
+            "deny_categories": ["scraping"],
+        },
+    }
+
+
+# --- _serialize_value end-to-end with nested dataclasses ---
+
+
+@respx.mock
+def test_mint_link_nested_serialization_e2e(client: QURLClient) -> None:
+    """Verifies _serialize_value recursively handles AccessPolicy > AIAgentPolicy."""
+    route = respx.post(f"{BASE_URL}/v1/qurls/r_abc/mint_link").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurl_link": "https://qurl.link/#at_e2e",
+                    "expires_at": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+    )
+
+    policy = AccessPolicy(
+        geo_denylist=["CN", "RU"],
+        ai_agent_policy=AIAgentPolicy(
+            allow_categories=["claude", "chatgpt"],
+        ),
+    )
+    client.mint_link("r_abc", access_policy=policy, label="e2e-test")
+    body = json.loads(route.calls[0].request.content)
+    assert body["access_policy"]["geo_denylist"] == ["CN", "RU"]
+    assert body["access_policy"]["ai_agent_policy"]["allow_categories"] == ["claude", "chatgpt"]
+    assert "block_all" not in body["access_policy"]["ai_agent_policy"]  # None fields omitted
