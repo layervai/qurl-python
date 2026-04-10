@@ -114,7 +114,7 @@ def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
 def _parse_access_token(data: dict[str, Any]) -> AccessToken:
     """Parse an AccessToken from API response data."""
     policy = None
-    if data.get("access_policy"):
+    if data.get("access_policy") is not None:
         policy = _parse_access_policy(data["access_policy"])
     return AccessToken(
         qurl_id=data["qurl_id"],
