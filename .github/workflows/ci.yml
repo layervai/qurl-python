@@ -27,3 +27,125 @@ jobs:
         run: mypy src/
       - name: Test
         run: pytest tests/ -v
+
+  # ============================================================================
+  # NOTIFY - Send Slack notification on build completion
+  # ============================================================================
+  notify:
+    name: Notify
+    needs: [test]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Notify Slack
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEST_RESULT: ${{ needs.test.result }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK" ]]; then
+            echo "SLACK_WEBHOOK_URL not configured, skipping notification"
+            exit 0
+          fi
+
+          WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+
+          # Determine trigger source
+          TRIGGER="${{ github.event_name }}"
+          case "$TRIGGER" in
+            push)
+              if echo "$COMMIT_MESSAGE" | head -n1 | grep -q "Merge pull request"; then
+                TRIGGER_TEXT="PR merge"
+              else
+                TRIGGER_TEXT="Push"
+              fi
+              ;;
+            workflow_dispatch) TRIGGER_TEXT="Manual" ;;
+            *) TRIGGER_TEXT="$TRIGGER" ;;
+          esac
+
+          # Determine status
+          if [[ "$TEST_RESULT" == "success" ]]; then
+            COLOR="#36a64f"; EMOJI="white_check_mark"
+            HEADER="QURL Python SDK Build"; STATUS_TEXT="successful"
+          elif [[ "$TEST_RESULT" == "failure" ]]; then
+            COLOR="#dc3545"; EMOJI="x"
+            HEADER="QURL Python SDK Build"; STATUS_TEXT="failed"
+          elif [[ "$TEST_RESULT" == "cancelled" ]]; then
+            COLOR="#ffc107"; EMOJI="warning"
+            HEADER="QURL Python SDK Build"; STATUS_TEXT="cancelled"
+          else
+            COLOR="#ffc107"; EMOJI="warning"
+            HEADER="QURL Python SDK"; STATUS_TEXT="incomplete"
+          fi
+
+          # Build the blocks array
+          BLOCKS="[
+            {
+              \"type\": \"section\",
+              \"text\": {
+                \"type\": \"mrkdwn\",
+                \"text\": \":$EMOJI: *$HEADER* $STATUS_TEXT\"
+              }
+            },
+            {
+              \"type\": \"section\",
+              \"fields\": [
+                {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"*Branch:*\n\`${{ github.ref_name }}\` ($SHORT_SHA)\"
+                },
+                {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"*Trigger:*\n$TRIGGER_TEXT by ${{ github.actor }}\"
+                },
+                {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"*Tests:*\n$(if [[ \"$TEST_RESULT\" == \"success\" ]]; then echo \":white_check_mark:\"; elif [[ \"$TEST_RESULT\" == \"failure\" ]]; then echo \":x:\"; else echo \":warning:\"; fi)\"
+                },
+                {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"*Python:*\n3.10, 3.12, 3.13\"
+                }
+              ]
+            }"
+
+          # Add commit message (sed escapes characters that break JSON strings)
+          if [[ -n "$COMMIT_MESSAGE" ]]; then
+            FIRST_LINE=$(echo "$COMMIT_MESSAGE" | head -n1 | cut -c1-100 | tr '`' "'" | sed 's/\\/\\\\/g; s/"/\\"/g')
+            BLOCKS="$BLOCKS,
+            {
+              \"type\": \"section\",
+              \"text\": {
+                \"type\": \"mrkdwn\",
+                \"text\": \"*Commit:* \`$FIRST_LINE\`\"
+              }
+            }"
+          fi
+
+          # Footer with commit link and workflow link
+          BLOCKS="$BLOCKS,
+            {
+              \"type\": \"context\",
+              \"elements\": [
+                {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"<$COMMIT_URL|$SHORT_SHA>  |  <$WORKFLOW_URL|View workflow>\"
+                }
+              ]
+            }
+          ]"
+
+          curl -sfS -X POST "$SLACK_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"attachments\": [{
+                \"color\": \"$COLOR\",
+                \"blocks\": $BLOCKS
+              }]
+            }" || echo "Slack notification failed (non-critical)"
