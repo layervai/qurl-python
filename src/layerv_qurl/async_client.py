@@ -333,8 +333,11 @@ class AsyncQURLClient:
                 ``extend_by``.
             description: New resource description. Pass an empty string to
                 clear. Max length 500.
-            tags: Tags to set on the resource. Pass an empty list to clear.
-                Max 10 items, each 1-50 chars matching
+            tags: Replacement tag list — this is always a REPLACE, never
+                a merge. Pass ``tags=[]`` to clear all tags (always a
+                real clear operation, even if no tags were set); pass
+                ``None`` (the default) to leave the existing tags
+                unchanged. Max 10 items, each 1-50 chars matching
                 ``^[a-zA-Z0-9][a-zA-Z0-9 _-]*$``.
 
         Raises:

@@ -206,8 +206,13 @@ def validate_create_input(
     fail fast instead of round-tripping to the API.
     """
     if not isinstance(target_url, str) or not target_url.startswith(_ALLOWED_URL_SCHEMES):
+        # `repr(...)[:40]` instead of `target_url[:32]!r` — the original
+        # subscript would raise `TypeError` on any non-subscriptable
+        # input (None, int, bool, …) *before* the ValueError could
+        # surface, masking the real validation failure with a cryptic
+        # slicing error. `repr()` works on any object.
         raise ValueError(
-            f"target_url: must start with http:// or https:// (got {target_url[:32]!r})"
+            f"target_url: must start with http:// or https:// (got {repr(target_url)[:40]})"
         )
     _require_max_length(target_url, "target_url", MAX_TARGET_URL)
     _require_max_length(label, "label", MAX_LABEL)
@@ -432,8 +437,17 @@ def _validate_batch_create_shape(data: Any) -> None:
 
     if not isinstance(data, dict):
         raise _unexpected_shape_error()
-    if not isinstance(data.get("succeeded"), int) or not isinstance(
-        data.get("failed"), int
+    # `bool` is a subclass of `int` in Python, so a response with
+    # `"succeeded": True` would silently pass an `isinstance(..., int)`
+    # check and then slip a truthy bool into the counts. Reject
+    # explicitly — matches the same guard in `_require_max_sessions_in_range`.
+    succeeded = data.get("succeeded")
+    failed = data.get("failed")
+    if (
+        not isinstance(succeeded, int)
+        or isinstance(succeeded, bool)
+        or not isinstance(failed, int)
+        or isinstance(failed, bool)
     ):
         raise _unexpected_shape_error()
     if not isinstance(data.get("results"), list):
@@ -563,7 +577,9 @@ def build_list_params(
 ) -> dict[str, str]:
     """Build query params for list endpoints, dropping None values."""
     # ``status`` is a QURLStatus (Literal | str) — covered by the ``str`` arm.
-    pairs: dict[str, int | str | datetime | None] = {
+    # Ordered most-specific to least-specific: datetime/int are concrete
+    # types, str is the widening arm, None is the "drop" sentinel.
+    pairs: dict[str, datetime | int | str | None] = {
         "limit": limit,
         "cursor": cursor,
         "status": status,

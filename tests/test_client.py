@@ -2197,6 +2197,20 @@ def test_create_accepts_http_and_https_schemes(client: QURLClient) -> None:
     utils.validate_create_input(target_url="https://example.com")
 
 
+def test_create_rejects_non_string_target_url_with_value_error() -> None:
+    """Non-string target_url inputs (None, int, bool, bytes) must raise
+    ``ValueError`` — not a cryptic ``TypeError`` from slicing inside the
+    error message. Regression guard: the previous ``target_url[:32]!r``
+    form would raise ``TypeError`` on any non-subscriptable input before
+    the ValueError could surface.
+    """
+    import layerv_qurl._utils as utils
+
+    for bad in (None, 42, True, b"https://example.com"):
+        with pytest.raises(ValueError, match="http:// or https://"):
+            utils.validate_create_input(target_url=bad)  # type: ignore[arg-type]
+
+
 # ---- _parse_access_policy deserialization (reviewer gap #8) ----------------
 
 
@@ -2329,6 +2343,31 @@ def test_batch_create_rejects_400_body_with_non_boolean_success(
                     "results": [
                         {"index": 0, "success": "oops"},  # should be bool
                     ],
+                },
+            },
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+def test_batch_create_rejects_400_body_with_bool_counts(
+    client: QURLClient,
+) -> None:
+    """`bool` is a subclass of `int` in Python, so a naive
+    ``isinstance(..., int)`` check would silently accept
+    ``"succeeded": True``. The shape guard explicitly rejects bool in
+    the counts — this test locks that in against a future simplification
+    that might drop the explicit bool check."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": True,  # bool should be rejected
+                    "failed": False,
+                    "results": [],
                 },
             },
         )
