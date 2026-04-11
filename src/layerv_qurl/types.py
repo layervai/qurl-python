@@ -175,6 +175,15 @@ class Quota:
     ``plan`` is narrowed to the spec's ``QuotaData.plan`` enum via
     :data:`QuotaPlan`. Accepts arbitrary strings so a new plan from the
     API can't become a breaking type change.
+
+    .. note::
+
+       ``plan`` defaults to the empty string ``""`` purely so the
+       dataclass can be instantiated with no arguments (this only
+       happens in tests and internal bootstrap paths). In practice the
+       ``/v1/quota`` endpoint always returns a populated plan string,
+       so consumers comparing ``quota.plan == "free"`` on a real
+       response will see one of the documented enum values.
     """
 
     plan: QuotaPlan = ""

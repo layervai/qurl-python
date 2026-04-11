@@ -6,9 +6,27 @@ from __future__ import annotations
 class QURLError(Exception):
     """Error raised for API-level errors (4xx/5xx responses).
 
-    Carries the full RFC 7807 Problem Details shape when the API provides it:
-    ``status``, ``code``, ``title``, ``detail``, plus the optional
+    Carries the full RFC 7807 Problem Details shape when the API provides
+    it: ``status``, ``code``, ``title``, ``detail``, plus the optional
     ``type`` (problem-type URI) and ``instance`` (occurrence URI).
+
+    .. note::
+
+       ``detail`` is **always non-empty** on the instance — the
+       constructor falls back to ``title`` when the API omits detail
+       (RFC 7807 allows this). Use ``code`` / ``status`` / ``type`` to
+       distinguish between error cases rather than inspecting ``detail``
+       for the "was it absent?" signal.
+
+    .. note::
+
+       ``type`` shadows Python's built-in ``type()`` inside method
+       bodies. This is intentional — the name mirrors the RFC 7807 field
+       name and matches the other SDKs (``qurl-typescript``,
+       ``qurl-mcp``). The shadowing only matters inside ``QURLError``
+       method definitions; external code can still use ``type(err)``
+       safely since attribute access doesn't shadow the builtin in that
+       scope.
 
     Catch specific subclasses for fine-grained handling::
 

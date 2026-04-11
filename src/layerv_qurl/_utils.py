@@ -138,9 +138,18 @@ MAX_CUSTOM_DOMAIN = 253
 MAX_MAX_SESSIONS = 1000
 MAX_TAGS = 10
 MAX_TAG_LENGTH = 50
-# UpdateQurlRequest.tags item pattern from openapi.yaml.
+# Tag item pattern mirrored from the OpenAPI spec schema
+# `UpdateQurlRequest.tags.items.pattern` in qurl/api/openapi.yaml.
+# Keep in lockstep with the spec — if the server pattern ever relaxes
+# (e.g. allowing colons) the SDK must widen this regex or it will
+# reject strings the API would otherwise accept.
 _TAG_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _-]*$")
 RESOURCE_ID_PREFIX = "r_"
+# target_url must use an http(s) scheme per the API's SSRF protection.
+# This is a cheap client-side sanity check — the server is still the
+# authoritative validator (e.g. it rejects localhost, cloud metadata,
+# and private-range hosts; the SDK doesn't need to duplicate that).
+_ALLOWED_URL_SCHEMES = ("http://", "https://")
 
 
 def _require_max_length(value: str | None, field_name: str, maximum: int) -> None:
@@ -192,6 +201,10 @@ def validate_create_input(
     Raises ``ValueError`` on constraint violations so obvious mistakes
     fail fast instead of round-tripping to the API.
     """
+    if not isinstance(target_url, str) or not target_url.startswith(_ALLOWED_URL_SCHEMES):
+        raise ValueError(
+            f"target_url: must start with http:// or https:// (got {target_url[:32]!r})"
+        )
     _require_max_length(target_url, "target_url", MAX_TARGET_URL)
     _require_max_length(label, "label", MAX_LABEL)
     _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
@@ -385,8 +398,68 @@ def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
     )
 
 
+def _validate_batch_create_shape(data: Any) -> None:
+    """Defense-in-depth structural check for batch_create responses.
+
+    The ``batch_create`` endpoint whitelists HTTP 400 into the success
+    path so the populated ``BatchCreateOutput`` body is surfaced instead
+    of being swallowed by the generic error path. If the API ever returns
+    400 with a *different* body (e.g., a plain validation error envelope,
+    a proxy error, or malformed JSON), ``parse_batch_create_output`` would
+    silently produce ``(succeeded=0, failed=0, results=[])`` via its
+    ``.get()`` defaults — the caller would get no indication anything went
+    wrong.
+
+    Raise a clear error instead when the shape doesn't match. The error
+    message intentionally does not embed the raw body — an unexpected
+    body could contain sensitive data (auth details, request echoes)
+    and error strings may end up in client-side logs.
+    """
+    if not isinstance(data, dict):
+        raise QURLError(
+            status=0,
+            code="unexpected_response",
+            title="Unexpected Response",
+            detail="Unexpected response shape from POST /v1/qurls/batch",
+        )
+    if not isinstance(data.get("succeeded"), int) or not isinstance(
+        data.get("failed"), int
+    ):
+        raise QURLError(
+            status=0,
+            code="unexpected_response",
+            title="Unexpected Response",
+            detail="Unexpected response shape from POST /v1/qurls/batch",
+        )
+    if not isinstance(data.get("results"), list):
+        raise QURLError(
+            status=0,
+            code="unexpected_response",
+            title="Unexpected Response",
+            detail="Unexpected response shape from POST /v1/qurls/batch",
+        )
+    # Each entry must carry a boolean `success` discriminant so consumers
+    # can reliably branch on it — anything else would break the
+    # BatchItemResult contract. Deeper per-field validation is
+    # intentionally left to the API.
+    for entry in data["results"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("success"), bool):
+            raise QURLError(
+                status=0,
+                code="unexpected_response",
+                title="Unexpected Response",
+                detail="Unexpected response shape from POST /v1/qurls/batch",
+            )
+
+
 def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
-    """Parse a BatchCreateOutput from API response data."""
+    """Parse a BatchCreateOutput from API response data.
+
+    Callers must validate the response shape via
+    :func:`_validate_batch_create_shape` before invoking this — this
+    function assumes a well-formed envelope and will silently produce
+    an empty result on a malformed body.
+    """
     results: list[BatchItemResult] = []
     for item in data.get("results", []):
         err = None

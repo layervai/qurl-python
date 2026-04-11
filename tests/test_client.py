@@ -1070,6 +1070,10 @@ def test_404_raises_not_found_error(client: QURLClient) -> None:
 
 @respx.mock
 def test_422_raises_validation_error(client: QURLClient) -> None:
+    """The API's 422 path is exercised by sending a syntactically valid URL
+    that passes client-side checks but is rejected by the API (e.g. a
+    host that fails SSRF protection). The mock returns 422 regardless of
+    the request body, so any valid-scheme URL works here."""
     respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             422,
@@ -1086,7 +1090,7 @@ def test_422_raises_validation_error(client: QURLClient) -> None:
     )
 
     with pytest.raises(ValidationError) as exc_info:
-        client.create(target_url="not-a-url")
+        client.create(target_url="https://localhost/rejected-by-ssrf-protection")
     assert exc_info.value.invalid_fields == {"target_url": "must be a valid URL"}
 
 
@@ -1135,6 +1139,8 @@ def test_500_raises_server_error(client: QURLClient) -> None:
 
 @respx.mock
 def test_400_raises_validation_error(client: QURLClient) -> None:
+    """Exercise the API's 400 path with a URL that passes client-side
+    validation — the mock returns 400 regardless of the request body."""
     respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             400,
@@ -1150,7 +1156,7 @@ def test_400_raises_validation_error(client: QURLClient) -> None:
     )
 
     with pytest.raises(ValidationError):
-        client.create(target_url="")
+        client.create(target_url="https://example.com/triggers-mocked-400")
 
 
 # --- extend() convenience method ---
@@ -1290,10 +1296,13 @@ def test_batch_create_partial_failure(client: QURLClient) -> None:
         )
     )
 
+    # Both URLs must pass client-side validation (syntactically valid
+    # https://) — the mock returns a partial-failure payload regardless
+    # of what's in the request body, so we're exercising the parser.
     result = client.batch_create(
         [
-            {"target_url": "https://good.com"},
-            {"target_url": "bad"},
+            {"target_url": "https://good.example.com"},
+            {"target_url": "https://bad.example.com"},
         ]
     )
     assert result.succeeded == 1
@@ -2092,3 +2101,166 @@ def test_create_normalizes_empty_qurl_id_to_none(client: QURLClient) -> None:
     )
     result = client.create(target_url="https://example.com")
     assert result.qurl_id is None
+
+
+# ---- Target URL scheme validation (create) --------------------------------
+
+
+def test_create_rejects_target_url_without_scheme(client: QURLClient) -> None:
+    """Client-side URL scheme check catches the common 'forgot http://' mistake."""
+    with pytest.raises(ValueError, match="http:// or https://"):
+        client.create(target_url="example.com")
+
+
+def test_create_rejects_target_url_with_unsupported_scheme(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="http:// or https://"):
+        client.create(target_url="ftp://files.example.com")
+
+
+def test_create_accepts_http_and_https_schemes(client: QURLClient) -> None:
+    """Both http:// and https:// pass the client-side check."""
+    import layerv_qurl._utils as utils
+
+    # Direct check — doesn't need a mocked HTTP response.
+    utils.validate_create_input(target_url="http://example.com")
+    utils.validate_create_input(target_url="https://example.com")
+
+
+# ---- _parse_access_policy deserialization (reviewer gap #8) ----------------
+
+
+@respx.mock
+def test_get_response_parses_nested_ai_agent_policy(client: QURLClient) -> None:
+    """GET responses with a populated ai_agent_policy inside an access_policy
+    on a token should deserialize cleanly. Serialization of this shape is
+    covered elsewhere; this test closes the deserialization loop for the
+    _parse_access_policy changes in this PR.
+    """
+    respx.get(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "qurl_count": 1,
+                    "qurls": [
+                        {
+                            "qurl_id": "q_3a7f2c8e91b",
+                            "status": "active",
+                            "one_time_use": False,
+                            "max_sessions": 5,
+                            "session_duration": 3600,
+                            "use_count": 0,
+                            "created_at": "2026-03-10T10:00:00Z",
+                            "expires_at": "2026-03-17T10:00:00Z",
+                            "access_policy": {
+                                "ip_allowlist": ["10.0.0.0/8"],
+                                "geo_allowlist": ["US", "CA"],
+                                "ai_agent_policy": {
+                                    "block_all": False,
+                                    "deny_categories": ["gptbot", "commoncrawl"],
+                                    "allow_categories": ["claude", "perplexity"],
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        )
+    )
+    qurl = client.get("r_abc123def45")
+    assert qurl.access_tokens is not None
+    assert len(qurl.access_tokens) == 1
+    token = qurl.access_tokens[0]
+    assert token.access_policy is not None
+    assert token.access_policy.ip_allowlist == ["10.0.0.0/8"]
+    assert token.access_policy.geo_allowlist == ["US", "CA"]
+    # The big one: ai_agent_policy nested inside access_policy must parse.
+    assert token.access_policy.ai_agent_policy is not None
+    ai_policy = token.access_policy.ai_agent_policy
+    assert ai_policy.block_all is False
+    assert ai_policy.deny_categories == ["gptbot", "commoncrawl"]
+    assert ai_policy.allow_categories == ["claude", "perplexity"]
+
+
+# ---- datetime list filter params (reviewer gap #9) ------------------------
+
+
+@respx.mock
+def test_list_serializes_datetime_filter_params_as_isoformat(
+    client: QURLClient,
+) -> None:
+    """build_list_params handles datetime via .isoformat() — exercise that
+    branch explicitly (existing tests only pass string timestamps)."""
+    route = respx.get(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [], "meta": {"has_more": False}},
+        )
+    )
+    cutoff = datetime(2026, 3, 1, 0, 0, 0)
+    client.list(created_after=cutoff)
+
+    called_url = str(route.calls[0].request.url)
+    # urlencode-safe ISO 8601 — check the raw URL for the encoded value.
+    assert "created_after=2026-03-01T00%3A00%3A00" in called_url
+
+
+# ---- Async delete q_ prefix rejection (reviewer gap #10) ------------------
+
+
+@pytest.mark.asyncio
+async def test_async_delete_rejects_q_prefix_client_side(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Sync test exists; async symmetry gap closed."""
+    with pytest.raises(ValueError, match="r_ prefix"):
+        await async_client.delete("q_3a7f2c8e91b")
+
+
+# ---- batch_create response shape guard (defense-in-depth) -----------------
+
+
+@respx.mock
+def test_batch_create_rejects_unexpected_400_body_shape(client: QURLClient) -> None:
+    """The 400 passthrough trusts the BatchCreateOutput shape. If the API
+    ever returns 400 with a different body (e.g. a plain error envelope
+    or a proxy error), the SDK must raise a clear error instead of
+    silently producing `(succeeded=0, failed=0, results=[])`. Defense
+    in depth — matches qurl-typescript and qurl-mcp.
+    """
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={"data": {"unexpected": "not a batch envelope"}},
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+def test_batch_create_rejects_400_body_with_non_boolean_success(
+    client: QURLClient,
+) -> None:
+    """Per-entry shape guard: results[i].success must be a bool for the
+    BatchItemResult discriminated-union contract to hold."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": 0,
+                    "failed": 1,
+                    "results": [
+                        {"index": 0, "success": "oops"},  # should be bool
+                    ],
+                },
+            },
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        client.batch_create([{"target_url": "https://example.com"}])

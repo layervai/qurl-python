@@ -16,6 +16,7 @@ from layerv_qurl._utils import (
     DEFAULT_TIMEOUT,
     RETRYABLE_STATUS,
     RETRYABLE_STATUS_POST,
+    _validate_batch_create_shape,
     build_body,
     build_list_params,
     default_user_agent,
@@ -487,6 +488,12 @@ class AsyncQURLClient:
             body={"items": serialized},
             allow_statuses=(400,),
         )
+        # Defense-in-depth: the 400 passthrough trusts the response shape,
+        # but if the API ever returns 400 with a non-BatchCreateOutput body
+        # (e.g., a plain error envelope or malformed JSON) we'd silently
+        # get an empty result. Verify the shape before parsing and raise
+        # a clear error otherwise.
+        _validate_batch_create_shape(resp)
         return parse_batch_create_output(resp)
 
     async def resolve(self, access_token: str) -> ResolveOutput:
