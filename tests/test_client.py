@@ -1963,6 +1963,24 @@ async def test_async_update_with_tags(async_client: AsyncQURLClient) -> None:
     assert body == {"tags": ["internal"]}
 
 
+async def test_async_update_rejects_access_policy_kwarg(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of `test_update_rejects_access_policy_kwarg`.
+
+    Locks in the immutability invariant on the async surface. The
+    reasoning is identical: a future refactor adding `**kwargs` to
+    `async_client.update()` would silently accept `access_policy`,
+    breaking the spec-enforced contract. This guards against that
+    independently of the function signature.
+    """
+    with pytest.raises(TypeError, match="access_policy"):
+        await async_client.update(
+            "r_abc",
+            access_policy={"ai_agent_policy": "allow"},  # type: ignore[call-arg]
+        )
+
+
 # --- batch_create validation ---
 
 
@@ -2345,6 +2363,23 @@ def test_update_rejects_empty_input(client: QURLClient) -> None:
 def test_update_rejects_both_extend_by_and_expires_at(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="mutually exclusive"):
         client.update("r_abc", extend_by="24h", expires_at="2026-04-01T00:00:00Z")
+
+
+def test_update_rejects_access_policy_kwarg(client: QURLClient) -> None:
+    """Lock in that `access_policy` is immutable on update().
+
+    Per the OpenAPI spec's `UpdateQurlRequest` schema, access policy is
+    set only at create time and cannot be modified on an existing
+    resource. The signature itself currently enforces this (Python
+    raises `TypeError` on unknown kwargs), but this test is an explicit
+    invariant guard: a future refactor adding `**kwargs` to `update()`
+    for forward-compat pass-through would silently accept
+    `access_policy` again, breaking the spec-enforced immutability
+    contract. Callers needing policy changes should create a new
+    resource or mint a per-token override via `mint_link()`.
+    """
+    with pytest.raises(TypeError, match="access_policy"):
+        client.update("r_abc", access_policy={"ai_agent_policy": "allow"})  # type: ignore[call-arg]
 
 
 # ---- Spec-derived input validation (mint_link) -----------------------------
