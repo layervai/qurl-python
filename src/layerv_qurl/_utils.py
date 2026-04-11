@@ -339,18 +339,10 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
 
 def parse_create_output(data: dict[str, Any]) -> CreateOutput:
     """Parse a CreateOutput from API response data."""
-    # Normalize empty-string `qurl_id` to None so callers can use the
-    # idiomatic ``if result.qurl_id:`` presence check. An empty string
-    # here is either a bug in a mock or a legacy response shape; the
-    # spec requires a populated qurl_id on success responses.
-    #
-    # Intentionally asymmetric with `label` below: an identifier is
-    # either present or absent and an empty-string id is never a
-    # meaningful value, but `label` is user-facing metadata where
-    # ``""`` and absent are semantically distinct — ``""`` means "the
-    # caller explicitly cleared the label", while missing-from-response
-    # means "the API didn't return the field at all". Preserving the
-    # empty string lets consumers distinguish the two cases.
+    # Normalize empty-string `qurl_id` → None for idiomatic truthiness
+    # checks. Intentionally asymmetric with `label` (preserved as-is):
+    # `""` is never a meaningful identifier but IS a meaningful "cleared"
+    # value for user-facing metadata.
     qurl_id_raw = data.get("qurl_id")
     qurl_id = qurl_id_raw if qurl_id_raw else None
     return CreateOutput(
@@ -461,37 +453,22 @@ def _validate_batch_create_shape(data: Any) -> None:
     """
 
     def _fail(reason: str, *, top_level_keys: list[str] | None = None) -> ValidationError:
-        # Single source of truth for the error constructed at every
-        # check failure — keeps status/code/title/detail aligned.
-        #
-        # DEBUG log carries structural hints for production triage:
-        # the failure reason, the observed top-level type, and (if the
-        # body parsed as a dict) the sorted list of top-level keys.
-        # Raw body bytes are intentionally excluded — the JSON key
-        # names come from the API's published schema, not user data,
-        # so this is safe to log.
+        # DEBUG log carries structural hints (type + top-level key names
+        # only — JSON keys come from the published schema, not user
+        # data) so operators can triage shape-guard trips without
+        # leaking raw body content into logs.
         logger.debug(
             "batch_create shape guard tripped: %s (type=%s, top_level_keys=%s)",
             reason,
             type(data).__name__,
             top_level_keys,
         )
-        # Raise a ValidationError (not bare QURLError) so consumers
-        # catching subclass-specific errors still catch shape-guard
-        # failures via `except ValidationError`. The `code` field
-        # distinguishes this from client-side preflight failures
-        # (`client_validation`) so callers who need the finer
-        # distinction can branch on `.code`. Matches the qurl-typescript
-        # SDK's `unexpectedResponseError` pattern.
-        #
-        # `status=0` is the SDK convention for client-detected failures
-        # (shape-guard trips, preflight validation, URL scheme checks)
-        # as opposed to real HTTP status codes from the server. A
-        # consumer filtering errors by HTTP status who sees `status=0`
-        # should understand the failure was synthesized by the SDK
-        # before (or after) the network round-trip, not reported by
-        # the API. The `code` field is the authoritative signal for
-        # WHICH kind of SDK-detected failure this is.
+        # Uses `ValidationError` (subclass) not bare `QURLError` so
+        # `except ValidationError` catches shape-guard trips; `code=
+        # "unexpected_response"` distinguishes from client-side
+        # preflight (`client_validation`). `status=0` is the SDK
+        # convention for all client-detected failures (not real HTTP
+        # status). See qurl-typescript's `unexpectedResponseError`.
         return ValidationError(
             status=0,
             code="unexpected_response",

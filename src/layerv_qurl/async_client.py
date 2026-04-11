@@ -516,6 +516,12 @@ class AsyncQURLClient:
         serialized = [build_body(cast("dict[str, Any]", item)) for item in items]
         # HTTP 400 carries structured per-item errors on this endpoint —
         # whitelist it so the generic error path doesn't swallow the body.
+        # `allow_statuses=(400,)` only — HTTP 207 Multi-Status (partial
+        # success) flows through the normal `status_code < 400` success
+        # path automatically, so it doesn't need to be whitelisted. Only
+        # the total-failure 400 needs the opt-in, because the API
+        # populates a `BatchCreateOutput` body there that the generic
+        # error path would otherwise swallow.
         resp = await self._request(
             "POST",
             "/v1/qurls/batch",

@@ -172,22 +172,10 @@ class Usage:
 class Quota:
     """Quota and usage information.
 
-    ``plan`` is narrowed to the spec's ``QuotaData.plan`` enum via
-    :data:`QuotaPlan`. Accepts arbitrary strings so a new plan from the
-    API can't become a breaking type change.
-
-    .. note::
-
-       ``plan`` defaults to the sentinel ``"unknown"`` purely so the
-       dataclass can be instantiated with no arguments (this only
-       happens in tests and internal bootstrap paths). ``"unknown"``
-       was chosen over the empty string so callers doing
-       ``if quota.plan:`` truthiness checks see a real value, and so
-       the "not-yet-populated" state is self-describing in logs and
-       error messages. In practice the ``/v1/quota`` endpoint always
-       returns a populated plan string, so consumers comparing
-       ``quota.plan == "free"`` on a real response will see one of
-       the documented enum values.
+    ``plan`` is typed via :data:`QuotaPlan` (Literal enum + ``str``
+    escape hatch for forward compat). Defaults to the sentinel
+    ``"unknown"`` — only hit by tests/bootstrap paths, since the
+    ``/v1/quota`` endpoint always returns a populated plan string.
     """
 
     plan: QuotaPlan = "unknown"
