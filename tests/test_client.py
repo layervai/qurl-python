@@ -1940,6 +1940,58 @@ def test_create_with_access_policy(client: QURLClient) -> None:
     }
 
 
+@respx.mock
+def test_create_with_minimal_ai_agent_policy_only(client: QURLClient) -> None:
+    """Regression guard for the reviewer-noted gap: an AccessPolicy
+    that contains ONLY ``ai_agent_policy`` (with every other policy
+    field left None) must still serialize correctly. The existing
+    test pairs ai_agent_policy with ip_allowlist, so the None-drop
+    rule for the other policy fields wasn't exercised in isolation.
+
+    This test verifies two things:
+      1. `_serialize_value`'s dataclass None-drop works across ALL
+         other `AccessPolicy` fields (ip_allowlist, ip_denylist,
+         geo_allowlist, geo_denylist, user_agent_allow_regex,
+         user_agent_deny_regex) — the serialized body contains ONLY
+         `ai_agent_policy` under the `access_policy` key.
+      2. `ai_agent_policy`'s own None fields (allow_categories,
+         deny_categories) are also dropped, leaving ONLY `block_all`.
+    """
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_minpol",
+                    "qurl_link": "https://qurl.link/#at_minpol",
+                    "qurl_site": "https://r_minpol.qurl.site",
+                    "qurl_id": "q_minpol",
+                },
+            },
+        )
+    )
+
+    # Only ai_agent_policy set; every other AccessPolicy field left None.
+    # And within ai_agent_policy, only block_all is set.
+    policy = AccessPolicy(ai_agent_policy=AIAgentPolicy(block_all=True))
+    client.create(target_url="https://example.com", access_policy=policy)
+
+    body = json.loads(route.calls[0].request.content)
+    # The entire access_policy payload should be just the nested
+    # ai_agent_policy, nothing else.
+    assert body["access_policy"] == {"ai_agent_policy": {"block_all": True}}
+    # Explicit checks that the other policy fields do NOT appear at all.
+    assert "ip_allowlist" not in body["access_policy"]
+    assert "ip_denylist" not in body["access_policy"]
+    assert "geo_allowlist" not in body["access_policy"]
+    assert "geo_denylist" not in body["access_policy"]
+    assert "user_agent_allow_regex" not in body["access_policy"]
+    assert "user_agent_deny_regex" not in body["access_policy"]
+    # And None fields on AIAgentPolicy itself are dropped too.
+    assert "allow_categories" not in body["access_policy"]["ai_agent_policy"]
+    assert "deny_categories" not in body["access_policy"]["ai_agent_policy"]
+
+
 # --- _serialize_value end-to-end with nested dataclasses ---
 
 
@@ -2318,6 +2370,63 @@ def test_batch_create_passes_through_400_with_per_item_errors(
     assert result.results[0].success is False
     assert result.results[0].error is not None
     assert result.results[0].error.code == "validation_error"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_batch_create_passes_through_400_with_per_item_errors(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of `test_batch_create_passes_through_400_with_per_item_errors`.
+    The sync/async parity goal requires the async client to also
+    surface the structured 400 body as a normal return value rather
+    than raising — reviewer flagged this as a coverage gap.
+    """
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": 0,
+                    "failed": 2,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": False,
+                            "error": {
+                                "code": "validation_error",
+                                "message": "items[0]: target_url must be HTTPS",
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "success": False,
+                            "error": {
+                                "code": "validation_error",
+                                "message": "items[1]: target_url must be HTTPS",
+                            },
+                        },
+                    ],
+                },
+                "meta": {"request_id": "req_allfail_async"},
+            },
+        )
+    )
+    result = await async_client.batch_create(
+        [
+            {"target_url": "https://ok1.example.com"},
+            {"target_url": "https://ok2.example.com"},
+        ]
+    )
+    assert result.failed == 2
+    assert result.succeeded == 0
+    assert len(result.results) == 2
+    assert result.results[0].success is False
+    assert result.results[0].error is not None
+    assert result.results[0].error.code == "validation_error"
+    assert result.results[1].success is False
+    assert result.results[1].error is not None
+    assert result.results[1].error.code == "validation_error"
 
 
 @respx.mock

@@ -16,7 +16,6 @@ from layerv_qurl._utils import (
     DEFAULT_TIMEOUT,
     RETRYABLE_STATUS,
     RETRYABLE_STATUS_POST,
-    _validate_batch_create_shape,
     build_body,
     build_list_params,
     default_user_agent,
@@ -523,12 +522,12 @@ class AsyncQURLClient:
             body={"items": serialized},
             allow_statuses=(400,),
         )
-        # Defense-in-depth: the 400 passthrough trusts the response shape,
-        # but if the API ever returns 400 with a non-BatchCreateOutput body
-        # (e.g., a plain error envelope or malformed JSON) we'd silently
-        # get an empty result. Verify the shape before parsing and raise
-        # a clear error otherwise.
-        _validate_batch_create_shape(resp)
+        # `parse_batch_create_output` runs the shape guard internally
+        # (see its docstring) — so if the API returns 400 with an
+        # unexpected body shape, the parser raises ValidationError
+        # rather than silently producing `(succeeded=0, failed=0,
+        # results=[])`. The guard is enforced at the parser boundary,
+        # not documented by convention at every call site.
         return parse_batch_create_output(resp)
 
     async def resolve(self, access_token: str) -> ResolveOutput:
@@ -581,6 +580,15 @@ class AsyncQURLClient:
         instead. This is used by :meth:`batch_create`, where the API
         returns a structured ``BatchCreateOutput`` on HTTP 400 (all items
         rejected) — raising would drop the per-item errors.
+
+        **`allow_statuses` interacts with retries: it only affects the
+        error-raising path, not the retry path.** A retry-eligible status
+        (e.g. 429) will still be retried even if it's listed in
+        ``allow_statuses``. Conversely, a non-retryable status (e.g. 400)
+        listed in ``allow_statuses`` is never retried — which is exactly
+        what batch_create wants, because a 400 carries the authoritative
+        per-item errors and retrying would just reproduce them. The
+        ordering is: retry filter first, then ``allow_statuses`` opt-out.
         """
         url = f"{self._base_url}{path}"
         last_error: Exception | None = None

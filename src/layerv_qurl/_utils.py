@@ -460,7 +460,7 @@ def _validate_batch_create_shape(data: Any) -> None:
     the API's published schema — not user-supplied data.
     """
 
-    def _fail(reason: str, *, top_level_keys: list[str] | None = None) -> QURLError:
+    def _fail(reason: str, *, top_level_keys: list[str] | None = None) -> ValidationError:
         # Single source of truth for the error constructed at every
         # check failure — keeps status/code/title/detail aligned.
         #
@@ -476,7 +476,14 @@ def _validate_batch_create_shape(data: Any) -> None:
             type(data).__name__,
             top_level_keys,
         )
-        return QURLError(
+        # Raise a ValidationError (not bare QURLError) so consumers
+        # catching subclass-specific errors still catch shape-guard
+        # failures via `except ValidationError`. The `code` field
+        # distinguishes this from client-side preflight failures
+        # (`client_validation`) so callers who need the finer
+        # distinction can branch on `.code`. Matches the qurl-typescript
+        # SDK's `unexpectedResponseError` pattern.
+        return ValidationError(
             status=0,
             code="unexpected_response",
             title="Unexpected Response",
@@ -527,11 +534,16 @@ def _validate_batch_create_shape(data: Any) -> None:
 def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
     """Parse a BatchCreateOutput from API response data.
 
-    Callers must validate the response shape via
-    :func:`_validate_batch_create_shape` before invoking this — this
-    function assumes a well-formed envelope and will silently produce
-    an empty result on a malformed body.
+    Runs :func:`_validate_batch_create_shape` internally before
+    parsing, so a malformed envelope raises :class:`ValidationError`
+    here rather than silently producing an empty result. This enforces
+    the shape contract at the parser boundary rather than relying on
+    every call site to remember to validate first — previously the
+    validation was called explicitly by ``batch_create`` and a future
+    refactor that forgot the step would silently get ``(succeeded=0,
+    failed=0, results=[])`` from the ``.get()`` defaults below.
     """
+    _validate_batch_create_shape(data)
     results: list[BatchItemResult] = []
     for item in data.get("results", []):
         err = None
@@ -589,6 +601,12 @@ def parse_error(response: httpx.Response) -> QURLError:
 
     try:
         envelope = response.json()
+        # `.get("error") or {}` — not the more-common `.get("error", {})` —
+        # because the API may return `"error": null` explicitly, not just
+        # omit the key. Both cases must collapse to the empty-dict default
+        # so the subsequent `err.get(...)` chains don't raise
+        # `AttributeError` on `None`. Same pattern is applied to `meta`
+        # below and to `envelope.get("data")` callers elsewhere.
         err = envelope.get("error") or {}
         title = err.get("title") or response.reason_phrase or ""
         detail = (
