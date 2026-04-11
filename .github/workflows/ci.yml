@@ -27,3 +27,110 @@ jobs:
         run: mypy src/
       - name: Test
         run: pytest tests/ -v
+
+  # ============================================================================
+  # NOTIFY - Send Slack notification on build completion
+  # ============================================================================
+  notify:
+    name: Notify
+    needs: [test]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Notify Slack
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEST_RESULT: ${{ needs.test.result }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          # All github context moved to env to prevent script injection
+          # via crafted branch names or actor names containing shell metacharacters.
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_SHA: ${{ github.sha }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK" ]]; then
+            echo "SLACK_WEBHOOK_URL not configured, skipping notification"
+            exit 0
+          fi
+
+          WORKFLOW_URL="${GH_SERVER_URL}/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}"
+          SHORT_SHA="${GH_SHA:0:7}"
+          COMMIT_URL="${GH_SERVER_URL}/${GH_REPOSITORY}/commit/${GH_SHA}"
+
+          # Determine trigger source
+          TRIGGER="$GH_EVENT_NAME"
+          case "$TRIGGER" in
+            push)
+              if echo "$COMMIT_MESSAGE" | head -n1 | grep -q "Merge pull request"; then
+                TRIGGER_TEXT="PR merge"
+              else
+                TRIGGER_TEXT="Push"
+              fi
+              ;;
+            workflow_dispatch) TRIGGER_TEXT="Manual" ;;
+            *) TRIGGER_TEXT="$TRIGGER" ;;
+          esac
+
+          # Determine status
+          if [[ "$TEST_RESULT" == "success" ]]; then
+            COLOR="#36a64f"; EMOJI="white_check_mark"
+            HEADER="QURL Python SDK Build"; STATUS_TEXT="successful"
+          elif [[ "$TEST_RESULT" == "failure" ]]; then
+            COLOR="#dc3545"; EMOJI="x"
+            HEADER="QURL Python SDK Build"; STATUS_TEXT="failed"
+          elif [[ "$TEST_RESULT" == "cancelled" ]]; then
+            COLOR="#ffc107"; EMOJI="warning"
+            HEADER="QURL Python SDK Build"; STATUS_TEXT="cancelled"
+          else
+            COLOR="#ffc107"; EMOJI="warning"
+            HEADER="QURL Python SDK"; STATUS_TEXT="incomplete"
+          fi
+
+          # Determine test emoji
+          case "$TEST_RESULT" in
+            success) TEST_EMOJI=":white_check_mark:" ;;
+            failure) TEST_EMOJI=":x:" ;;
+            *) TEST_EMOJI=":warning:" ;;
+          esac
+
+          # Extract first line of commit message (safe for any content)
+          FIRST_LINE=$(echo "$COMMIT_MESSAGE" | head -n1 | cut -c1-100)
+
+          # Build payload with jq — handles all JSON escaping automatically.
+          # Shell string concatenation broke on commit messages with special chars.
+          PAYLOAD=$(jq -n \
+            --arg color "$COLOR" \
+            --arg emoji "$EMOJI" \
+            --arg header "$HEADER" \
+            --arg status "$STATUS_TEXT" \
+            --arg branch "$GH_REF_NAME" \
+            --arg sha "$SHORT_SHA" \
+            --arg trigger "$TRIGGER_TEXT" \
+            --arg actor "$GH_ACTOR" \
+            --arg test_emoji "$TEST_EMOJI" \
+            --arg commit "$FIRST_LINE" \
+            --arg commit_url "$COMMIT_URL" \
+            --arg workflow_url "$WORKFLOW_URL" \
+            '{attachments: [{color: $color, blocks: [
+              {type: "section", text: {type: "mrkdwn", text: (":\($emoji): *\($header)* \($status)")}},
+              {type: "section", fields: [
+                {type: "mrkdwn", text: ("*Branch:*\n`\($branch)` (\($sha))")},
+                {type: "mrkdwn", text: ("*Trigger:*\n\($trigger) by \($actor)")},
+                {type: "mrkdwn", text: ("*Tests:*\n\($test_emoji)")},
+                {type: "mrkdwn", text: "*Python:*\n3.10, 3.12, 3.13"}
+              ]},
+              {type: "section", text: {type: "mrkdwn", text: ("*Commit:* `\($commit)`")}},
+              {type: "context", elements: [
+                {type: "mrkdwn", text: ("<\($commit_url)|\($sha)>  |  <\($workflow_url)|View workflow>")}
+              ]}
+            ]}]}')
+
+          curl -sfS -X POST "$SLACK_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || echo "Slack notification failed (non-critical)"

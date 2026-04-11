@@ -1,0 +1,44 @@
+name: Dependency Age Check
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  age-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # uv is used here only as a resolver to validate dependency ages.
+      # The project's package manager is pip/hatchling — uv is not used
+      # for builds or installs.
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+
+      - name: Check dependency age (7-day quarantine)
+        run: |
+          # Reject any dependency published in the last 7 days.
+          # Newly published or hijacked packages are typically detected
+          # and removed within days. This acts as a supply chain quarantine.
+          #
+          # Override for emergencies: re-run with CUTOFF set to now:
+          #   uv lock --exclude-newer "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          CUTOFF=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+          echo "Resolving dependencies with exclude-newer=$CUTOFF"
+          if ! uv lock --exclude-newer "$CUTOFF"; then
+            echo "::error::Dependency age check failed. A dependency was published less than 7 days ago."
+            echo "::error::If this is an urgent update, see the override instructions in this workflow file."
+            exit 1
+          fi
+          echo "All dependencies passed 7-day age gate"
