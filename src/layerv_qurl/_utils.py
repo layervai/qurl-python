@@ -589,6 +589,16 @@ def parse_error(response: httpx.Response) -> QURLError:
     retry_after = None
     if response.status_code == 429:
         retry_after_header = response.headers.get("Retry-After")
+        # Per RFC 7231 §7.1.3, `Retry-After` can be either a
+        # delay-seconds integer OR an HTTP-date. The `.isdigit()` check
+        # accepts only the integer form — HTTP-date strings contain
+        # letters/spaces/commas and deliberately fall through to `None`,
+        # which causes the retry path to use exponential backoff
+        # instead. This is a safe fallback: we don't honor the server's
+        # exact hint, but we also don't hang waiting for a parsed date
+        # value or crash on an unexpected header format. If full
+        # HTTP-date support becomes a requirement, replace `.isdigit()`
+        # with a `parsedate_to_datetime`-based parse.
         if retry_after_header and retry_after_header.isdigit():
             retry_after = int(retry_after_header)
 

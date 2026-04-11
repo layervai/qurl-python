@@ -831,6 +831,89 @@ def test_retry_after_capped_at_30s(retry_client: QURLClient) -> None:
     mock_sleep.assert_called_once_with(30.0)
 
 
+@respx.mock
+def test_retry_after_http_date_falls_back_to_exponential_backoff(
+    retry_client: QURLClient,
+) -> None:
+    """Per RFC 7231 §7.1.3, ``Retry-After`` can be either a delay-seconds
+    integer OR an HTTP-date. The SDK's ``.isdigit()`` check accepts only
+    the integer form — HTTP-date strings (which contain letters/spaces/
+    commas) fall through and the retry uses exponential backoff instead.
+
+    This is a safe fallback: we don't honor the server's exact hint,
+    but we also don't hang waiting for a parsed date value or crash on
+    the unexpected header format. Locks in the intentional behavior
+    against a future refactor that might try to parse HTTP-dates
+    eagerly and introduce a new bug class.
+
+    Mirrors the qurl-typescript SDK's same-named test for cross-SDK
+    parity.
+    """
+    route = respx.get(f"{BASE_URL}/v1/quota")
+    route.side_effect = [
+        httpx.Response(
+            429,
+            # Valid RFC 7231 HTTP-date format — the SDK should NOT parse this.
+            headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+            json=_ERR_429,
+        ),
+        httpx.Response(200, json=_QUOTA_OK),
+    ]
+
+    with patch("layerv_qurl.client.time.sleep") as mock_sleep:
+        result = retry_client.get_quota()
+
+    # The retry still fires and succeeds — the HTTP-date header
+    # doesn't crash anything. We don't assert the exact sleep value
+    # because that's exponential-backoff territory (with jitter),
+    # but we do assert that sleep was called (meaning the retry
+    # path ran) with a positive float.
+    assert result.plan == "growth"
+    mock_sleep.assert_called_once()
+    (call_arg,) = mock_sleep.call_args.args
+    assert isinstance(call_arg, float)
+    assert call_arg > 0
+    # Must NOT be the literal 0 or any absurdly large value — just
+    # bounded by the retry_delay() cap at 30s.
+    assert 0 < call_arg <= 30.0
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_retry_after_http_date_falls_back_to_exponential_backoff() -> None:
+    """Async mirror of the sync HTTP-date fallback test. Locks in
+    sync/async parity for the RFC 7231 ``Retry-After: <HTTP-date>``
+    fallback behavior.
+
+    Constructs a fresh AsyncQURLClient instead of using the
+    async_client fixture because the fixture is configured with
+    max_retries=0, and this test specifically needs retries enabled
+    to exercise the retry-after fallback path.
+    """
+    client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=2)
+    try:
+        route = respx.get(f"{BASE_URL}/v1/quota")
+        route.side_effect = [
+            httpx.Response(
+                429,
+                headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+                json=_ERR_429,
+            ),
+            httpx.Response(200, json=_QUOTA_OK),
+        ]
+
+        with patch("layerv_qurl.async_client.asyncio.sleep") as mock_sleep:
+            result = await client.get_quota()
+
+        assert result.plan == "growth"
+        mock_sleep.assert_called_once()
+        (call_arg,) = mock_sleep.call_args.args
+        assert isinstance(call_arg, float)
+        assert 0 < call_arg <= 30.0
+    finally:
+        await client.close()
+
+
 # --- POST retry safety ---
 # POST is non-idempotent (create() might actually hit the DB even if the
 # response is 5xx), so the client deliberately restricts POST retries to
