@@ -965,6 +965,7 @@ def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
 
 
 @respx.mock
+@pytest.mark.asyncio
 async def test_async_post_does_not_retry_on_503() -> None:
     """Async POST must also not retry on 5xx — sync/async parity guard."""
     client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=2)
