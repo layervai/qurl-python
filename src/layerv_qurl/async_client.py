@@ -29,8 +29,12 @@ from layerv_qurl._utils import (
     parse_quota,
     parse_qurl,
     parse_resolve_output,
+    require_resource_id_prefix,
     retry_delay,
+    validate_create_input,
     validate_id,
+    validate_mint_input,
+    validate_update_input,
 )
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
@@ -114,7 +118,6 @@ class AsyncQURLClient:
         target_url: str,
         *,
         expires_in: str | None = None,
-        expires_at: datetime | str | None = None,
         label: str | None = None,
         one_time_use: bool | None = None,
         max_sessions: int | None = None,
@@ -128,22 +131,38 @@ class AsyncQURLClient:
         ``qurl_site``, and ``expires_at``. Use :meth:`get` to fetch the full
         :class:`QURL` object with status, timestamps, and policy details.
 
+        Note: ``tags`` and ``description`` are not accepted on create — they
+        live on the resource and must be set via :meth:`update` after
+        creation. The API uses different field names for the create-time
+        token label (``label``) and the resource-level description on
+        update/get responses.
+
         Args:
-            target_url: The URL to protect.
-            expires_in: Duration string (e.g. ``"24h"``, ``"7d"``).
-            expires_at: Absolute expiry as datetime or ISO string.
-            label: Human-readable label for the QURL.
+            target_url: The URL to protect. Max length 2048.
+            expires_in: Duration string (e.g. ``"24h"``, ``"7d"``). The API
+                uses ``expires_in`` on create; use :meth:`update` with
+                ``expires_at`` if you need an absolute expiry afterwards.
+            label: Human-readable label for the QURL. Max length 500.
             one_time_use: If True, the QURL is consumed on first access.
             max_sessions: Maximum concurrent sessions (0 = unlimited).
+                Must be between 0 and 1000 inclusive.
             session_duration: Duration string for sessions (e.g. ``"1h"``).
             access_policy: IP/geo/user-agent access restrictions.
-            custom_domain: Custom domain for the QURL link.
+            custom_domain: Custom domain for the QURL link. Max length 253.
+
+        Raises:
+            ValueError: If any field violates the documented API constraints.
         """
+        validate_create_input(
+            target_url=target_url,
+            label=label,
+            max_sessions=max_sessions,
+            custom_domain=custom_domain,
+        )
         body = build_body(
             {
                 "target_url": target_url,
                 "expires_in": expires_in,
-                "expires_at": expires_at,
                 "label": label,
                 "one_time_use": one_time_use,
                 "max_sessions": max_sessions,
@@ -156,7 +175,15 @@ class AsyncQURLClient:
         return parse_create_output(resp)
 
     async def get(self, resource_id: str) -> QURL:
-        """Get a QURL by ID."""
+        """Get a QURL resource and its access tokens.
+
+        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
+        automatically.
+
+        Args:
+            resource_id: The resource or QURL display ID.
+        """
         validate_id(resource_id)
         resp = await self._request("GET", f"/v1/qurls/{resource_id}")
         return parse_qurl(resp)
@@ -247,17 +274,37 @@ class AsyncQURLClient:
             cursor = page.next_cursor
 
     async def delete(self, resource_id: str) -> None:
-        """Delete (revoke) a QURL."""
+        """Delete (revoke) a QURL resource and all its access tokens.
+
+        Only accepts a resource ID (``r_`` prefix), not a QURL display ID
+        (``q_`` prefix). Per the OpenAPI spec:
+        *"Requires a resource ID (r_ prefix). To revoke a single token,
+        use DELETE /v1/resources/:id/qurls/:qurl_id"*.
+
+        A client-side prefix check catches the mistake before the API
+        round-trip.
+
+        Args:
+            resource_id: The resource ID (must start with ``r_``).
+
+        Raises:
+            ValueError: If ``resource_id`` is malformed or does not start
+                with ``r_``.
+        """
         validate_id(resource_id)
+        require_resource_id_prefix(resource_id, "delete")
         await self._request("DELETE", f"/v1/qurls/{resource_id}")
 
     async def extend(self, resource_id: str, duration: str) -> QURL:
         """Extend a QURL's expiration.
 
         Convenience method — equivalent to ``await update(resource_id, extend_by=duration)``.
+        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
+        automatically.
 
         Args:
-            resource_id: QURL resource ID.
+            resource_id: Resource or QURL display ID.
             duration: Duration to add (e.g. ``"7d"``, ``"24h"``).
         """
         return await self.update(resource_id, extend_by=duration)
@@ -271,18 +318,46 @@ class AsyncQURLClient:
         description: str | None = None,
         tags: builtins.list[str] | None = None,
     ) -> QURL:
-        """Update a QURL — extend expiration, change description, etc.
+        """Update a QURL — extend expiration, change description, set tags.
 
-        All fields are optional; only provided fields are sent.
+        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        (``q_`` prefix). All fields are optional, but at least one must be
+        provided. ``extend_by`` and ``expires_at`` are mutually exclusive.
 
         Args:
-            resource_id: QURL resource ID.
-            extend_by: Duration to add (e.g. ``"7d"``).
-            expires_at: New absolute expiry.
-            description: New description.
-            tags: Tags to set on the QURL.
+            resource_id: Resource or QURL display ID.
+            extend_by: Duration to add (e.g. ``"7d"``). Mutually exclusive
+                with ``expires_at``.
+            expires_at: New absolute expiry. Mutually exclusive with
+                ``extend_by``.
+            description: New resource description. Pass an empty string to
+                clear. Max length 500.
+            tags: Tags to set on the resource. Pass an empty list to clear.
+                Max 10 items, each 1-50 chars matching
+                ``^[a-zA-Z0-9][a-zA-Z0-9 _-]*$``.
+
+        Raises:
+            ValueError: If ``extend_by`` and ``expires_at`` are both set, if
+                no update fields are provided, or if any field violates the
+                documented API constraints.
         """
         validate_id(resource_id)
+        if extend_by is not None and expires_at is not None:
+            raise ValueError(
+                "update: `extend_by` and `expires_at` are mutually exclusive "
+                "— provide at most one"
+            )
+        if (
+            extend_by is None
+            and expires_at is None
+            and description is None
+            and tags is None
+        ):
+            raise ValueError(
+                "update: at least one field (extend_by, expires_at, description, "
+                "tags) must be provided"
+            )
+        validate_update_input(description=description, tags=tags)
         body = build_body(
             {
                 "extend_by": extend_by,
@@ -308,17 +383,34 @@ class AsyncQURLClient:
     ) -> MintOutput:
         """Mint a new access link for a QURL.
 
+        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        (``q_`` prefix). ``expires_in`` and ``expires_at`` are mutually
+        exclusive — if neither is set, the link defaults to 24 hours.
+
         Args:
-            resource_id: QURL resource ID.
-            expires_at: Optional expiry override for the minted link.
+            resource_id: Resource or QURL display ID.
+            expires_at: Absolute expiry for the minted link. Mutually
+                exclusive with ``expires_in``.
             expires_in: Duration string for the link (e.g. ``"24h"``).
-            label: Human-readable label for the link.
+                Mutually exclusive with ``expires_at``.
+            label: Human-readable label for the link. Max length 500.
             one_time_use: If True, the link can only be used once.
             max_sessions: Maximum concurrent sessions allowed.
+                Must be between 0 and 1000 inclusive.
             session_duration: Duration string for sessions (e.g. ``"1h"``).
             access_policy: IP/geo/user-agent access restrictions.
+
+        Raises:
+            ValueError: If ``expires_in`` and ``expires_at`` are both set
+                or if any field violates the documented API constraints.
         """
         validate_id(resource_id)
+        if expires_in is not None and expires_at is not None:
+            raise ValueError(
+                "mint_link: `expires_in` and `expires_at` are mutually exclusive "
+                "— provide at most one"
+            )
+        validate_mint_input(label=label, max_sessions=max_sessions)
         body = build_body(
             {
                 "expires_at": expires_at,
@@ -339,18 +431,62 @@ class AsyncQURLClient:
     ) -> BatchCreateOutput:
         """Create multiple QURLs at once (1-100 items).
 
+        Each item is validated against the same spec constraints as
+        :meth:`create` before the request is sent, with per-item errors
+        attributed by index (``items[N]: ...``).
+
+        **Partial failures do not raise.** Two API status codes resolve
+        normally with structured per-item results:
+
+        - **HTTP 207 Multi-Status** (some succeeded, some failed).
+        - **HTTP 400** (every item failed validation) — the API returns a
+          populated ``BatchCreateOutput`` body on this path, so the SDK
+          whitelists 400 and surfaces the per-item errors instead of
+          raising a generic :class:`ValidationError`.
+
+        Other error statuses (401, 403, 429, 5xx) still raise the
+        appropriate :class:`QURLError` subclass. Inspect
+        ``result.failed > 0`` and iterate ``result.results`` to see
+        which items succeeded and which errored.
+
         Args:
             items: List of dicts, each with at least ``target_url``.
 
         Raises:
-            ValueError: If items is empty or exceeds 100 items.
+            ValueError: If ``items`` is empty, exceeds 100 items, or any
+                item violates the documented API constraints.
         """
         if not items:
-            raise ValueError("items must not be empty")
+            raise ValueError("batch_create requires at least 1 item")
         if len(items) > 100:
-            raise ValueError("batch_create supports at most 100 items")
+            raise ValueError(
+                f"batch_create accepts at most 100 items (got {len(items)})"
+            )
+        # Validate each item against the same spec constraints as single
+        # create() so obvious mistakes fail fast with the offending index.
+        for i, item in enumerate(items):
+            try:
+                validate_create_input(
+                    target_url=item["target_url"],
+                    label=item.get("label"),
+                    max_sessions=item.get("max_sessions"),
+                    custom_domain=item.get("custom_domain"),
+                )
+            except KeyError as exc:
+                raise ValueError(
+                    f"batch_create items[{i}]: missing required field 'target_url'"
+                ) from exc
+            except ValueError as exc:
+                raise ValueError(f"batch_create items[{i}]: {exc}") from exc
         serialized = [build_body(item) for item in items]
-        resp = await self._request("POST", "/v1/qurls/batch", body={"items": serialized})
+        # HTTP 400 carries structured per-item errors on this endpoint —
+        # whitelist it so the generic error path doesn't swallow the body.
+        resp = await self._request(
+            "POST",
+            "/v1/qurls/batch",
+            body={"items": serialized},
+            allow_statuses=(400,),
+        )
         return parse_batch_create_output(resp)
 
     async def resolve(self, access_token: str) -> ResolveOutput:
@@ -380,8 +516,11 @@ class AsyncQURLClient:
         *,
         body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
+        allow_statuses: tuple[int, ...] = (),
     ) -> Any:
-        data, _ = await self._raw_request(method, path, body=body, params=params)
+        data, _ = await self._raw_request(
+            method, path, body=body, params=params, allow_statuses=allow_statuses
+        )
         return data
 
     async def _raw_request(
@@ -391,7 +530,16 @@ class AsyncQURLClient:
         *,
         body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
+        allow_statuses: tuple[int, ...] = (),
     ) -> tuple[Any, dict[str, Any] | None]:
+        """Issue an HTTP request and parse the JSON envelope.
+
+        ``allow_statuses`` lets a caller opt specific non-2xx codes out of
+        the default raise-on-error path and receive the parsed body
+        instead. This is used by :meth:`batch_create`, where the API
+        returns a structured ``BatchCreateOutput`` on HTTP 400 (all items
+        rejected) — raising would drop the per-item errors.
+        """
         url = f"{self._base_url}{path}"
         last_error: Exception | None = None
 
@@ -426,7 +574,7 @@ class AsyncQURLClient:
 
             logger.debug("%s %s → %d", method, url, response.status_code)
 
-            if response.status_code < 400:
+            if response.status_code < 400 or response.status_code in allow_statuses:
                 if response.status_code == 204 or not response.content:
                     return None, None
                 envelope = response.json()

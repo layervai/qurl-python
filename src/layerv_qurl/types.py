@@ -6,9 +6,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-#: Valid QURL status values. Accepts known values for IDE autocomplete,
-#: plus ``str`` for forward compatibility with new API statuses.
+#: Valid resource-level status values. Resources only have two states per
+#: the OpenAPI spec (``QurlData.status``) and the server code. Accepts known
+#: values for IDE autocomplete, plus ``str`` for forward compatibility.
 QURLStatus = Literal["active", "revoked"] | str
+
+#: Valid per-token status values. Wider than :data:`QURLStatus` because
+#: individual access tokens can additionally be ``consumed`` (one-time use)
+#: or ``expired``, per the OpenAPI spec (``QurlSummary.status``).
+TokenStatus = Literal["active", "consumed", "expired", "revoked"] | str
+
+#: Valid subscription plan values. Matches the ``QuotaData.plan`` enum in
+#: the OpenAPI spec (``[free, growth, enterprise]``). Accepts arbitrary
+#: strings so the API can add new plans without a breaking SDK change.
+QuotaPlan = Literal["free", "growth", "enterprise"] | str
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -44,10 +55,15 @@ class AccessPolicy:
 
 @dataclass
 class AccessToken:
-    """An individual access token within a QURL."""
+    """An individual access token within a QURL.
+
+    ``status`` uses the wider :data:`TokenStatus` alias — tokens can be
+    ``active``/``consumed``/``expired``/``revoked`` (per ``QurlSummary.status``
+    in the spec), while resources are only ``active``/``revoked``.
+    """
 
     qurl_id: str
-    status: QURLStatus
+    status: TokenStatus
     one_time_use: bool = False
     max_sessions: int = 0
     session_duration: int = 0
@@ -154,9 +170,14 @@ class Usage:
 
 @dataclass
 class Quota:
-    """Quota and usage information."""
+    """Quota and usage information.
 
-    plan: str = ""
+    ``plan`` is narrowed to the spec's ``QuotaData.plan`` enum via
+    :data:`QuotaPlan`. Accepts arbitrary strings so a new plan from the
+    API can't become a breaking type change.
+    """
+
+    plan: QuotaPlan = ""
     period_start: datetime | None = None
     period_end: datetime | None = None
     rate_limits: RateLimits | None = None

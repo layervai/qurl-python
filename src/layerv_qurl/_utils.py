@@ -81,7 +81,16 @@ def validate_id(value: str, name: str = "resource_id") -> str:
 
 
 def _serialize_value(v: Any) -> Any:
-    """Serialize a single value for JSON, handling dataclasses and datetimes recursively."""
+    """Serialize a single value for JSON, handling dataclasses/datetimes/lists/dicts.
+
+    Unlike :func:`build_body` (which strips top-level ``None`` values so the
+    request body only carries fields the caller explicitly set), this
+    recursive helper preserves ``None`` values inside lists and nested
+    dicts. This matters because some API fields use explicit ``null`` as a
+    signalling value (e.g. ``"access_policy": {"ai_agent_policy": null}``
+    to clear a policy). Dataclass fields still skip ``None`` because the
+    dataclass itself distinguishes "unset" from "explicitly null".
+    """
     if v is None:
         return None
     if isinstance(v, datetime):
@@ -95,16 +104,19 @@ def _serialize_value(v: Any) -> Any:
     if isinstance(v, list):
         return [_serialize_value(item) for item in v]
     if isinstance(v, dict):
-        return {k: _serialize_value(val) for k, val in v.items() if val is not None}
+        # Preserve explicit None inside nested dicts — callers who want
+        # "drop this field" should omit it from the dict, not set it to None.
+        return {k: _serialize_value(val) for k, val in v.items()}
     return v
 
 
 def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Build a request body dict from kwargs, dropping None values.
+    """Build a request body dict from kwargs, dropping top-level None values.
 
-    Always returns a dict (at least ``{}``) so POST/PATCH endpoints
-    receive a valid JSON body.  Nested dataclasses are recursively
-    serialized to dicts.
+    Only strips ``None`` at the top level — nested values are preserved
+    as-is by :func:`_serialize_value`. Always returns a dict (at least
+    ``{}``) so POST/PATCH endpoints receive a valid JSON body. Nested
+    dataclasses are recursively serialized to dicts.
     """
     body: dict[str, Any] = {}
     for k, v in kwargs.items():
@@ -112,6 +124,115 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
             continue
         body[k] = _serialize_value(v)
     return body
+
+
+# ---- Spec-derived input validation --------------------------------------
+# These mirror the constraints documented on each request schema in
+# qurl/api/openapi.yaml so obvious mistakes fail fast with a ValueError
+# instead of round-tripping to the API and coming back as a generic 400.
+
+MAX_TARGET_URL = 2048
+MAX_LABEL = 500
+MAX_DESCRIPTION = 500
+MAX_CUSTOM_DOMAIN = 253
+MAX_MAX_SESSIONS = 1000
+MAX_TAGS = 10
+MAX_TAG_LENGTH = 50
+# UpdateQurlRequest.tags item pattern from openapi.yaml.
+_TAG_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _-]*$")
+RESOURCE_ID_PREFIX = "r_"
+
+
+def _require_max_length(value: str | None, field_name: str, maximum: int) -> None:
+    if value is not None and len(value) > maximum:
+        raise ValueError(
+            f"{field_name}: must be {maximum} characters or fewer (got {len(value)})"
+        )
+
+
+def _require_max_sessions_in_range(value: int | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"max_sessions: must be an integer (got {type(value).__name__})")
+    if value < 0 or value > MAX_MAX_SESSIONS:
+        raise ValueError(
+            f"max_sessions: must be an integer between 0 and {MAX_MAX_SESSIONS} (got {value})"
+        )
+
+
+def _require_valid_tags(tags: list[str] | None) -> None:
+    if tags is None:
+        return
+    if len(tags) > MAX_TAGS:
+        raise ValueError(f"tags: max {MAX_TAGS} items allowed (got {len(tags)})")
+    for tag in tags:
+        if not isinstance(tag, str) or len(tag) < 1 or len(tag) > MAX_TAG_LENGTH:
+            raise ValueError(
+                f"tags: each tag must be 1-{MAX_TAG_LENGTH} characters "
+                f"(got {len(tag) if isinstance(tag, str) else type(tag).__name__})"
+            )
+        if not _TAG_PATTERN.match(tag):
+            raise ValueError(
+                "tags: each tag must start with an alphanumeric and contain only "
+                "letters, numbers, spaces, underscores, or hyphens"
+            )
+
+
+def validate_create_input(
+    *,
+    target_url: str,
+    label: str | None = None,
+    max_sessions: int | None = None,
+    custom_domain: str | None = None,
+) -> None:
+    """Validate a single create_qurl input against spec-documented constraints.
+
+    Used by both ``create()`` and ``batch_create()`` (for each item).
+    Raises ``ValueError`` on constraint violations so obvious mistakes
+    fail fast instead of round-tripping to the API.
+    """
+    _require_max_length(target_url, "target_url", MAX_TARGET_URL)
+    _require_max_length(label, "label", MAX_LABEL)
+    _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
+    _require_max_sessions_in_range(max_sessions)
+
+
+def validate_update_input(
+    *,
+    description: str | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """Validate update_qurl input against spec-documented constraints."""
+    _require_max_length(description, "description", MAX_DESCRIPTION)
+    _require_valid_tags(tags)
+
+
+def validate_mint_input(
+    *,
+    label: str | None = None,
+    max_sessions: int | None = None,
+) -> None:
+    """Validate mint_link input against spec-documented constraints."""
+    _require_max_length(label, "label", MAX_LABEL)
+    _require_max_sessions_in_range(max_sessions)
+
+
+def require_resource_id_prefix(resource_id: str, operation: str = "delete") -> None:
+    """Enforce the ``r_`` prefix on endpoints that only accept resource IDs.
+
+    Per the OpenAPI spec, ``DELETE /v1/qurls/:id`` explicitly requires a
+    resource ID (r_ prefix) — the token-scoped endpoint is
+    ``DELETE /v1/resources/:id/qurls/:qurl_id``. Catch the common mistake
+    of passing a ``q_`` display ID here with a clear client-side error.
+    """
+    if not resource_id.startswith(RESOURCE_ID_PREFIX):
+        raise ValueError(
+            f"{operation}: only resource IDs ({RESOURCE_ID_PREFIX} prefix) are accepted — "
+            f"got {resource_id[:16]!r}. To revoke a single access token, "
+            "use the DELETE /v1/resources/:id/qurls/:qurl_id endpoint "
+            "(not yet exposed by this SDK)."
+        )
 
 
 def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
@@ -179,12 +300,18 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
 
 def parse_create_output(data: dict[str, Any]) -> CreateOutput:
     """Parse a CreateOutput from API response data."""
+    # Normalize empty-string `qurl_id` to None so callers can use the
+    # idiomatic ``if result.qurl_id:`` presence check. An empty string
+    # here is either a bug in a mock or a legacy response shape; the
+    # spec requires a populated qurl_id on success responses.
+    qurl_id_raw = data.get("qurl_id")
+    qurl_id = qurl_id_raw if qurl_id_raw else None
     return CreateOutput(
         resource_id=data["resource_id"],
         qurl_link=data["qurl_link"],
         qurl_site=data["qurl_site"],
         expires_at=_parse_dt(data.get("expires_at")),
-        qurl_id=data.get("qurl_id"),
+        qurl_id=qurl_id,
         label=data.get("label"),
     )
 
@@ -288,7 +415,20 @@ def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
 
 
 def parse_error(response: httpx.Response) -> QURLError:
-    """Parse an API error response into the appropriate QURLError subclass."""
+    """Parse an API error response into the appropriate QURLError subclass.
+
+    Handles the full RFC 7807 Problem Details shape (``type``, ``title``,
+    ``status``, ``detail``, ``instance``, ``code``) plus the pre-RFC-7807
+    legacy ``{error: {code, message}}`` envelope for backward compatibility.
+
+    The ``detail`` fallback chain is:
+        1. ``err.detail``  — RFC 7807 primary
+        2. ``err.message`` — legacy pre-RFC-7807 shape
+        3. ``err.title``   — RFC 7807 required field
+        4. ``HTTP {status}`` — final safety net
+
+    This prevents ``"Title (403): "`` when the API omits ``detail``.
+    """
     retry_after = None
     if response.status_code == 429:
         retry_after_header = response.headers.get("Retry-After")
@@ -304,14 +444,23 @@ def parse_error(response: httpx.Response) -> QURLError:
 
     try:
         envelope = response.json()
-        err = envelope.get("error", {})
+        err = envelope.get("error") or {}
+        title = err.get("title") or response.reason_phrase or ""
+        detail = (
+            err.get("detail")
+            or err.get("message")  # legacy envelope
+            or title
+            or f"HTTP {response.status_code}"
+        )
         return cls(
             status=err.get("status", response.status_code),
             code=err.get("code", "unknown"),
-            title=err.get("title", response.reason_phrase or ""),
-            detail=err.get("detail", ""),
+            title=title,
+            detail=detail,
+            type=err.get("type"),
+            instance=err.get("instance"),
             invalid_fields=err.get("invalid_fields"),
-            request_id=envelope.get("meta", {}).get("request_id"),
+            request_id=(envelope.get("meta") or {}).get("request_id"),
             retry_after=retry_after,
         )
     except (ValueError, KeyError, TypeError):
@@ -319,7 +468,7 @@ def parse_error(response: httpx.Response) -> QURLError:
             status=response.status_code,
             code="unknown",
             title=response.reason_phrase or "",
-            detail=response.text,
+            detail=response.text or f"HTTP {response.status_code}",
             retry_after=retry_after,
         )
 
@@ -345,7 +494,8 @@ def build_list_params(
     expires_after: datetime | str | None = None,
 ) -> dict[str, str]:
     """Build query params for list endpoints, dropping None values."""
-    pairs: dict[str, str | int | datetime | None] = {
+    # ``status`` is a QURLStatus (Literal | str) — covered by the ``str`` arm.
+    pairs: dict[str, int | str | datetime | None] = {
         "limit": limit,
         "cursor": cursor,
         "status": status,

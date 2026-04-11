@@ -6,6 +6,10 @@ from __future__ import annotations
 class QURLError(Exception):
     """Error raised for API-level errors (4xx/5xx responses).
 
+    Carries the full RFC 7807 Problem Details shape when the API provides it:
+    ``status``, ``code``, ``title``, ``detail``, plus the optional
+    ``type`` (problem-type URI) and ``instance`` (occurrence URI).
+
     Catch specific subclasses for fine-grained handling::
 
         try:
@@ -18,6 +22,8 @@ class QURLError(Exception):
             print(f"Rate limited — retry in {e.retry_after}s")
         except QURLError as e:
             print(f"API error: {e.status} {e.code}")
+            if e.type:
+                print(f"  problem type: {e.type}")
     """
 
     def __init__(
@@ -26,16 +32,24 @@ class QURLError(Exception):
         status: int,
         code: str,
         title: str,
-        detail: str,
+        detail: str = "",
+        type: str | None = None,
+        instance: str | None = None,
         invalid_fields: dict[str, str] | None = None,
         request_id: str | None = None,
         retry_after: int | None = None,
     ) -> None:
-        super().__init__(f"{title} ({status}): {detail}")
+        # RFC 7807 leaves `detail` optional, and `title` is always present.
+        # Falling back to title keeps the Exception message meaningful
+        # instead of producing "Title (403): " with a trailing empty string.
+        message_detail = detail or title
+        super().__init__(f"{title} ({status}): {message_detail}")
         self.status = status
         self.code = code
         self.title = title
-        self.detail = detail
+        self.detail = message_detail
+        self.type = type
+        self.instance = instance
         self.invalid_fields = invalid_fields
         self.request_id = request_id
         self.retry_after = retry_after

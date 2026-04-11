@@ -154,6 +154,12 @@ def test_create(client: QURLClient) -> None:
 
 @respx.mock
 def test_create_sends_correct_body(client: QURLClient) -> None:
+    """create() serializes the full new-spec input shape into the request body.
+
+    Covers the fields added in the v2 API alignment (label, one_time_use,
+    max_sessions, session_duration) so each has at least one regression
+    guard beyond the access_policy test.
+    """
     route = respx.post(f"{BASE_URL}/v1/qurls").mock(
         return_value=httpx.Response(
             201,
@@ -171,13 +177,19 @@ def test_create_sends_correct_body(client: QURLClient) -> None:
     client.create(
         target_url="https://example.com",
         expires_in="24h",
-        label="test",
+        label="Alice from Acme",
+        one_time_use=True,
+        max_sessions=5,
+        session_duration="1h",
     )
     body = json.loads(route.calls[0].request.content)
     assert body == {
         "target_url": "https://example.com",
         "expires_in": "24h",
-        "label": "test",
+        "label": "Alice from Acme",
+        "one_time_use": True,
+        "max_sessions": 5,
+        "session_duration": "1h",
     }
 
 
@@ -1407,16 +1419,18 @@ def test_update_with_tags(client: QURLClient) -> None:
                     "target_url": "https://example.com",
                     "status": "active",
                     "created_at": "2026-03-10T10:00:00Z",
-                    "tags": ["team:engineering", "env:prod"],
+                    "tags": ["team engineering", "env-prod"],
                 },
             },
         )
     )
 
-    result = client.update("r_abc", tags=["team:engineering", "env:prod"])
-    assert result.tags == ["team:engineering", "env:prod"]
+    # Tags must match the API regex ^[a-zA-Z0-9][a-zA-Z0-9 _-]*$ —
+    # alphanumerics, spaces, underscores, and hyphens only.
+    result = client.update("r_abc", tags=["team engineering", "env-prod"])
+    assert result.tags == ["team engineering", "env-prod"]
     body = json.loads(route.calls[0].request.content)
-    assert body == {"tags": ["team:engineering", "env:prod"]}
+    assert body == {"tags": ["team engineering", "env-prod"]}
 
 
 # --- Create with label and session_duration ---
@@ -1618,7 +1632,7 @@ async def test_async_update_with_tags(async_client: AsyncQURLClient) -> None:
 
 
 def test_batch_create_empty_raises(client: QURLClient) -> None:
-    with pytest.raises(ValueError, match="must not be empty"):
+    with pytest.raises(ValueError, match="requires at least 1 item"):
         client.batch_create([])
 
 
@@ -1734,3 +1748,347 @@ def test_mint_link_nested_serialization_e2e(client: QURLClient) -> None:
     assert body["access_policy"]["geo_denylist"] == ["CN", "RU"]
     assert body["access_policy"]["ai_agent_policy"]["allow_categories"] == ["claude", "chatgpt"]
     assert "block_all" not in body["access_policy"]["ai_agent_policy"]  # None fields omitted
+
+
+# ---- Spec-derived input validation (create) --------------------------------
+
+
+def test_create_rejects_target_url_longer_than_2048(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="target_url"):
+        client.create(target_url="https://a.com/" + "x" * 2048)
+
+
+def test_create_rejects_label_longer_than_500(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="label"):
+        client.create(target_url="https://example.com", label="x" * 501)
+
+
+def test_create_rejects_custom_domain_longer_than_253(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="custom_domain"):
+        client.create(
+            target_url="https://example.com",
+            custom_domain="a" * 254,
+        )
+
+
+def test_create_rejects_max_sessions_above_1000(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="max_sessions"):
+        client.create(target_url="https://example.com", max_sessions=1001)
+
+
+def test_create_rejects_negative_max_sessions(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="max_sessions"):
+        client.create(target_url="https://example.com", max_sessions=-1)
+
+
+@respx.mock
+def test_create_accepts_max_sessions_boundaries(client: QURLClient) -> None:
+    """max_sessions=0 (unlimited) and max_sessions=1000 (hard limit) are both valid."""
+    respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_x",
+                    "qurl_link": "https://qurl.link/#x",
+                    "qurl_site": "https://x.qurl.site",
+                    "qurl_id": "q_x",
+                },
+            },
+        )
+    )
+    client.create(target_url="https://example.com", max_sessions=0)
+    client.create(target_url="https://example.com", max_sessions=1000)
+
+
+# ---- Spec-derived input validation (update) --------------------------------
+
+
+def test_update_rejects_description_longer_than_500(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="description"):
+        client.update("r_abc", description="x" * 501)
+
+
+def test_update_rejects_more_than_10_tags(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="tags"):
+        client.update("r_abc", tags=[f"tag{i}" for i in range(11)])
+
+
+def test_update_rejects_tags_longer_than_50_chars(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="1-50 characters"):
+        client.update("r_abc", tags=["x" * 51])
+
+
+def test_update_rejects_tags_that_dont_match_pattern(client: QURLClient) -> None:
+    # Tags must start with an alphanumeric character.
+    with pytest.raises(ValueError, match="alphanumeric"):
+        client.update("r_abc", tags=["-leading-dash"])
+
+
+@respx.mock
+def test_update_accepts_empty_tags_to_clear(client: QURLClient) -> None:
+    """Empty tag list clears all tags per the API spec."""
+    respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "tags": [],
+                    "created_at": "2026-03-10T10:00:00Z",
+                },
+            },
+        )
+    )
+    result = client.update("r_abc", tags=[])
+    assert result.tags == []
+
+
+def test_update_rejects_empty_input(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update("r_abc")
+
+
+def test_update_rejects_both_extend_by_and_expires_at(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        client.update("r_abc", extend_by="24h", expires_at="2026-04-01T00:00:00Z")
+
+
+# ---- Spec-derived input validation (mint_link) -----------------------------
+
+
+def test_mint_link_rejects_label_longer_than_500(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="label"):
+        client.mint_link("r_abc", label="x" * 501)
+
+
+def test_mint_link_rejects_max_sessions_above_1000(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="max_sessions"):
+        client.mint_link("r_abc", max_sessions=5000)
+
+
+def test_mint_link_rejects_both_expires_in_and_expires_at(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        client.mint_link(
+            "r_abc",
+            expires_in="7d",
+            expires_at="2026-04-01T00:00:00Z",
+        )
+
+
+# ---- delete() r_ prefix enforcement ----------------------------------------
+
+
+def test_delete_rejects_q_prefix_client_side(client: QURLClient) -> None:
+    """DELETE /v1/qurls/:id only accepts r_ prefix per the API spec."""
+    with pytest.raises(ValueError, match="r_ prefix"):
+        client.delete("q_3a7f2c8e91b")
+
+
+# ---- batch_create per-item validation & async validators -------------------
+
+
+def test_batch_create_rejects_per_item_violation_with_index(client: QURLClient) -> None:
+    """Per-item validation failures include the offending index."""
+    with pytest.raises(ValueError, match=r"items\[1\].*max_sessions"):
+        client.batch_create(
+            [
+                {"target_url": "https://a.example.com"},
+                {"target_url": "https://b.example.com", "max_sessions": 9999},
+            ]
+        )
+
+
+def test_batch_create_rejects_items_missing_target_url(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match=r"items\[0\].*target_url"):
+        client.batch_create([{"label": "no url"}])
+
+
+@pytest.mark.asyncio
+async def test_async_batch_create_empty_raises(async_client: AsyncQURLClient) -> None:
+    with pytest.raises(ValueError, match="requires at least 1 item"):
+        await async_client.batch_create([])
+
+
+@pytest.mark.asyncio
+async def test_async_batch_create_over_100_raises(async_client: AsyncQURLClient) -> None:
+    items = [{"target_url": f"https://{i}.com"} for i in range(101)]
+    with pytest.raises(ValueError, match="at most 100"):
+        await async_client.batch_create(items)
+
+
+# ---- batch_create HTTP 400 passthrough -------------------------------------
+
+
+@respx.mock
+def test_batch_create_passes_through_400_with_per_item_errors(
+    client: QURLClient,
+) -> None:
+    """HTTP 400 on batch/ carries a BatchCreateOutput body with per-item errors.
+
+    The SDK whitelists 400 and surfaces the structured body instead of
+    raising a generic ValidationError — matching the qurl-mcp and
+    qurl-typescript behavior on this endpoint.
+    """
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": 0,
+                    "failed": 2,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": False,
+                            "error": {
+                                "code": "validation_error",
+                                "message": "items[0]: target_url must be HTTPS",
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "success": False,
+                            "error": {
+                                "code": "validation_error",
+                                "message": "items[1]: target_url must be HTTPS",
+                            },
+                        },
+                    ],
+                },
+                "meta": {"request_id": "req_allfail"},
+            },
+        )
+    )
+    result = client.batch_create(
+        [
+            {"target_url": "https://ok1.example.com"},
+            {"target_url": "https://ok2.example.com"},
+        ]
+    )
+    assert result.failed == 2
+    assert result.succeeded == 0
+    assert len(result.results) == 2
+    assert result.results[0].success is False
+    assert result.results[0].error is not None
+    assert result.results[0].error.code == "validation_error"
+
+
+@respx.mock
+def test_batch_create_still_raises_on_401(client: QURLClient) -> None:
+    """Non-400 error statuses still raise — the 400 passthrough is surgical."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            401,
+            json={
+                "error": {
+                    "type": "https://api.qurl.link/problems/unauthorized",
+                    "title": "Unauthorized",
+                    "status": 401,
+                    "code": "unauthorized",
+                    "detail": "Invalid API key",
+                },
+            },
+        )
+    )
+    with pytest.raises(AuthenticationError):
+        client.batch_create([{"target_url": "https://example.com"}])
+
+
+# ---- Error type/instance exposure, detail fallback, legacy message ---------
+
+
+@respx.mock
+def test_error_surfaces_rfc7807_type_and_instance(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/qurls/r_nf0000000000").mock(
+        return_value=httpx.Response(
+            404,
+            json={
+                "error": {
+                    "type": "https://api.qurl.link/problems/not_found",
+                    "title": "Not Found",
+                    "status": 404,
+                    "detail": "QURL not found",
+                    "instance": "/v1/qurls/r_nf0000000000",
+                    "code": "not_found",
+                },
+                "meta": {"request_id": "req_nf"},
+            },
+        )
+    )
+    with pytest.raises(NotFoundError) as excinfo:
+        client.get("r_nf0000000000")
+    err = excinfo.value
+    assert err.type == "https://api.qurl.link/problems/not_found"
+    assert err.instance == "/v1/qurls/r_nf0000000000"
+    assert err.request_id == "req_nf"
+
+
+@respx.mock
+def test_error_falls_back_to_title_when_detail_missing(client: QURLClient) -> None:
+    """RFC 7807 `detail` is optional — fall back to title."""
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            403,
+            json={
+                "error": {
+                    "type": "https://api.qurl.link/problems/forbidden",
+                    "title": "Forbidden",
+                    "status": 403,
+                    "code": "forbidden",
+                    # no detail
+                },
+            },
+        )
+    )
+    with pytest.raises(AuthorizationError) as excinfo:
+        client.get_quota()
+    err = excinfo.value
+    assert err.detail == "Forbidden"
+    assert "None" not in str(err)
+    assert "undefined" not in str(err)
+
+
+@respx.mock
+def test_error_falls_back_to_legacy_message_field(client: QURLClient) -> None:
+    """Pre-RFC-7807 `{error: {code, message}}` envelope still works."""
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "invalid_request",
+                    "message": "legacy-format detail string",
+                },
+            },
+        )
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        client.get_quota()
+    err = excinfo.value
+    assert err.detail == "legacy-format detail string"
+
+
+# ---- parse_create_output normalizes empty qurl_id --------------------------
+
+
+@respx.mock
+def test_create_normalizes_empty_qurl_id_to_none(client: QURLClient) -> None:
+    """Empty-string qurl_id is normalized to None so `if result.qurl_id:` works."""
+    respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "qurl_link": "https://qurl.link/#at_x",
+                    "qurl_site": "https://r_abc.qurl.site",
+                    "qurl_id": "",
+                },
+            },
+        )
+    )
+    result = client.create(target_url="https://example.com")
+    assert result.qurl_id is None
