@@ -483,6 +483,15 @@ def _validate_batch_create_shape(data: Any) -> None:
         # (`client_validation`) so callers who need the finer
         # distinction can branch on `.code`. Matches the qurl-typescript
         # SDK's `unexpectedResponseError` pattern.
+        #
+        # `status=0` is the SDK convention for client-detected failures
+        # (shape-guard trips, preflight validation, URL scheme checks)
+        # as opposed to real HTTP status codes from the server. A
+        # consumer filtering errors by HTTP status who sees `status=0`
+        # should understand the failure was synthesized by the SDK
+        # before (or after) the network round-trip, not reported by
+        # the API. The `code` field is the authoritative signal for
+        # WHICH kind of SDK-detected failure this is.
         return ValidationError(
             status=0,
             code="unexpected_response",
