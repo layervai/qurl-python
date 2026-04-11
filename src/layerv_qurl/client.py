@@ -595,14 +595,29 @@ class QURLClient:
         returns a structured ``BatchCreateOutput`` on HTTP 400 (all items
         rejected) — raising would drop the per-item errors.
 
-        **`allow_statuses` interacts with retries: it only affects the
-        error-raising path, not the retry path.** A retry-eligible status
-        (e.g. 429) will still be retried even if it's listed in
-        ``allow_statuses``. Conversely, a non-retryable status (e.g. 400)
-        listed in ``allow_statuses`` is never retried — which is exactly
-        what batch_create wants, because a 400 carries the authoritative
-        per-item errors and retrying would just reproduce them. The
-        ordering is: retry filter first, then ``allow_statuses`` opt-out.
+        **`allow_statuses` takes precedence over retries.** The check
+        order in the response-handling loop is:
+
+        1. ``response.status_code < 400 or in allow_statuses`` →
+           return the parsed body immediately as a success.
+        2. Otherwise, build an error and check the retry filter
+           (``RETRYABLE_STATUS_POST`` for POST, ``RETRYABLE_STATUS``
+           for everything else).
+
+        This means a status listed in ``allow_statuses`` is returned
+        to the caller **without ever running through the retry
+        filter**, even if that status would normally be retried. For
+        the only current use case (``batch_create`` with
+        ``allow_statuses=(400,)``) the interaction is harmless because
+        400 isn't in any retry set — a 400 carries the authoritative
+        per-item errors and retrying would just reproduce them.
+
+        Callers adding a *retryable* status (e.g. 429 or 5xx) to
+        ``allow_statuses`` should be aware this bypasses the SDK's
+        retry path entirely: the status is surfaced on the first
+        attempt with no transparent backoff. If that's not what you
+        want, leave the status out of ``allow_statuses`` and let the
+        normal retry logic handle it.
         """
         url = f"{self._base_url}{path}"
         last_error: Exception | None = None

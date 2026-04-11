@@ -2480,6 +2480,48 @@ def test_error_surfaces_rfc7807_type_and_instance(client: QURLClient) -> None:
 
 
 @respx.mock
+def test_error_handles_explicit_null_error_envelope(client: QURLClient) -> None:
+    """Regression guard for the `envelope.get("error") or {}` pattern.
+
+    Some APIs return ``{"error": null, ...}`` explicitly instead of
+    omitting the ``error`` key entirely. The standard
+    ``.get("error", {})`` would only handle the missing-key case —
+    an explicit ``null`` would pass through and then crash on the
+    subsequent ``err.get(...)`` chain with ``AttributeError: 'NoneType'
+    object has no attribute 'get'``. The inline comment on ``parse_error``
+    documents the intentional ``or {}`` form; this test locks it in
+    against a future refactor that might "simplify" it back to the
+    broken ``, {}`` form.
+    """
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            500,
+            json={
+                # Explicit null, not a missing key.
+                "error": None,
+                "meta": {"request_id": "req_null_err"},
+            },
+        )
+    )
+    with pytest.raises(ServerError) as excinfo:
+        client.get_quota()
+    err = excinfo.value
+    # The `or {}` fallback collapses `err` to an empty dict, which
+    # means none of the RFC 7807 fields are populated — we get the
+    # pure fallback behavior: status from the HTTP response,
+    # reason_phrase as the title, and "HTTP 500" as the detail.
+    assert err.status == 500
+    assert err.code == "unknown"
+    # Detail falls back to title → reason_phrase → "HTTP {status}".
+    # httpx's reason phrase for 500 is "Internal Server Error" or
+    # empty depending on the transport; either way the detail is
+    # not None and doesn't contain "None"/"undefined" placeholders.
+    assert err.detail is not None
+    assert "None" not in str(err)
+    assert "undefined" not in str(err)
+
+
+@respx.mock
 def test_error_falls_back_to_title_when_detail_missing(client: QURLClient) -> None:
     """RFC 7807 `detail` is optional — fall back to title."""
     respx.get(f"{BASE_URL}/v1/quota").mock(
