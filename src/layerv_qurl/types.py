@@ -178,15 +178,19 @@ class Quota:
 
     .. note::
 
-       ``plan`` defaults to the empty string ``""`` purely so the
+       ``plan`` defaults to the sentinel ``"unknown"`` purely so the
        dataclass can be instantiated with no arguments (this only
-       happens in tests and internal bootstrap paths). In practice the
-       ``/v1/quota`` endpoint always returns a populated plan string,
-       so consumers comparing ``quota.plan == "free"`` on a real
-       response will see one of the documented enum values.
+       happens in tests and internal bootstrap paths). ``"unknown"``
+       was chosen over the empty string so callers doing
+       ``if quota.plan:`` truthiness checks see a real value, and so
+       the "not-yet-populated" state is self-describing in logs and
+       error messages. In practice the ``/v1/quota`` endpoint always
+       returns a populated plan string, so consumers comparing
+       ``quota.plan == "free"`` on a real response will see one of
+       the documented enum values.
     """
 
-    plan: QuotaPlan = ""
+    plan: QuotaPlan = "unknown"
     period_start: datetime | None = None
     period_end: datetime | None = None
     rate_limits: RateLimits | None = None

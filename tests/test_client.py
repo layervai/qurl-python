@@ -1804,6 +1804,49 @@ def test_mint_link_nested_serialization_e2e(client: QURLClient) -> None:
     assert "block_all" not in body["access_policy"]["ai_agent_policy"]  # None fields omitted
 
 
+def test_serialize_value_none_asymmetry_dataclass_vs_dict() -> None:
+    """Regression guard for the deliberate None-handling asymmetry in
+    :func:`_serialize_value`:
+
+    * Dataclass fields with ``None`` values are **dropped** — the
+      dataclass distinguishes "unset" from "explicitly null."
+    * ``None`` values inside nested dicts/lists are **preserved** —
+      some API fields use explicit ``null`` as a signalling value
+      (e.g. ``"ai_agent_policy": null`` to clear a policy).
+
+    This test exercises both rules in a single call so a future
+    refactor that unifies the behavior would trip immediately.
+    """
+    import layerv_qurl._utils as utils
+
+    # AIAgentPolicy is a real dataclass from the types module. block_all
+    # stays None — dataclass rule should drop it.
+    policy = AIAgentPolicy(allow_categories=["claude"])
+
+    value = {
+        "explicit_null": None,  # dict None: must survive
+        "dataclass": policy,  # dataclass with a None field: field must be dropped
+        "nested": {
+            "also_null": None,  # nested dict None: must survive
+            "real": "value",
+        },
+        "list_with_nulls": [None, "x", None],  # list Nones: must survive
+    }
+
+    serialized = utils._serialize_value(value)
+
+    # Dict-level None is preserved
+    assert serialized["explicit_null"] is None
+    assert serialized["nested"]["also_null"] is None
+    # List-level None is preserved
+    assert serialized["list_with_nulls"] == [None, "x", None]
+    # Dataclass None field is dropped (block_all was None on the policy)
+    assert "block_all" not in serialized["dataclass"]
+    assert "deny_categories" not in serialized["dataclass"]  # also None
+    # Non-None dataclass field survives
+    assert serialized["dataclass"]["allow_categories"] == ["claude"]
+
+
 # ---- Spec-derived input validation (create) --------------------------------
 
 
