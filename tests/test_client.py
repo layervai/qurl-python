@@ -2018,6 +2018,65 @@ def test_update_accepts_empty_tags_to_clear(client: QURLClient) -> None:
     assert result.tags == []
 
 
+@respx.mock
+def test_update_wire_body_preserves_tags_empty_list(client: QURLClient) -> None:
+    """Regression guard for the load-bearing `build_body` contract:
+    `tags=[]` is a "clear all tags" API operation, not a "no change"
+    signal. The empty list must survive into the serialized request
+    body — `build_body` only strips top-level ``None``, never falsy
+    values. A future refactor that adds a truthiness check would
+    silently break tag-clearing, so this test asserts the wire body
+    explicitly rather than just the parsed response.
+    """
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "tags": [],
+                    "created_at": "2026-03-10T10:00:00Z",
+                },
+            },
+        )
+    )
+    client.update("r_abc", tags=[])
+    body = json.loads(route.calls[0].request.content)
+    assert "tags" in body
+    assert body["tags"] == []
+
+
+@respx.mock
+def test_update_wire_body_preserves_description_empty_string(
+    client: QURLClient,
+) -> None:
+    """Same contract as tags=[] but for `description=""` — an empty
+    string means "clear the description" per the API spec, and must
+    survive `build_body`'s top-level-None-only strip. No previous
+    regression test covered this path; this fills that gap.
+    """
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "description": "",
+                    "created_at": "2026-03-10T10:00:00Z",
+                },
+            },
+        )
+    )
+    client.update("r_abc", description="")
+    body = json.loads(route.calls[0].request.content)
+    assert "description" in body
+    assert body["description"] == ""
+
+
 def test_update_rejects_empty_input(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="at least one field"):
         client.update("r_abc")

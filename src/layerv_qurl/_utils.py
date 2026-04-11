@@ -1,4 +1,16 @@
-"""Shared utilities for sync and async clients."""
+"""Shared utilities for sync and async clients.
+
+Naming note: the leading underscore on helpers defined here (e.g.
+:func:`_validate_batch_create_shape`, :func:`_serialize_value`,
+:func:`_require_max_sessions_in_range`) signals **package-internal**
+API, not strict module-private. These helpers are imported by both
+``client.py`` and ``async_client.py`` to avoid duplicating validation
+and serialization logic across the sync/async surface — they're
+intentionally shared across modules within the package, but are not
+part of the public ``from layerv_qurl import ...`` surface and are
+excluded from any stability guarantees the public API carries.
+Downstream consumers should not import these directly.
+"""
 
 from __future__ import annotations
 
@@ -438,12 +450,28 @@ def _validate_batch_create_shape(data: Any) -> None:
     Raise a clear error instead when the shape doesn't match. The error
     message intentionally does not embed the raw body — an unexpected
     body could contain sensitive data (auth details, request echoes)
-    and error strings may end up in client-side logs.
+    and error strings may end up in client-side logs. Structural hints
+    (type name, top-level keys) are emitted at DEBUG level for
+    production triage, which is safe because JSON key names come from
+    the API's published schema — not user-supplied data.
     """
 
-    def _unexpected_shape_error() -> QURLError:
+    def _fail(reason: str, *, top_level_keys: list[str] | None = None) -> QURLError:
         # Single source of truth for the error constructed at every
         # check failure — keeps status/code/title/detail aligned.
+        #
+        # DEBUG log carries structural hints for production triage:
+        # the failure reason, the observed top-level type, and (if the
+        # body parsed as a dict) the sorted list of top-level keys.
+        # Raw body bytes are intentionally excluded — the JSON key
+        # names come from the API's published schema, not user data,
+        # so this is safe to log.
+        logger.debug(
+            "batch_create shape guard tripped: %s (type=%s, top_level_keys=%s)",
+            reason,
+            type(data).__name__,
+            top_level_keys,
+        )
         return QURLError(
             status=0,
             code="unexpected_response",
@@ -452,7 +480,8 @@ def _validate_batch_create_shape(data: Any) -> None:
         )
 
     if not isinstance(data, dict):
-        raise _unexpected_shape_error()
+        raise _fail("not a dict")
+    top_keys = sorted(data.keys())
     # `bool` is a subclass of `int` in Python, so a response with
     # `"succeeded": True` would silently pass an `isinstance(..., int)`
     # check and then slip a truthy bool into the counts. Reject
@@ -465,23 +494,30 @@ def _validate_batch_create_shape(data: Any) -> None:
         or not isinstance(failed, int)
         or isinstance(failed, bool)
     ):
-        raise _unexpected_shape_error()
+        raise _fail("succeeded/failed missing or wrong type", top_level_keys=top_keys)
     if not isinstance(data.get("results"), list):
-        raise _unexpected_shape_error()
+        raise _fail("results missing or not a list", top_level_keys=top_keys)
     results = data["results"]
     # Arithmetic invariant: `succeeded + failed` must equal the number of
     # result entries. A mismatch indicates either a proxy/middleware
     # mangled the response or the API returned inconsistent counts —
     # both cases warrant raising rather than trusting the data.
     if succeeded + failed != len(results):
-        raise _unexpected_shape_error()
+        raise _fail(
+            f"counts/results length mismatch (succeeded={succeeded}, "
+            f"failed={failed}, len(results)={len(results)})",
+            top_level_keys=top_keys,
+        )
     # Each entry must carry a boolean `success` discriminant so consumers
     # can reliably branch on it — anything else would break the
     # BatchItemResult contract. Deeper per-field validation is
     # intentionally left to the API.
-    for entry in results:
+    for i, entry in enumerate(results):
         if not isinstance(entry, dict) or not isinstance(entry.get("success"), bool):
-            raise _unexpected_shape_error()
+            raise _fail(
+                f"results[{i}] missing boolean 'success' discriminant",
+                top_level_keys=top_keys,
+            )
 
 
 def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
