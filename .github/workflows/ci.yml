@@ -10,6 +10,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # Don't cancel sibling matrix legs if one fails — we want full
+      # visibility into which Python versions broke.
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.12", "3.13"]
     steps:
@@ -22,18 +25,40 @@ jobs:
         run: pip install -e ".[dev,langchain]"
       - name: Lint
         run: ruff check
-      - name: Type check
-        if: matrix.python-version == '3.12'
-        run: mypy src/
       - name: Test
         run: pytest tests/ -v
+
+  # ============================================================================
+  # TYPE CHECK - Dedicated mypy job
+  # ============================================================================
+  # Runs in its own job so the gate can't silently vanish if the test
+  # matrix is restructured. Pins to the minimum supported Python version
+  # (matching `python_version` in pyproject.toml) so the strictness stays
+  # aligned with what the SDK promises to consumers.
+  type-check:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Python 3.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        # Use the full dev+langchain extras so mypy sees the optional
+        # langchain integration's real types. Without langchain-core
+        # installed, mypy reports spurious errors about missing modules
+        # and unused type-ignore comments in src/layerv_qurl/langchain.py.
+        run: pip install -e ".[dev,langchain]"
+      - name: Run mypy
+        run: mypy src/
 
   # ============================================================================
   # NOTIFY - Send Slack notification on build completion
   # ============================================================================
   notify:
     name: Notify
-    needs: [test]
+    needs: [test, type-check]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5

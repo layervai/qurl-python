@@ -36,6 +36,12 @@ dev = [
     "respx>=0.22",
     "ruff>=0.11",
     "mypy>=1.14",
+    # Pull the optional langchain integration into the default dev install
+    # so `pip install -e ".[dev]"` gives contributors the same mypy/test
+    # environment CI uses (which installs ".[dev,langchain]"). Without this,
+    # running mypy locally without langchain-core produces spurious errors
+    # about a missing module and an unused type-ignore in langchain.py.
+    "langchain-core>=0.3,<2",
 ]
 
 [project.urls]
