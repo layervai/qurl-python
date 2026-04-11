@@ -394,6 +394,51 @@ def test_list_all_paginates(client: QURLClient) -> None:
 
 
 @respx.mock
+def test_list_all_propagates_date_filters_to_every_page(client: QURLClient) -> None:
+    """Regression guard: ``list_all`` delegates to ``list`` on each
+    page fetch and must pass the date filter params through to the
+    underlying HTTP request on EVERY iteration, not just the first.
+    If a future refactor hoisted the filter params out of the loop
+    body, pagination would silently drop the filter on page 2+.
+    """
+    route = respx.get(f"{BASE_URL}/v1/qurls")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_1", "https://1.com")],
+                "meta": {"has_more": True, "next_cursor": "cur_abc"},
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_2", "https://2.com")],
+                "meta": {"has_more": False},
+            },
+        ),
+    ]
+
+    created_after = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+    expires_before = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+    all_qurls = list(
+        client.list_all(
+            page_size=1,
+            created_after=created_after,
+            expires_before=expires_before,
+        )
+    )
+    assert len(all_qurls) == 2
+    assert route.call_count == 2
+
+    # Every HTTP call must carry the date filters in the query string.
+    for call in route.calls:
+        url = str(call.request.url)
+        assert "created_after=2026-03-01T00%3A00%3A00" in url
+        assert "expires_before=2026-04-01T00%3A00%3A00" in url
+
+
+@respx.mock
 def test_delete(client: QURLClient) -> None:
     respx.delete(f"{BASE_URL}/v1/qurls/r_abc123def45").mock(return_value=httpx.Response(204))
     client.delete("r_abc123def45")  # Should not raise
@@ -1109,6 +1154,53 @@ async def test_async_list_all(async_client: AsyncQURLClient) -> None:
     all_qurls = [q async for q in async_client.list_all(status="active", page_size=1)]
     assert len(all_qurls) == 2
     assert [q.resource_id for q in all_qurls] == ["r_1", "r_2"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_list_all_propagates_date_filters_to_every_page(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of test_list_all_propagates_date_filters_to_every_page.
+    Locks in sync/async parity for the list_all date-filter passthrough
+    behavior — both clients must carry the filter params on every
+    paginated HTTP call, not just the first.
+    """
+    route = respx.get(f"{BASE_URL}/v1/qurls")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_1", "https://1.com")],
+                "meta": {"has_more": True, "next_cursor": "cur_abc"},
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "data": [_qurl_item("r_2", "https://2.com")],
+                "meta": {"has_more": False},
+            },
+        ),
+    ]
+
+    created_after = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+    expires_before = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+    all_qurls = [
+        q
+        async for q in async_client.list_all(
+            page_size=1,
+            created_after=created_after,
+            expires_before=expires_before,
+        )
+    ]
+    assert len(all_qurls) == 2
+    assert route.call_count == 2
+
+    for call in route.calls:
+        url = str(call.request.url)
+        assert "created_after=2026-03-01T00%3A00%3A00" in url
+        assert "expires_before=2026-04-01T00%3A00%3A00" in url
 
 
 @respx.mock

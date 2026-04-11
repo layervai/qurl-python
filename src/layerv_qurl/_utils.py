@@ -1,15 +1,11 @@
 """Shared utilities for sync and async clients.
 
-Naming note: the leading underscore on helpers defined here (e.g.
-:func:`_validate_batch_create_shape`, :func:`_serialize_value`,
-:func:`_require_max_sessions_in_range`) signals **package-internal**
-API, not strict module-private. These helpers are imported by both
-``client.py`` and ``async_client.py`` to avoid duplicating validation
-and serialization logic across the sync/async surface — they're
-intentionally shared across modules within the package, but are not
-part of the public ``from layerv_qurl import ...`` surface and are
-excluded from any stability guarantees the public API carries.
-Downstream consumers should not import these directly.
+Underscore-prefixed helpers here (e.g. :func:`_validate_batch_create_shape`)
+are **package-internal**, not strict module-private: they're imported
+by both ``client.py`` and ``async_client.py`` to keep sync/async logic
+in lockstep, but are excluded from the public ``from layerv_qurl import``
+surface and carry no stability guarantees. Downstream consumers should
+not import them directly.
 """
 
 from __future__ import annotations
@@ -347,6 +343,14 @@ def parse_create_output(data: dict[str, Any]) -> CreateOutput:
     # idiomatic ``if result.qurl_id:`` presence check. An empty string
     # here is either a bug in a mock or a legacy response shape; the
     # spec requires a populated qurl_id on success responses.
+    #
+    # Intentionally asymmetric with `label` below: an identifier is
+    # either present or absent and an empty-string id is never a
+    # meaningful value, but `label` is user-facing metadata where
+    # ``""`` and absent are semantically distinct — ``""`` means "the
+    # caller explicitly cleared the label", while missing-from-response
+    # means "the API didn't return the field at all". Preserving the
+    # empty string lets consumers distinguish the two cases.
     qurl_id_raw = data.get("qurl_id")
     qurl_id = qurl_id_raw if qurl_id_raw else None
     return CreateOutput(
