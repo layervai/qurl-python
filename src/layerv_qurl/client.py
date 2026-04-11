@@ -6,6 +6,7 @@ validation, body construction, and error handling must match exactly.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -360,6 +361,13 @@ class QURLClient:
         (``q_`` prefix). All fields are optional, but at least one must be
         provided. ``extend_by`` and ``expires_at`` are mutually exclusive.
 
+        **Cannot change `access_policy`** — the policy is immutable after
+        create, per the OpenAPI spec's ``UpdateQurlRequest``. To change
+        access policy, either create a new resource via :meth:`create`
+        with the new policy, or mint a new access token on the existing
+        resource via :meth:`mint_link` with a policy override (per-token
+        scope, base resource policy unchanged).
+
         Args:
             resource_id: Resource or QURL display ID.
             extend_by: Duration to add (e.g. ``"7d"``). Mutually exclusive
@@ -662,7 +670,21 @@ class QURLClient:
             if response.status_code < 400 or response.status_code in allow_statuses:
                 if response.status_code == 204 or not response.content:
                     return None, None
-                envelope = response.json()
+                try:
+                    envelope = response.json()
+                except (json.JSONDecodeError, ValueError):
+                    # If a whitelisted status (e.g. 400 on batch_create)
+                    # comes back with a non-JSON body — a proxy HTML
+                    # error page, a truncated response, a gateway's own
+                    # plaintext error — we CAN'T surface it as success.
+                    # Fall through to `parse_error`, which handles
+                    # non-JSON error bodies gracefully and returns a
+                    # well-formed QURLError using the response status
+                    # and reason phrase. `raise ... from None` hides
+                    # the JSONDecodeError chain since it's noise: the
+                    # QURLError already captures "the body wasn't a
+                    # parseable envelope" as its detail.
+                    raise parse_error(response) from None
                 return envelope.get("data"), envelope.get("meta")
 
             err = parse_error(response)

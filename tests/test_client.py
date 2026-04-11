@@ -2181,6 +2181,38 @@ def test_create_rejects_negative_max_sessions(client: QURLClient) -> None:
         client.create(target_url="https://example.com", max_sessions=-1)
 
 
+def test_require_max_sessions_in_range_rejects_bool() -> None:
+    """Direct unit test for the ``bool`` rejection in
+    :func:`_require_max_sessions_in_range`.
+
+    ``bool`` is a subclass of ``int`` in Python (``True == 1``,
+    ``False == 0``), so a naive ``isinstance(value, int)`` check
+    would silently accept ``max_sessions=True``. The validator has
+    an explicit ``isinstance(value, bool)`` rejection to catch this.
+    Reviewer's argument for this test: a future simplification that
+    drops the bool guard would trip this regression immediately.
+
+    The rejection is already exercised indirectly via batch bool-
+    counts tests, but a direct unit test makes the intent explicit.
+    """
+    import layerv_qurl._utils as utils
+
+    # `True` and `False` are type-compatible with `int` in Python (bool
+    # is a subclass of int), so mypy doesn't need a type ignore — the
+    # test exercises a RUNTIME check that catches what the type system
+    # can't.
+    with pytest.raises(ValueError, match="max_sessions"):
+        utils._require_max_sessions_in_range(True)
+    with pytest.raises(ValueError, match="max_sessions"):
+        utils._require_max_sessions_in_range(False)
+    # Sanity: plain ints still pass through.
+    utils._require_max_sessions_in_range(0)
+    utils._require_max_sessions_in_range(500)
+    utils._require_max_sessions_in_range(1000)
+    # And None (the "not provided" sentinel) is still a no-op.
+    utils._require_max_sessions_in_range(None)
+
+
 @respx.mock
 def test_create_accepts_max_sessions_boundaries(client: QURLClient) -> None:
     """max_sessions=0 (unlimited) and max_sessions=1000 (hard limit) are both valid."""
@@ -2900,6 +2932,152 @@ def test_batch_create_rejects_counts_arithmetic_mismatch(
     )
     with pytest.raises(QURLError, match="Unexpected response shape"):
         client.batch_create([{"target_url": "https://example.com"}])
+
+
+# ---- Async mirrors of the batch shape-guard tests -------------------------
+# Sync/async parity: every sync shape-guard test above has an async twin.
+# Without these, an async-specific regression (e.g. a refactor that diverged
+# the two code paths) could slip past CI.
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_batch_create_rejects_unexpected_400_body_shape(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of test_batch_create_rejects_unexpected_400_body_shape."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={"data": {"unexpected": "not a batch envelope"}},
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        await async_client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_batch_create_rejects_400_body_with_non_boolean_success(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of test_batch_create_rejects_400_body_with_non_boolean_success."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": 0,
+                    "failed": 1,
+                    "results": [
+                        {"index": 0, "success": "oops"},  # should be bool
+                    ],
+                },
+            },
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        await async_client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_batch_create_rejects_400_body_with_bool_counts(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of test_batch_create_rejects_400_body_with_bool_counts."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": True,  # bool should be rejected
+                    "failed": False,
+                    "results": [],
+                },
+            },
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        await async_client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_batch_create_rejects_counts_arithmetic_mismatch(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of test_batch_create_rejects_counts_arithmetic_mismatch."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": 5,  # claims 5 succeeded
+                    "failed": 0,
+                    "results": [
+                        # …but only 1 entry
+                        {"index": 0, "success": True, "resource_id": "r_only1"},
+                    ],
+                },
+            },
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        await async_client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+def test_batch_create_falls_through_to_parse_error_on_non_json_body(
+    client: QURLClient,
+) -> None:
+    """Defense-in-depth: if a whitelisted 400 (or other status in
+    ``allow_statuses``) comes back with non-JSON content — e.g. a proxy
+    HTML error page, a CDN captive portal, a gateway plaintext error —
+    the SDK must NOT raise a raw ``JSONDecodeError`` from inside
+    ``response.json()``. Instead it should fall through to
+    ``parse_error``, which handles non-JSON error bodies gracefully
+    and returns a well-formed ``QURLError`` with the response status.
+
+    Without this guard, a JSONDecodeError would propagate raw to the
+    caller, bypassing both the batch shape guard and the standard
+    error path — confusing and hard to handle. Note: this test does
+    NOT assert on detail content, because `parse_error` intentionally
+    echoes non-JSON response body text into the detail field (so
+    callers can see plaintext gateway errors); that behavior is
+    scoped to this bug fix only via the early-return path.
+    """
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            text="<html><body>Bad Gateway</body></html>",
+        )
+    )
+    # Load-bearing assertion: raises a QURLError (not raw
+    # JSONDecodeError/ValueError from response.json()) with the
+    # correct HTTP status. The class hierarchy dispatch in parse_error
+    # maps 400 → ValidationError, and we accept any QURLError subclass
+    # here since the specific class isn't the contract under test.
+    with pytest.raises(QURLError) as exc_info:
+        client.batch_create([{"target_url": "https://example.com"}])
+    assert exc_info.value.status == 400
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_batch_create_falls_through_to_parse_error_on_non_json_body(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of the non-JSON body fall-through test."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            text="<html><body>Bad Gateway</body></html>",
+        )
+    )
+    with pytest.raises(QURLError) as exc_info:
+        await async_client.batch_create([{"target_url": "https://example.com"}])
+    assert exc_info.value.status == 400
 
 
 @respx.mock
