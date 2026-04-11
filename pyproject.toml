@@ -66,3 +66,12 @@ python_version = "3.10"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Silence the third-party Pydantic-v1 deprecation warning that
+# `langchain-core` emits on Python 3.14+ (the optional langchain
+# integration pulls in `langchain-core`, which still imports
+# `pydantic.v1.fields` at module load). Not our code, not our deps
+# to fix — filter it out so the test output stays clean. Scoped
+# narrowly to the exact message so unrelated warnings still surface.
+filterwarnings = [
+    "ignore:Core Pydantic V1 functionality isn't compatible with Python 3\\.14 or greater\\.:UserWarning",
+]

@@ -2412,3 +2412,84 @@ def test_batch_create_rejects_400_body_with_bool_counts(
     )
     with pytest.raises(QURLError, match="Unexpected response shape"):
         client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+def test_batch_create_rejects_counts_arithmetic_mismatch(
+    client: QURLClient,
+) -> None:
+    """The shape guard asserts `succeeded + failed == len(results)`.
+    A mismatch suggests a proxy or middleware mangled the response,
+    or the API had a counting bug — either case warrants raising
+    rather than trusting the data."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "data": {
+                    "succeeded": 5,  # claims 5 succeeded
+                    "failed": 0,
+                    "results": [
+                        # …but only 1 entry
+                        {"index": 0, "success": True, "resource_id": "r_only1"},
+                    ],
+                },
+            },
+        )
+    )
+    with pytest.raises(QURLError, match="Unexpected response shape"):
+        client.batch_create([{"target_url": "https://example.com"}])
+
+
+@respx.mock
+def test_batch_create_accepts_access_policy_dataclass(
+    client: QURLClient,
+) -> None:
+    """End-to-end coverage for passing an ``AccessPolicy`` dataclass
+    (rather than a plain dict) in a batch item. The bridge between
+    typed-caller convenience and the serialized request body is
+    ``_serialize_value`` — this test locks in that the dataclass path
+    produces the same nested JSON as a plain-dict caller would."""
+    route = respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_dc_policy",
+                            "qurl_link": "https://qurl.link/#at_dc",
+                            "qurl_site": "https://r_dc_policy.qurl.site",
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    policy = AccessPolicy(
+        geo_denylist=["CN", "RU"],
+        ai_agent_policy=AIAgentPolicy(allow_categories=["claude", "chatgpt"]),
+    )
+    item: BatchCreateItem = {
+        "target_url": "https://example.com",
+        "label": "dc-test",
+        "access_policy": policy,
+    }
+    client.batch_create([item])
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["items"][0]["target_url"] == "https://example.com"
+    assert body["items"][0]["access_policy"]["geo_denylist"] == ["CN", "RU"]
+    assert body["items"][0]["access_policy"]["ai_agent_policy"]["allow_categories"] == [
+        "claude",
+        "chatgpt",
+    ]
+    # None fields on AIAgentPolicy (block_all, deny_categories) must be
+    # dropped by _serialize_value's dataclass rule, not preserved.
+    assert "block_all" not in body["items"][0]["access_policy"]["ai_agent_policy"]
+    assert "deny_categories" not in body["items"][0]["access_policy"]["ai_agent_policy"]

@@ -211,10 +211,18 @@ class AsyncQURLClient:
             status: Filter by QURL status (``"active"``, ``"revoked"``).
             q: Search query string.
             sort: Sort order (e.g. ``"created_at"``, ``"-created_at"``).
-            created_after: Filter QURLs created after this ISO timestamp.
-            created_before: Filter QURLs created before this ISO timestamp.
-            expires_before: Filter QURLs expiring before this ISO timestamp.
-            expires_after: Filter QURLs expiring after this ISO timestamp.
+            created_after: Filter QURLs created after this timestamp.
+                Accepts a :class:`datetime` (serialized via ``.isoformat()``)
+                or a string. String values must be ISO 8601 / RFC 3339
+                format (e.g. ``"2026-04-01T00:00:00Z"``) and are passed
+                through to the API unvalidated — the server rejects
+                malformed timestamps with a 400.
+            created_before: Filter QURLs created before this timestamp.
+                Same format rules as ``created_after``.
+            expires_before: Filter QURLs expiring before this timestamp.
+                Same format rules as ``created_after``.
+            expires_after: Filter QURLs expiring after this timestamp.
+                Same format rules as ``created_after``.
         """
         params = build_list_params(
             limit,
@@ -251,10 +259,18 @@ class AsyncQURLClient:
             q: Search query string.
             sort: Sort order.
             page_size: Number of items per page (default 50).
-            created_after: Filter QURLs created after this ISO timestamp.
-            created_before: Filter QURLs created before this ISO timestamp.
-            expires_before: Filter QURLs expiring before this ISO timestamp.
-            expires_after: Filter QURLs expiring after this ISO timestamp.
+            created_after: Filter QURLs created after this timestamp.
+                Accepts a :class:`datetime` (serialized via ``.isoformat()``)
+                or a string. String values must be ISO 8601 / RFC 3339
+                format (e.g. ``"2026-04-01T00:00:00Z"``) and are passed
+                through to the API unvalidated — the server rejects
+                malformed timestamps with a 400.
+            created_before: Filter QURLs created before this timestamp.
+                Same format rules as ``created_after``.
+            expires_before: Filter QURLs expiring before this timestamp.
+                Same format rules as ``created_after``.
+            expires_after: Filter QURLs expiring after this timestamp.
+                Same format rules as ``created_after``.
         """
         cursor: str | None = None
         while True:

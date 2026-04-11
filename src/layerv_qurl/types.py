@@ -252,13 +252,11 @@ class BatchCreateItem(_BatchCreateItemRequired, total=False):
     ``target_url`` is required; every other field is optional and mirrors
     the corresponding keyword argument on :meth:`QURLClient.create`.
 
-    ``access_policy`` is typed as ``dict[str, Any]`` for maximum
-    flexibility — callers may pass either a plain dict matching the
-    ``AccessPolicy`` schema or construct an :class:`AccessPolicy`
-    dataclass and let ``_serialize_value`` recursively convert it at
-    body-build time. Both work at runtime; the loose type accommodates
-    both patterns without forcing a concrete dataclass construction on
-    callers who prefer dicts.
+    ``access_policy`` accepts either an :class:`AccessPolicy` dataclass
+    (recommended for type safety and IDE autocomplete) or a plain
+    ``dict[str, Any]`` (for callers who prefer dicts or are working from
+    dynamic config). Both forms are converted to the same JSON body at
+    request time via ``_serialize_value``.
     """
 
     expires_in: str
@@ -266,5 +264,5 @@ class BatchCreateItem(_BatchCreateItemRequired, total=False):
     one_time_use: bool
     max_sessions: int
     session_duration: str
-    access_policy: dict[str, Any]
+    access_policy: AccessPolicy | dict[str, Any]
     custom_domain: str

@@ -254,6 +254,10 @@ def require_resource_id_prefix(resource_id: str, operation: str = "delete") -> N
         # Echo only the 2-char prefix so the caller sees which kind of
         # ID they passed without leaking the value.
         observed_prefix = resource_id[:2]
+        # TODO: update the "not yet available in this SDK version"
+        # wording once a token-scoped `revoke_token()` / equivalent
+        # method lands on the client. Until then, the error points
+        # users at the API-level endpoint without a concrete SDK call.
         raise ValueError(
             f"{operation}: only resource IDs ({RESOURCE_ID_PREFIX} prefix) are accepted — "
             f"got an ID starting with {observed_prefix!r}. To revoke a single "
@@ -457,11 +461,18 @@ def _validate_batch_create_shape(data: Any) -> None:
         raise _unexpected_shape_error()
     if not isinstance(data.get("results"), list):
         raise _unexpected_shape_error()
+    results = data["results"]
+    # Arithmetic invariant: `succeeded + failed` must equal the number of
+    # result entries. A mismatch indicates either a proxy/middleware
+    # mangled the response or the API returned inconsistent counts —
+    # both cases warrant raising rather than trusting the data.
+    if succeeded + failed != len(results):
+        raise _unexpected_shape_error()
     # Each entry must carry a boolean `success` discriminant so consumers
     # can reliably branch on it — anything else would break the
     # BatchItemResult contract. Deeper per-field validation is
     # intentionally left to the API.
-    for entry in data["results"]:
+    for entry in results:
         if not isinstance(entry, dict) or not isinstance(entry.get("success"), bool):
             raise _unexpected_shape_error()
 
