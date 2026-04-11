@@ -707,6 +707,77 @@ def test_retry_after_capped_at_30s(retry_client: QURLClient) -> None:
     mock_sleep.assert_called_once_with(30.0)
 
 
+# --- POST retry safety ---
+# POST is non-idempotent (create() might actually hit the DB even if the
+# response is 5xx), so the client deliberately restricts POST retries to
+# {429} only — retrying a 5xx on a create request risks duplicate records.
+# These tests lock that decision in so a future refactor that naively
+# unifies retry sets across methods will trip the guard.
+
+
+@respx.mock
+def test_post_does_not_retry_on_503(retry_client: QURLClient) -> None:
+    """POST /v1/qurls must not retry on 5xx even when retries are configured."""
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(503, json=_ERR_503),
+    )
+
+    with patch("layerv_qurl.client.time.sleep"), pytest.raises(QURLError) as exc_info:
+        retry_client.create(target_url="https://example.com", expires_in="24h")
+
+    assert exc_info.value.status == 503
+    # retry_client has max_retries=2, so a retry-on-503 regression would
+    # produce 3 attempts. Assert exactly one — no retries for POST 5xx.
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
+    """POST retries on 429 specifically (rate limits are safe to retry)."""
+    route = respx.post(f"{BASE_URL}/v1/qurls")
+    route.side_effect = [
+        httpx.Response(429, json=_ERR_429),
+        httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "qurl_link": "https://qurl.link/#at_test",
+                    "qurl_site": "https://r_abc123def45.qurl.site",
+                    "qurl_id": "q_abc",
+                },
+            },
+        ),
+    ]
+
+    with patch("layerv_qurl.client.time.sleep"):
+        result = retry_client.create(target_url="https://example.com", expires_in="24h")
+
+    assert result.resource_id == "r_abc123def45"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_async_post_does_not_retry_on_503() -> None:
+    """Async POST must also not retry on 5xx — sync/async parity guard."""
+    client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=2)
+    try:
+        route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+            return_value=httpx.Response(503, json=_ERR_503),
+        )
+
+        with (
+            patch("layerv_qurl.async_client.asyncio.sleep"),
+            pytest.raises(QURLError) as exc_info,
+        ):
+            await client.create(target_url="https://example.com", expires_in="24h")
+
+        assert exc_info.value.status == 503
+        assert route.call_count == 1
+    finally:
+        await client.close()
+
+
 # --- Non-JSON error ---
 
 

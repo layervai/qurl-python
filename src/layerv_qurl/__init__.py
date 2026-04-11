@@ -29,9 +29,11 @@ from layerv_qurl.types import (
     ListOutput,
     MintOutput,
     Quota,
+    QuotaPlan,
     QURLStatus,
     RateLimits,
     ResolveOutput,
+    TokenStatus,
     Usage,
 )
 
@@ -53,7 +55,9 @@ __all__ = [
     "BatchCreateOutput",
     "BatchItemError",
     "BatchItemResult",
+    "QuotaPlan",
     "QURLStatus",
+    "TokenStatus",
     "AccessGrant",
     "AccessPolicy",
     "AccessToken",

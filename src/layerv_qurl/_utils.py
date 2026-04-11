@@ -162,6 +162,10 @@ def _require_max_length(value: str | None, field_name: str, maximum: int) -> Non
 def _require_max_sessions_in_range(value: int | None) -> None:
     if value is None:
         return
+    # `bool` is a subclass of `int` in Python (True == 1, False == 0), so
+    # a caller passing `max_sessions=True` would sneak through an
+    # `isinstance(value, int)` check alone. Reject bool explicitly so
+    # obvious type confusion fails loudly instead of silently meaning 1.
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"max_sessions: must be an integer (got {type(value).__name__})")
     if value < 0 or value > MAX_MAX_SESSIONS:
@@ -415,41 +419,32 @@ def _validate_batch_create_shape(data: Any) -> None:
     body could contain sensitive data (auth details, request echoes)
     and error strings may end up in client-side logs.
     """
-    if not isinstance(data, dict):
-        raise QURLError(
+
+    def _unexpected_shape_error() -> QURLError:
+        # Single source of truth for the error constructed at every
+        # check failure — keeps status/code/title/detail aligned.
+        return QURLError(
             status=0,
             code="unexpected_response",
             title="Unexpected Response",
             detail="Unexpected response shape from POST /v1/qurls/batch",
         )
+
+    if not isinstance(data, dict):
+        raise _unexpected_shape_error()
     if not isinstance(data.get("succeeded"), int) or not isinstance(
         data.get("failed"), int
     ):
-        raise QURLError(
-            status=0,
-            code="unexpected_response",
-            title="Unexpected Response",
-            detail="Unexpected response shape from POST /v1/qurls/batch",
-        )
+        raise _unexpected_shape_error()
     if not isinstance(data.get("results"), list):
-        raise QURLError(
-            status=0,
-            code="unexpected_response",
-            title="Unexpected Response",
-            detail="Unexpected response shape from POST /v1/qurls/batch",
-        )
+        raise _unexpected_shape_error()
     # Each entry must carry a boolean `success` discriminant so consumers
     # can reliably branch on it — anything else would break the
     # BatchItemResult contract. Deeper per-field validation is
     # intentionally left to the API.
     for entry in data["results"]:
         if not isinstance(entry, dict) or not isinstance(entry.get("success"), bool):
-            raise QURLError(
-                status=0,
-                code="unexpected_response",
-                title="Unexpected Response",
-                detail="Unexpected response shape from POST /v1/qurls/batch",
-            )
+            raise _unexpected_shape_error()
 
 
 def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:

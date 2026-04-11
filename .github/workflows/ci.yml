@@ -68,6 +68,7 @@ jobs:
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
           TEST_RESULT: ${{ needs.test.result }}
+          TYPE_CHECK_RESULT: ${{ needs.type-check.result }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           # All github context moved to env to prevent script injection
           # via crafted branch names or actor names containing shell metacharacters.
@@ -102,14 +103,27 @@ jobs:
             *) TRIGGER_TEXT="$TRIGGER" ;;
           esac
 
+          # Aggregate status across both gates (test matrix + mypy). A
+          # mypy failure is a red build even if every python matrix leg
+          # passed, so the Slack message must reflect the worst of the two.
+          if [[ "$TEST_RESULT" == "success" && "$TYPE_CHECK_RESULT" == "success" ]]; then
+            AGGREGATE="success"
+          elif [[ "$TEST_RESULT" == "failure" || "$TYPE_CHECK_RESULT" == "failure" ]]; then
+            AGGREGATE="failure"
+          elif [[ "$TEST_RESULT" == "cancelled" || "$TYPE_CHECK_RESULT" == "cancelled" ]]; then
+            AGGREGATE="cancelled"
+          else
+            AGGREGATE="incomplete"
+          fi
+
           # Determine status
-          if [[ "$TEST_RESULT" == "success" ]]; then
+          if [[ "$AGGREGATE" == "success" ]]; then
             COLOR="#36a64f"; EMOJI="white_check_mark"
             HEADER="QURL Python SDK Build"; STATUS_TEXT="successful"
-          elif [[ "$TEST_RESULT" == "failure" ]]; then
+          elif [[ "$AGGREGATE" == "failure" ]]; then
             COLOR="#dc3545"; EMOJI="x"
             HEADER="QURL Python SDK Build"; STATUS_TEXT="failed"
-          elif [[ "$TEST_RESULT" == "cancelled" ]]; then
+          elif [[ "$AGGREGATE" == "cancelled" ]]; then
             COLOR="#ffc107"; EMOJI="warning"
             HEADER="QURL Python SDK Build"; STATUS_TEXT="cancelled"
           else
@@ -117,11 +131,17 @@ jobs:
             HEADER="QURL Python SDK"; STATUS_TEXT="incomplete"
           fi
 
-          # Determine test emoji
+          # Determine per-gate emoji so the Slack message shows which
+          # gate failed when the aggregate is red.
           case "$TEST_RESULT" in
             success) TEST_EMOJI=":white_check_mark:" ;;
             failure) TEST_EMOJI=":x:" ;;
             *) TEST_EMOJI=":warning:" ;;
+          esac
+          case "$TYPE_CHECK_RESULT" in
+            success) TYPE_CHECK_EMOJI=":white_check_mark:" ;;
+            failure) TYPE_CHECK_EMOJI=":x:" ;;
+            *) TYPE_CHECK_EMOJI=":warning:" ;;
           esac
 
           # Extract first line of commit message (safe for any content)
@@ -139,6 +159,7 @@ jobs:
             --arg trigger "$TRIGGER_TEXT" \
             --arg actor "$GH_ACTOR" \
             --arg test_emoji "$TEST_EMOJI" \
+            --arg type_check_emoji "$TYPE_CHECK_EMOJI" \
             --arg commit "$FIRST_LINE" \
             --arg commit_url "$COMMIT_URL" \
             --arg workflow_url "$WORKFLOW_URL" \
@@ -148,6 +169,7 @@ jobs:
                 {type: "mrkdwn", text: ("*Branch:*\n`\($branch)` (\($sha))")},
                 {type: "mrkdwn", text: ("*Trigger:*\n\($trigger) by \($actor)")},
                 {type: "mrkdwn", text: ("*Tests:*\n\($test_emoji)")},
+                {type: "mrkdwn", text: ("*Type check:*\n\($type_check_emoji)")},
                 {type: "mrkdwn", text: "*Python:*\n3.10, 3.12, 3.13"}
               ]},
               {type: "section", text: {type: "mrkdwn", text: ("*Commit:* `\($commit)`")}},
