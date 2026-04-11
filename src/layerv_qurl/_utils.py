@@ -398,7 +398,14 @@ def parse_quota(data: dict[str, Any]) -> Quota:
             total_accesses=usage_data.get("total_accesses", 0),
         )
     return Quota(
-        plan=data.get("plan", ""),
+        # Fall back to the same sentinel the dataclass default uses
+        # (see ``Quota.plan`` in types.py) so a malformed API response
+        # that omits the field produces a consistent "not-yet-populated"
+        # value regardless of whether the Quota was constructed via
+        # parse_quota or directly. In practice the /v1/quota endpoint
+        # always returns a populated plan string, so this fallback is
+        # only hit for malformed responses or internal bootstrap paths.
+        plan=data.get("plan", "unknown"),
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
         rate_limits=rate_limits,

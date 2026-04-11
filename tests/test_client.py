@@ -582,6 +582,11 @@ def test_quota_typed(client: QURLClient) -> None:
                         "resolve_per_minute": 300,
                         "max_active_qurls": 5000,
                         "max_tokens_per_qurl": 10,
+                        # Populated to exercise the parse path — earlier
+                        # revisions of this test let `max_expiry_seconds`
+                        # fall through the `.get(..., 0)` default, which
+                        # meant the field wasn't actually tested.
+                        "max_expiry_seconds": 604800,  # 7 days
                     },
                     "usage": {
                         "qurls_created": 10,
@@ -602,12 +607,82 @@ def test_quota_typed(client: QURLClient) -> None:
     assert result.rate_limits is not None
     assert result.rate_limits.create_per_minute == 60
     assert result.rate_limits.max_active_qurls == 5000
+    assert result.rate_limits.max_expiry_seconds == 604800
 
     # Typed Usage
     assert result.usage is not None
     assert result.usage.active_qurls == 5
     assert result.usage.qurls_created == 10
     assert result.usage.total_accesses == 42
+    assert result.usage.active_qurls_percent == 0.1
+
+
+@respx.mock
+def test_quota_active_qurls_percent_null(client: QURLClient) -> None:
+    """`active_qurls_percent` is nullable per the API spec — when the
+    plan's `max_active_qurls` is unlimited, the field comes back as
+    `null`. Lock in that the parser preserves `None` (rather than
+    defaulting to `0.0` like the pre-alignment behavior did) so
+    callers doing arithmetic on the field get a proper TypeError
+    instead of silently treating unlimited as 0%.
+    """
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "plan": "enterprise",
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-04-01T00:00:00Z",
+                    "rate_limits": {
+                        "create_per_minute": 1000,
+                        "max_active_qurls": 0,  # unlimited on enterprise
+                    },
+                    "usage": {
+                        "qurls_created": 500,
+                        "active_qurls": 200,
+                        # The load-bearing field under test: null when
+                        # max_active_qurls is unlimited.
+                        "active_qurls_percent": None,
+                        "total_accesses": 12345,
+                    },
+                },
+            },
+        )
+    )
+
+    result = client.get_quota()
+    assert result.usage is not None
+    assert result.usage.active_qurls_percent is None
+    # Sanity: the other nullable-adjacent fields still parse normally.
+    assert result.usage.active_qurls == 200
+    assert result.usage.total_accesses == 12345
+
+
+@respx.mock
+def test_quota_plan_missing_falls_back_to_unknown(client: QURLClient) -> None:
+    """Regression guard for the `parse_quota` plan fallback being
+    aligned with the `Quota.plan` dataclass default. A malformed API
+    response that omits `plan` should produce `quota.plan == "unknown"`,
+    not `""` — consistent with the dataclass default and the docstring.
+    In practice the /v1/quota endpoint always returns a populated plan,
+    so this exercises the defensive fallback path.
+    """
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    # Deliberately missing `plan`
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-04-01T00:00:00Z",
+                },
+            },
+        )
+    )
+
+    result = client.get_quota()
+    assert result.plan == "unknown"
 
 
 # --- Injected http_client ---

@@ -40,6 +40,11 @@ from layerv_qurl._utils import (
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
 if TYPE_CHECKING:
+    # The `list()` method on AsyncQURLClient shadows the `list` type
+    # inside the class body, so parameter/return annotations that need
+    # the builtin must reference `builtins.list[...]` explicitly. The
+    # import lives in a TYPE_CHECKING block because it's only needed
+    # for type annotations.
     import builtins
     from collections.abc import AsyncIterator, Sequence
     from datetime import datetime
