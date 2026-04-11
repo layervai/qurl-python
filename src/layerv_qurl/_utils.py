@@ -249,11 +249,16 @@ def require_resource_id_prefix(resource_id: str, operation: str = "delete") -> N
     of passing a ``q_`` display ID here with a clear client-side error.
     """
     if not resource_id.startswith(RESOURCE_ID_PREFIX):
+        # Don't echo the raw ID — even truncated to 16 chars it may
+        # contain caller-sensitive data that ends up in error logs.
+        # Echo only the 2-char prefix so the caller sees which kind of
+        # ID they passed without leaking the value.
+        observed_prefix = resource_id[:2]
         raise ValueError(
             f"{operation}: only resource IDs ({RESOURCE_ID_PREFIX} prefix) are accepted — "
-            f"got {resource_id[:16]!r}. To revoke a single access token, "
-            "use the DELETE /v1/resources/:id/qurls/:qurl_id endpoint "
-            "(not yet exposed by this SDK)."
+            f"got an ID starting with {observed_prefix!r}. To revoke a single "
+            "access token, use the token-scoped revoke endpoint (not yet "
+            "available in this SDK version)."
         )
 
 

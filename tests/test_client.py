@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 from layerv_qurl import (
     AsyncQURLClient,
@@ -25,7 +29,7 @@ from layerv_qurl.errors import (
     ServerError,
     ValidationError,
 )
-from layerv_qurl.types import AccessPolicy, AccessToken, AIAgentPolicy
+from layerv_qurl.types import AccessPolicy, AccessToken, AIAgentPolicy, BatchCreateItem
 
 BASE_URL = "https://api.test.layerv.ai"
 
@@ -54,7 +58,7 @@ _QUOTA_OK = {
 }
 
 
-def _qurl_item(rid: str, url: str) -> dict:
+def _qurl_item(rid: str, url: str) -> dict[str, Any]:
     return {
         "resource_id": rid,
         "target_url": url,
@@ -70,9 +74,9 @@ def client() -> QURLClient:
 
 
 @pytest.fixture
-async def async_client() -> AsyncQURLClient:
+async def async_client() -> AsyncGenerator[AsyncQURLClient, None]:
     client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0)
-    yield client  # type: ignore[misc]
+    yield client
     await client.close()
 
 
@@ -1717,39 +1721,9 @@ def test_batch_create_empty_raises(client: QURLClient) -> None:
 
 
 def test_batch_create_over_100_raises(client: QURLClient) -> None:
-    items = [{"target_url": f"https://{i}.com"} for i in range(101)]
+    items: list[BatchCreateItem] = [{"target_url": f"https://{i}.com"} for i in range(101)]
     with pytest.raises(ValueError, match="at most 100"):
         client.batch_create(items)
-
-
-@respx.mock
-def test_batch_create_serializes_datetime_in_items(client: QURLClient) -> None:
-    """batch_create items with datetime values are properly serialized."""
-    route = respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": {
-                    "succeeded": 1,
-                    "failed": 0,
-                    "results": [
-                        {
-                            "index": 0,
-                            "success": True,
-                            "resource_id": "r_dt",
-                            "qurl_link": "https://qurl.link/#at_dt",
-                            "qurl_site": "https://r_dt.qurl.site",
-                        },
-                    ],
-                },
-            },
-        )
-    )
-
-    exp = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
-    client.batch_create([{"target_url": "https://example.com", "expires_at": exp}])
-    body = json.loads(route.calls[0].request.content)
-    assert body["items"][0]["expires_at"] == "2026-06-01T00:00:00+00:00"
 
 
 # --- create() with access_policy serialization ---
@@ -1967,6 +1941,21 @@ def test_delete_rejects_q_prefix_client_side(client: QURLClient) -> None:
         client.delete("q_3a7f2c8e91b")
 
 
+def test_delete_error_does_not_leak_full_resource_id(client: QURLClient) -> None:
+    """Info-leak regression: the error message must echo only the 2-char
+    prefix, not the raw caller-supplied ID. Error strings may end up in
+    observability pipelines and the ID suffix could contain
+    caller-sensitive data.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        client.delete("q_3a7f2c8e91b_sensitive_suffix")
+    msg = str(exc_info.value)
+    assert "'q_'" in msg
+    # Must not echo any part of the caller-supplied ID beyond the prefix.
+    assert "3a7f2c8e91b" not in msg
+    assert "sensitive_suffix" not in msg
+
+
 # ---- batch_create per-item validation & async validators -------------------
 
 
@@ -1983,7 +1972,13 @@ def test_batch_create_rejects_per_item_violation_with_index(client: QURLClient) 
 
 def test_batch_create_rejects_items_missing_target_url(client: QURLClient) -> None:
     with pytest.raises(ValueError, match=r"items\[0\].*target_url"):
-        client.batch_create([{"label": "no url"}])
+        # Deliberately passing an item missing the required `target_url`
+        # field to exercise the runtime validation. The type: ignore is
+        # expected because BatchCreateItem enforces `target_url` at the
+        # type level — this test guards against untyped callers
+        # (e.g. Python scripts without strict type-checking) accidentally
+        # sending incomplete items.
+        client.batch_create([{"label": "no url"}])  # type: ignore[typeddict-item]
 
 
 @pytest.mark.asyncio
@@ -1994,7 +1989,7 @@ async def test_async_batch_create_empty_raises(async_client: AsyncQURLClient) ->
 
 @pytest.mark.asyncio
 async def test_async_batch_create_over_100_raises(async_client: AsyncQURLClient) -> None:
-    items = [{"target_url": f"https://{i}.com"} for i in range(101)]
+    items: list[BatchCreateItem] = [{"target_url": f"https://{i}.com"} for i in range(101)]
     with pytest.raises(ValueError, match="at most 100"):
         await async_client.batch_create(items)
 

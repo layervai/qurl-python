@@ -7,7 +7,7 @@ validation, body construction, and error handling must match exactly.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -42,12 +42,13 @@ from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
 if TYPE_CHECKING:
     import builtins
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
     from datetime import datetime
 
     from layerv_qurl.types import (
         QURL,
         AccessPolicy,
+        BatchCreateItem,
         BatchCreateOutput,
         CreateOutput,
         ListOutput,
@@ -377,6 +378,12 @@ class QURLClient:
                 "tags) must be provided"
             )
         validate_update_input(description=description, tags=tags)
+        # `build_body` strips top-level ``None`` only — falsy values like
+        # ``tags=[]`` and ``description=""`` are preserved. This is
+        # load-bearing: ``tags=[]`` is an intentional "clear all tags"
+        # API operation and ``description=""`` clears the description.
+        # A future refactor that adds a truthiness check here would
+        # silently drop both.
         body = build_body(
             {
                 "extend_by": extend_by,
@@ -446,7 +453,7 @@ class QURLClient:
 
     def batch_create(
         self,
-        items: builtins.list[dict[str, Any]],
+        items: Sequence[BatchCreateItem],
     ) -> BatchCreateOutput:
         """Create multiple QURLs at once (1-100 items).
 
@@ -497,7 +504,11 @@ class QURLClient:
                 ) from exc
             except ValueError as exc:
                 raise ValueError(f"batch_create items[{i}]: {exc}") from exc
-        serialized = [build_body(item) for item in items]
+        # `BatchCreateItem` is structurally a `dict[str, Any]` at runtime —
+        # TypedDicts compile to plain dicts and carry no runtime overhead.
+        # The `cast` narrows the type for `build_body` without any runtime
+        # conversion.
+        serialized = [build_body(cast("dict[str, Any]", item)) for item in items]
         # HTTP 400 carries structured per-item errors on this endpoint —
         # whitelist it so the generic error path doesn't swallow the body.
         resp = self._request(

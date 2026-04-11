@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal, TypedDict
 
 #: Valid resource-level status values. Resources only have two states per
 #: the OpenAPI spec (``QurlData.status``) and the server code. Accepts known
@@ -221,3 +221,46 @@ class BatchCreateOutput:
     succeeded: int = 0
     failed: int = 0
     results: list[BatchItemResult] = field(default_factory=list)
+
+
+# ---- batch_create input shape -------------------------------------------
+# TypedDicts for :meth:`QURLClient.batch_create` items. Split into a
+# required-fields base class and an `total=False` subclass so callers on
+# Python 3.10 don't need ``typing.Required`` (added in 3.11) or a
+# ``typing_extensions`` dependency. Fields mirror the corresponding
+# keyword arguments on :meth:`QURLClient.create` one-for-one; the
+# single-create endpoint and the batch endpoint share the same
+# ``CreateQurlRequest`` schema in the OpenAPI spec.
+#
+# The runtime behavior is unchanged — ``batch_create`` still iterates
+# items as plain dicts and passes them through ``build_body`` /
+# ``_serialize_value``. The TypedDict is purely for IDE autocomplete and
+# static type checking.
+
+
+class _BatchCreateItemRequired(TypedDict):
+    target_url: str
+
+
+class BatchCreateItem(_BatchCreateItemRequired, total=False):
+    """Input shape for a single item in :meth:`QURLClient.batch_create`.
+
+    ``target_url`` is required; every other field is optional and mirrors
+    the corresponding keyword argument on :meth:`QURLClient.create`.
+
+    ``access_policy`` is typed as ``dict[str, Any]`` for maximum
+    flexibility — callers may pass either a plain dict matching the
+    ``AccessPolicy`` schema or construct an :class:`AccessPolicy`
+    dataclass and let ``_serialize_value`` recursively convert it at
+    body-build time. Both work at runtime; the loose type accommodates
+    both patterns without forcing a concrete dataclass construction on
+    callers who prefer dicts.
+    """
+
+    expires_in: str
+    label: str
+    one_time_use: bool
+    max_sessions: int
+    session_duration: str
+    access_policy: dict[str, Any]
+    custom_domain: str

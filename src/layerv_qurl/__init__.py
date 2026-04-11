@@ -22,6 +22,7 @@ from layerv_qurl.types import (
     AccessPolicy,
     AccessToken,
     AIAgentPolicy,
+    BatchCreateItem,
     BatchCreateOutput,
     BatchItemError,
     BatchItemResult,
@@ -52,6 +53,7 @@ __all__ = [
     "ValidationError",
     # Types
     "AIAgentPolicy",
+    "BatchCreateItem",
     "BatchCreateOutput",
     "BatchItemError",
     "BatchItemResult",
