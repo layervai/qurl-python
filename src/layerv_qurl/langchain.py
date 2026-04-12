@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 try:
     from langchain_core.tools import BaseTool
+
     _HAS_LANGCHAIN = True
 except ImportError:
     _HAS_LANGCHAIN = False
@@ -35,8 +36,7 @@ class CreateQURLTool(BaseTool):
     description: str = (
         "Create a QURL — a secure, time-limited access link. "
         "Input should be a JSON string with 'target_url' (required), "
-        "and optionally 'expires_in' (e.g. '24h', '7d'), 'description', "
-        "'one_time_use' (bool), 'max_sessions' (int)."
+        "and optionally 'expires_in' (e.g. '24h', '7d'), 'label'."
     )
     client: Any = None  # QURLClient, typed as Any for Pydantic compatibility
 
@@ -44,17 +44,13 @@ class CreateQURLTool(BaseTool):
         self,
         target_url: str,
         expires_in: str = "24h",
-        description: str | None = None,
-        one_time_use: bool | None = None,
-        max_sessions: int | None = None,
+        label: str | None = None,
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> str:
         result = self.client.create(
             target_url=target_url,
             expires_in=expires_in,
-            description=description,
-            one_time_use=one_time_use,
-            max_sessions=max_sessions,
+            label=label,
         )
         return (
             f"Created QURL {result.resource_id}\n"
@@ -95,9 +91,7 @@ class ListQURLsTool(BaseTool):
     """List active QURL links."""
 
     name: str = "list_qurls"
-    description: str = (
-        "List active QURL links. Optionally filter by status (active, expired, revoked, consumed)."
-    )
+    description: str = "List active QURL links. Optionally filter by status (active, revoked)."
     client: Any = None
 
     def _run(

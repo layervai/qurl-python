@@ -36,6 +36,13 @@ dev = [
     "respx>=0.22",
     "ruff>=0.11",
     "mypy>=1.14",
+    # Pull the optional langchain integration into the default dev install
+    # via the self-reference pattern. Single source of truth for the
+    # langchain-core version constraint lives in the `[langchain]` extra
+    # above — updating it once keeps dev and CI in lockstep. Without
+    # langchain-core, local mypy produces spurious errors about a missing
+    # module and an unused type-ignore in langchain.py.
+    "layerv-qurl[langchain]",
 ]
 
 [project.urls]

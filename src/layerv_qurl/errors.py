@@ -6,6 +6,28 @@ from __future__ import annotations
 class QURLError(Exception):
     """Error raised for API-level errors (4xx/5xx responses).
 
+    Carries the full RFC 7807 Problem Details shape when the API provides
+    it: ``status``, ``code``, ``title``, ``detail``, plus the optional
+    ``type`` (problem-type URI) and ``instance`` (occurrence URI).
+
+    .. note::
+
+       ``detail`` is **always non-empty** on the instance — the
+       constructor falls back to ``title`` when the API omits detail
+       (RFC 7807 allows this). Use ``code`` / ``status`` / ``type`` to
+       distinguish between error cases rather than inspecting ``detail``
+       for the "was it absent?" signal.
+
+    .. note::
+
+       ``type`` shadows Python's built-in ``type()`` inside method
+       bodies. This is intentional — the name mirrors the RFC 7807 field
+       name and matches the other SDKs (``qurl-typescript``,
+       ``qurl-mcp``). The shadowing only matters inside ``QURLError``
+       method definitions; external code can still use ``type(err)``
+       safely since attribute access doesn't shadow the builtin in that
+       scope.
+
     Catch specific subclasses for fine-grained handling::
 
         try:
@@ -18,6 +40,8 @@ class QURLError(Exception):
             print(f"Rate limited — retry in {e.retry_after}s")
         except QURLError as e:
             print(f"API error: {e.status} {e.code}")
+            if e.type:
+                print(f"  problem type: {e.type}")
     """
 
     def __init__(
@@ -26,16 +50,27 @@ class QURLError(Exception):
         status: int,
         code: str,
         title: str,
-        detail: str,
+        detail: str | None = None,
+        type: str | None = None,
+        instance: str | None = None,
         invalid_fields: dict[str, str] | None = None,
         request_id: str | None = None,
         retry_after: int | None = None,
     ) -> None:
-        super().__init__(f"{title} ({status}): {detail}")
+        # RFC 7807 leaves `detail` optional, and `title` is always present.
+        # When `detail` is `None` (omitted), fall back to `title` so the
+        # Exception message stays meaningful instead of producing
+        # "Title (403): None". An explicit empty string is stored as-is —
+        # the caller opted in. Uses `is not None` rather than truthiness
+        # so `detail=""` is distinguishable from "not provided".
+        message_detail = detail if detail is not None else title
+        super().__init__(f"{title} ({status}): {message_detail}")
         self.status = status
         self.code = code
         self.title = title
-        self.detail = detail
+        self.detail = message_detail
+        self.type = type
+        self.instance = instance
         self.invalid_fields = invalid_fields
         self.request_id = request_id
         self.retry_after = retry_after

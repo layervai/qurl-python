@@ -10,6 +10,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # Don't cancel sibling matrix legs if one fails — we want full
+      # visibility into which Python versions broke.
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.12", "3.13"]
     steps:
@@ -22,18 +25,40 @@ jobs:
         run: pip install -e ".[dev,langchain]"
       - name: Lint
         run: ruff check
-      - name: Type check
-        if: matrix.python-version == '3.12'
-        run: mypy src/
       - name: Test
         run: pytest tests/ -v
+
+  # ============================================================================
+  # TYPE CHECK - Dedicated mypy job
+  # ============================================================================
+  # Runs in its own job so the gate can't silently vanish if the test
+  # matrix is restructured. Pins to the minimum supported Python version
+  # (matching `python_version` in pyproject.toml) so the strictness stays
+  # aligned with what the SDK promises to consumers.
+  type-check:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Python 3.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        # Use the full dev+langchain extras so mypy sees the optional
+        # langchain integration's real types. Without langchain-core
+        # installed, mypy reports spurious errors about missing modules
+        # and unused type-ignore comments in src/layerv_qurl/langchain.py.
+        run: pip install -e ".[dev,langchain]"
+      - name: Run mypy
+        run: mypy src/
 
   # ============================================================================
   # NOTIFY - Send Slack notification on build completion
   # ============================================================================
   notify:
     name: Notify
-    needs: [test]
+    needs: [test, type-check]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -43,6 +68,7 @@ jobs:
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
           TEST_RESULT: ${{ needs.test.result }}
+          TYPE_CHECK_RESULT: ${{ needs.type-check.result }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
           # All github context moved to env to prevent script injection
           # via crafted branch names or actor names containing shell metacharacters.
@@ -77,14 +103,27 @@ jobs:
             *) TRIGGER_TEXT="$TRIGGER" ;;
           esac
 
+          # Aggregate status across both gates (test matrix + mypy). A
+          # mypy failure is a red build even if every python matrix leg
+          # passed, so the Slack message must reflect the worst of the two.
+          if [[ "$TEST_RESULT" == "success" && "$TYPE_CHECK_RESULT" == "success" ]]; then
+            AGGREGATE="success"
+          elif [[ "$TEST_RESULT" == "failure" || "$TYPE_CHECK_RESULT" == "failure" ]]; then
+            AGGREGATE="failure"
+          elif [[ "$TEST_RESULT" == "cancelled" || "$TYPE_CHECK_RESULT" == "cancelled" ]]; then
+            AGGREGATE="cancelled"
+          else
+            AGGREGATE="incomplete"
+          fi
+
           # Determine status
-          if [[ "$TEST_RESULT" == "success" ]]; then
+          if [[ "$AGGREGATE" == "success" ]]; then
             COLOR="#36a64f"; EMOJI="white_check_mark"
             HEADER="QURL Python SDK Build"; STATUS_TEXT="successful"
-          elif [[ "$TEST_RESULT" == "failure" ]]; then
+          elif [[ "$AGGREGATE" == "failure" ]]; then
             COLOR="#dc3545"; EMOJI="x"
             HEADER="QURL Python SDK Build"; STATUS_TEXT="failed"
-          elif [[ "$TEST_RESULT" == "cancelled" ]]; then
+          elif [[ "$AGGREGATE" == "cancelled" ]]; then
             COLOR="#ffc107"; EMOJI="warning"
             HEADER="QURL Python SDK Build"; STATUS_TEXT="cancelled"
           else
@@ -92,11 +131,17 @@ jobs:
             HEADER="QURL Python SDK"; STATUS_TEXT="incomplete"
           fi
 
-          # Determine test emoji
+          # Determine per-gate emoji so the Slack message shows which
+          # gate failed when the aggregate is red.
           case "$TEST_RESULT" in
             success) TEST_EMOJI=":white_check_mark:" ;;
             failure) TEST_EMOJI=":x:" ;;
             *) TEST_EMOJI=":warning:" ;;
+          esac
+          case "$TYPE_CHECK_RESULT" in
+            success) TYPE_CHECK_EMOJI=":white_check_mark:" ;;
+            failure) TYPE_CHECK_EMOJI=":x:" ;;
+            *) TYPE_CHECK_EMOJI=":warning:" ;;
           esac
 
           # Extract first line of commit message (safe for any content)
@@ -114,6 +159,7 @@ jobs:
             --arg trigger "$TRIGGER_TEXT" \
             --arg actor "$GH_ACTOR" \
             --arg test_emoji "$TEST_EMOJI" \
+            --arg type_check_emoji "$TYPE_CHECK_EMOJI" \
             --arg commit "$FIRST_LINE" \
             --arg commit_url "$COMMIT_URL" \
             --arg workflow_url "$WORKFLOW_URL" \
@@ -123,6 +169,7 @@ jobs:
                 {type: "mrkdwn", text: ("*Branch:*\n`\($branch)` (\($sha))")},
                 {type: "mrkdwn", text: ("*Trigger:*\n\($trigger) by \($actor)")},
                 {type: "mrkdwn", text: ("*Tests:*\n\($test_emoji)")},
+                {type: "mrkdwn", text: ("*Type check:*\n\($type_check_emoji)")},
                 {type: "mrkdwn", text: "*Python:*\n3.10, 3.12, 3.13"}
               ]},
               {type: "section", text: {type: "mrkdwn", text: ("*Commit:* `\($commit)`")}},

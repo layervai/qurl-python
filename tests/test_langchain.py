@@ -1,11 +1,18 @@
-"""Tests for the LangChain tool integration."""
+"""Tests for the LangChain tool integration.
+
+Requires the ``langchain`` extra: ``pip install layerv-qurl[langchain]``.
+All tests are skipped when ``langchain-core`` is not installed.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import pytest
+
 from layerv_qurl.langchain import (
+    _HAS_LANGCHAIN,
     CreateQURLTool,
     DeleteQURLTool,
     ListQURLsTool,
@@ -19,6 +26,8 @@ from layerv_qurl.types import (
     ListOutput,
     ResolveOutput,
 )
+
+pytestmark = pytest.mark.skipif(not _HAS_LANGCHAIN, reason="langchain-core not installed")
 
 
 def _mock_client() -> MagicMock:
@@ -42,9 +51,7 @@ def test_create_qurl_tool() -> None:
     client.create.assert_called_once_with(
         target_url="https://example.com",
         expires_in="24h",
-        description=None,
-        one_time_use=None,
-        max_sessions=None,
+        label=None,
     )
 
 
