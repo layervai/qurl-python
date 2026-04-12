@@ -134,10 +134,7 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
-# ---- Spec-derived input validation --------------------------------------
-# These mirror the constraints documented on each request schema in
-# qurl/api/openapi.yaml so obvious mistakes fail fast with a ValueError
-# instead of round-tripping to the API and coming back as a generic 400.
+# ---- Spec-derived input validation (mirrors openapi.yaml constraints) ----
 
 MAX_TARGET_URL = 2048
 MAX_LABEL = 500
@@ -410,13 +407,7 @@ def parse_quota(data: dict[str, Any]) -> Quota:
             total_accesses=usage_data.get("total_accesses", 0),
         )
     return Quota(
-        # Fall back to the same sentinel the dataclass default uses
-        # (see ``Quota.plan`` in types.py) so a malformed API response
-        # that omits the field produces a consistent "not-yet-populated"
-        # value regardless of whether the Quota was constructed via
-        # parse_quota or directly. In practice the /v1/quota endpoint
-        # always returns a populated plan string, so this fallback is
-        # only hit for malformed responses or internal bootstrap paths.
+        # Match the Quota dataclass default for consistency on malformed responses.
         plan=data.get("plan", "unknown"),
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
@@ -457,22 +448,14 @@ def _validate_batch_create_shape(data: Any) -> None:
     """
 
     def _fail(reason: str, *, top_level_keys: list[str] | None = None) -> ValidationError:
-        # DEBUG log carries structural hints (type + top-level key names
-        # only — JSON keys come from the published schema, not user
-        # data) so operators can triage shape-guard trips without
-        # leaking raw body content into logs.
         logger.debug(
             "batch_create shape guard tripped: %s (type=%s, top_level_keys=%s)",
             reason,
             type(data).__name__,
             top_level_keys,
         )
-        # Uses `ValidationError` (subclass) not bare `QURLError` so
-        # `except ValidationError` catches shape-guard trips; `code=
-        # "unexpected_response"` distinguishes from client-side
-        # preflight (`client_validation`). `status=0` is the SDK
-        # convention for all client-detected failures (not real HTTP
-        # status). See qurl-typescript's `unexpectedResponseError`.
+        # ValidationError with code="unexpected_response" (not "client_validation")
+        # so callers can distinguish server shape mismatches from preflight errors.
         return ValidationError(
             status=0,
             code="unexpected_response",
@@ -671,9 +654,6 @@ def build_list_params(
             raise ValueError(
                 f"limit: must be an integer between 1 and 100 (got {limit})"
             )
-    # ``status`` is a QURLStatus (Literal | str) — covered by the ``str`` arm.
-    # Ordered most-specific to least-specific: datetime/int are concrete
-    # types, str is the widening arm, None is the "drop" sentinel.
     pairs: dict[str, datetime | int | str | None] = {
         "limit": limit,
         "cursor": cursor,
