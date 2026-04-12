@@ -518,6 +518,37 @@ def test_update_combined(client: QURLClient) -> None:
 
 
 @respx.mock
+def test_update_serializes_datetime_expires_at(client: QURLClient) -> None:
+    """Integration test: a ``datetime`` object passed as ``expires_at``
+    is serialized to an ISO 8601 string in the wire body via the
+    ``build_body → _serialize_value`` pipeline. The unit test
+    ``test_serialize_value_datetime`` covers the function directly;
+    this closes the loop through the full client method path.
+    """
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "expires_at": "2026-04-01T00:00:00+00:00",
+                },
+            },
+        )
+    )
+
+    client.update(
+        "r_abc",
+        expires_at=datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc),
+    )
+    body = json.loads(route.calls[0].request.content)
+    assert body["expires_at"] == "2026-04-01T00:00:00+00:00"
+
+
+@respx.mock
 def test_mint_link(client: QURLClient) -> None:
     respx.post(f"{BASE_URL}/v1/qurls/r_abc123def45/mint_link").mock(
         return_value=httpx.Response(
