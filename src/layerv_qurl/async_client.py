@@ -95,13 +95,12 @@ class AsyncQURLClient:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._max_retries = max_retries
-        self._user_agent = user_agent or default_user_agent()
         self._client = http_client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = http_client is None
         self._base_headers: dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
-            "User-Agent": self._user_agent,
+            "User-Agent": user_agent or default_user_agent(),
         }
 
     def __repr__(self) -> str:
@@ -517,10 +516,6 @@ class AsyncQURLClient:
                 ) from exc
             except ValueError as exc:
                 raise ValueError(f"batch_create items[{i}]: {exc}") from exc
-        # `BatchCreateItem` is structurally a `dict[str, Any]` at runtime —
-        # TypedDicts compile to plain dicts and carry no runtime overhead.
-        # The `cast` narrows the type for `build_body` without any runtime
-        # conversion.
         serialized = [build_body(cast("dict[str, Any]", item)) for item in items]
         # HTTP 400 carries structured per-item errors on this endpoint —
         # whitelist it so the generic error path doesn't swallow the body.
@@ -589,35 +584,11 @@ class AsyncQURLClient:
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
 
-        ``allow_statuses`` lets a caller opt specific non-2xx codes out of
-        the default raise-on-error path and receive the parsed body
-        instead. This is used by :meth:`batch_create`, where the API
-        returns a structured ``BatchCreateOutput`` on HTTP 400 (all items
-        rejected) — raising would drop the per-item errors.
-
-        **`allow_statuses` takes precedence over retries.** The check
-        order in the response-handling loop is:
-
-        1. ``response.status_code < 400 or in allow_statuses`` →
-           return the parsed body immediately as a success.
-        2. Otherwise, build an error and check the retry filter
-           (``RETRYABLE_STATUS_POST`` for POST, ``RETRYABLE_STATUS``
-           for everything else).
-
-        This means a status listed in ``allow_statuses`` is returned
-        to the caller **without ever running through the retry
-        filter**, even if that status would normally be retried. For
-        the only current use case (``batch_create`` with
-        ``allow_statuses=(400,)``) the interaction is harmless because
-        400 isn't in any retry set — a 400 carries the authoritative
-        per-item errors and retrying would just reproduce them.
-
-        Callers adding a *retryable* status (e.g. 429 or 5xx) to
-        ``allow_statuses`` should be aware this bypasses the SDK's
-        retry path entirely: the status is surfaced on the first
-        attempt with no transparent backoff. If that's not what you
-        want, leave the status out of ``allow_statuses`` and let the
-        normal retry logic handle it.
+        ``allow_statuses`` opts specific non-2xx codes out of the
+        raise-on-error path, returning the parsed body instead. Used by
+        :meth:`batch_create` (``allow_statuses=(400,)``) so per-item
+        errors aren't swallowed. Allowed statuses bypass the retry
+        filter entirely — they're returned on the first attempt.
         """
         url = f"{self._base_url}{path}"
         last_error: Exception | None = None
