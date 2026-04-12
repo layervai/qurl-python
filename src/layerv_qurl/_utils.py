@@ -277,8 +277,12 @@ def require_resource_id_prefix(resource_id: str, operation: str = "delete") -> N
 def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
     """Parse an AccessPolicy from API response data."""
     ai_policy = None
-    if data.get("ai_agent_policy") is not None:
-        ap = data["ai_agent_policy"]
+    ap = data.get("ai_agent_policy")
+    # Guard against non-dict values (e.g. API returning a bare string
+    # or boolean for ai_agent_policy). Without this, `.get("block_all")`
+    # would raise AttributeError. Consistent with the defensive posture
+    # in `_validate_batch_create_shape`.
+    if ap is not None and isinstance(ap, dict):
         ai_policy = AIAgentPolicy(
             block_all=ap.get("block_all"),
             deny_categories=ap.get("deny_categories"),
@@ -653,6 +657,20 @@ def build_list_params(
     expires_after: datetime | str | None = None,
 ) -> dict[str, str]:
     """Build query params for list endpoints, dropping None values."""
+    # Per the OpenAPI spec (GET /v1/qurls → limit: integer, minimum: 1,
+    # maximum: 100, default: 20). Client-side validation catches obvious
+    # mistakes before a round-trip, matching the existing style for
+    # max_sessions, tag count, URL length. Omitting `limit` (None) lets
+    # the server apply its default page size.
+    if limit is not None:
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            raise ValueError(
+                f"limit: must be an integer between 1 and 100 (got {type(limit).__name__})"
+            )
+        if limit < 1 or limit > 100:
+            raise ValueError(
+                f"limit: must be an integer between 1 and 100 (got {limit})"
+            )
     # ``status`` is a QURLStatus (Literal | str) — covered by the ``str`` arm.
     # Ordered most-specific to least-specific: datetime/int are concrete
     # types, str is the widening arm, None is the "drop" sentinel.

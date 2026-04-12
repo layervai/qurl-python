@@ -50,7 +50,7 @@ class QURLError(Exception):
         status: int,
         code: str,
         title: str,
-        detail: str = "",
+        detail: str | None = None,
         type: str | None = None,
         instance: str | None = None,
         invalid_fields: dict[str, str] | None = None,
@@ -58,9 +58,12 @@ class QURLError(Exception):
         retry_after: int | None = None,
     ) -> None:
         # RFC 7807 leaves `detail` optional, and `title` is always present.
-        # Falling back to title keeps the Exception message meaningful
-        # instead of producing "Title (403): " with a trailing empty string.
-        message_detail = detail or title
+        # When `detail` is `None` (omitted), fall back to `title` so the
+        # Exception message stays meaningful instead of producing
+        # "Title (403): None". An explicit empty string is stored as-is —
+        # the caller opted in. Uses `is not None` rather than truthiness
+        # so `detail=""` is distinguishable from "not provided".
+        message_detail = detail if detail is not None else title
         super().__init__(f"{title} ({status}): {message_detail}")
         self.status = status
         self.code = code

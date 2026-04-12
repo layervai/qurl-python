@@ -1591,6 +1591,92 @@ def test_batch_create_all_succeed(client: QURLClient) -> None:
 
 
 @respx.mock
+def test_batch_create_207_multi_status(client: QURLClient) -> None:
+    """HTTP 207 Multi-Status routes through the success path (< 400).
+
+    The success path in ``_raw_request`` is gated by
+    ``response.status_code < 400``, so 207 flows through naturally like
+    200/201. This test locks in the status routing against a future
+    refactor that might accidentally narrow the range (e.g. ``== 200``
+    or ``< 300``). Without this, a partial-success 207 response
+    could be misclassified as an error.
+    """
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            207,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 1,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_multi",
+                            "qurl_link": "https://qurl.link/#at_multi",
+                            "qurl_site": "https://r_multi.qurl.site",
+                        },
+                        {
+                            "index": 1,
+                            "success": False,
+                            "error": {
+                                "code": "validation_error",
+                                "message": "items[1]: target_url must be HTTPS",
+                            },
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    result = client.batch_create(
+        [
+            {"target_url": "https://a.com"},
+            {"target_url": "https://b.com"},
+        ]
+    )
+    assert result.succeeded == 1
+    assert result.failed == 1
+    assert result.results[0].success is True
+    assert result.results[0].resource_id == "r_multi"
+    assert result.results[1].success is False
+
+
+@respx.mock
+async def test_async_batch_create_207_multi_status(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror: HTTP 207 Multi-Status routes through success path."""
+    respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            207,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_async207",
+                            "qurl_link": "https://qurl.link/#at_a207",
+                            "qurl_site": "https://r_async207.qurl.site",
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    result = await async_client.batch_create(
+        [{"target_url": "https://a.com"}]
+    )
+    assert result.succeeded == 1
+    assert result.results[0].resource_id == "r_async207"
+
+
+@respx.mock
 def test_batch_create_partial_failure(client: QURLClient) -> None:
     """batch_create() correctly parses partial failures."""
     respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
@@ -2094,6 +2180,56 @@ def test_create_with_minimal_ai_agent_policy_only(client: QURLClient) -> None:
     assert "deny_categories" not in body["access_policy"]["ai_agent_policy"]
 
 
+# --- _parse_access_policy deserialization edge cases ---
+
+
+def test_parse_access_policy_null_ai_agent_policy() -> None:
+    """``ai_agent_policy: null`` / missing yields ``ai_agent_policy=None``.
+
+    The happy-path test (test_create_with_access_policy) covers a
+    populated AIAgentPolicy, but the None branch wasn't directly
+    asserted. This locks in that null and missing are both normalised
+    to ``None``, not to an empty ``AIAgentPolicy()``.
+    """
+    import layerv_qurl._utils as utils
+
+    # Explicit null
+    policy = utils._parse_access_policy(
+        {"ip_allowlist": ["10.0.0.0/8"], "ai_agent_policy": None}
+    )
+    assert policy.ai_agent_policy is None
+    assert policy.ip_allowlist == ["10.0.0.0/8"]
+
+    # Key missing entirely
+    policy2 = utils._parse_access_policy({"ip_denylist": ["192.168.0.0/16"]})
+    assert policy2.ai_agent_policy is None
+    assert policy2.ip_denylist == ["192.168.0.0/16"]
+
+
+def test_parse_access_policy_non_dict_ai_agent_policy_is_ignored() -> None:
+    """Non-dict ``ai_agent_policy`` (e.g. bare string or bool) is ignored.
+
+    Without the ``isinstance(ap, dict)`` guard in ``_parse_access_policy``,
+    ``.get("block_all")`` would raise ``AttributeError`` on a non-dict
+    value. This locks in the defensive posture against unexpected API
+    shapes — a string or boolean should be treated as "no policy"
+    rather than crashing the entire response parser.
+    """
+    import layerv_qurl._utils as utils
+
+    # Bare string
+    policy = utils._parse_access_policy({"ai_agent_policy": "unexpected_string"})
+    assert policy.ai_agent_policy is None
+
+    # Boolean
+    policy2 = utils._parse_access_policy({"ai_agent_policy": True})
+    assert policy2.ai_agent_policy is None
+
+    # Integer
+    policy3 = utils._parse_access_policy({"ai_agent_policy": 42})
+    assert policy3.ai_agent_policy is None
+
+
 # --- _serialize_value end-to-end with nested dataclasses ---
 
 
@@ -2382,6 +2518,32 @@ def test_update_rejects_access_policy_kwarg(client: QURLClient) -> None:
         client.update("r_abc", access_policy={"ai_agent_policy": "allow"})  # type: ignore[call-arg]
 
 
+def test_create_rejects_expires_at_kwarg(client: QURLClient) -> None:
+    """Lock in that ``expires_at`` was removed from ``create()``.
+
+    Per the OpenAPI spec's ``CreateQurlRequest`` schema, creation accepts
+    only ``expires_in`` (relative duration), not ``expires_at`` (absolute
+    timestamp). The old ``expires_at`` parameter was removed in this PR.
+    Like the ``access_policy`` invariant guard on ``update()``, this test
+    is an explicit safety net: a future refactor adding ``**kwargs``
+    would silently re-accept the removed parameter. Callers needing an
+    absolute expiry should use ``create(expires_in=...) + update(expires_at=...)``.
+    """
+    with pytest.raises(TypeError, match="expires_at"):
+        client.create(target_url="https://example.com", expires_at="2026-04-01T00:00:00Z")  # type: ignore[call-arg]
+
+
+async def test_async_create_rejects_expires_at_kwarg(
+    async_client: AsyncQURLClient,
+) -> None:
+    """Async mirror of ``test_create_rejects_expires_at_kwarg``."""
+    with pytest.raises(TypeError, match="expires_at"):
+        await async_client.create(  # type: ignore[call-arg]
+            target_url="https://example.com",
+            expires_at="2026-04-01T00:00:00Z",
+        )
+
+
 # ---- Spec-derived input validation (mint_link) -----------------------------
 
 
@@ -2426,6 +2588,68 @@ def test_delete_error_does_not_leak_full_resource_id(client: QURLClient) -> None
     # Must not echo any part of the caller-supplied ID beyond the prefix.
     assert "3a7f2c8e91b" not in msg
     assert "sensitive_suffix" not in msg
+
+
+# ---- list() limit validation (OpenAPI spec: integer, 1-100) ------------------
+
+
+def test_list_rejects_limit_zero(client: QURLClient) -> None:
+    """Per OpenAPI (GET /v1/qurls → limit: minimum: 1, maximum: 100)."""
+    with pytest.raises(ValueError, match="1 and 100"):
+        client.list(limit=0)
+
+
+def test_list_rejects_limit_above_100(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="1 and 100"):
+        client.list(limit=101)
+
+
+def test_list_rejects_negative_limit(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="1 and 100"):
+        client.list(limit=-5)
+
+
+def test_list_rejects_non_integer_limit(client: QURLClient) -> None:
+    """Floats pass Python's ``int | None`` type annotation at runtime
+    but violate the spec's ``type: integer``."""
+    with pytest.raises(ValueError, match="integer"):
+        client.list(limit=2.5)  # type: ignore[arg-type]
+
+
+def test_list_rejects_bool_limit(client: QURLClient) -> None:
+    """``bool`` is a subclass of ``int`` — must be explicitly rejected
+    like ``_require_max_sessions_in_range``."""
+    with pytest.raises(ValueError):
+        client.list(limit=True)  # type: ignore[arg-type]
+
+
+@respx.mock
+def test_list_accepts_limit_at_boundaries(client: QURLClient) -> None:
+    """Boundary regression: 1 and 100 are both valid."""
+    respx.get(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [], "meta": {"has_more": False}},
+        )
+    )
+    result_1 = client.list(limit=1)
+    assert result_1.has_more is False
+    result_100 = client.list(limit=100)
+    assert result_100.has_more is False
+
+
+@respx.mock
+def test_list_omitted_limit_uses_server_default(client: QURLClient) -> None:
+    """Omitting ``limit`` entirely must not trip the validator and must
+    not produce a ``limit=`` query param."""
+    route = respx.get(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [], "meta": {"has_more": False}},
+        )
+    )
+    client.list()
+    assert "limit" not in str(route.calls[0].request.url)
 
 
 # ---- batch_create per-item validation & async validators -------------------
