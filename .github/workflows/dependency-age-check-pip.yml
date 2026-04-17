@@ -1,0 +1,20 @@
+# Dependency Age Check (pip)
+# Thin shim; logic lives in ops-routines reusable workflow.
+name: Dependency Age Check (pip)
+
+on:
+  pull_request:
+    paths:
+      - "**/pyproject.toml"
+      - "**/requirements*.txt"
+      - "**/poetry.lock"
+      - "**/Pipfile.lock"
+  workflow_dispatch:
+
+jobs:
+  age-check:
+    uses: layervai/ops-routines/.github/workflows/age-check-pip.yml@main
+    with:
+      working_directory: .
+    permissions:
+      contents: read
