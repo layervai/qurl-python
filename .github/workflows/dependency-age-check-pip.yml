@@ -7,13 +7,11 @@ on:
     paths:
       - "**/pyproject.toml"
       - "**/requirements*.txt"
-      - "**/poetry.lock"
-      - "**/Pipfile.lock"
   workflow_dispatch:
 
 jobs:
   age-check:
-    uses: layervai/ops-routines/.github/workflows/age-check-pip.yml@main
+    uses: layervai/ops-routines/.github/workflows/age-check-pip.yml@61d51059f8a3b2654694bada12a542b2be8ae17c # v0.1.0
     with:
       working_directory: .
     permissions:

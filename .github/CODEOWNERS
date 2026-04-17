@@ -1,7 +1,3 @@
 # CODEOWNERS - https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 # Default owners for everything
 * @layervai/platform
-
-# CI and repo config require platform team review
-/.github/ @layervai/platform
-/.github/workflows/ @layervai/platform

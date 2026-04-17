@@ -11,6 +11,6 @@ on:
 
 jobs:
   age-check:
-    uses: layervai/ops-routines/.github/workflows/age-check-actions.yml@main
+    uses: layervai/ops-routines/.github/workflows/age-check-actions.yml@61d51059f8a3b2654694bada12a542b2be8ae17c # v0.1.0
     permissions:
       contents: read
