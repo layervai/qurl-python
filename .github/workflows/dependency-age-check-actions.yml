@@ -12,7 +12,9 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cancel superseded runs on the same PR branch.
+# Cancel superseded runs on the same PR branch — the reusable workflow
+# makes sequential registry calls; no reason to let two race for an
+# outdated diff.
 concurrency:
   group: dep-age-actions-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -33,6 +35,11 @@ jobs:
     # job always runs. That's the desired behavior: manual runs
     # shouldn't be bypassable via PR labels.
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'age-check-bypass') }}
+    # Note: `timeout-minutes` is intentionally NOT set here. Per GH
+    # docs (https://docs.github.com/en/actions/using-workflows/reusing-workflows#supported-keywords-for-jobs-that-call-a-reusable-workflow)
+    # only if/name/needs/permissions/secrets/strategy/uses/with/concurrency
+    # are valid on a job that calls a reusable workflow. The reusable
+    # workflow itself sets `timeout-minutes: 5` internally.
     uses: layervai/ops-routines/.github/workflows/age-check-actions.yml@2b9cb3575a74394cf56092d33ee4fdbab30afc9e # v0.1.4
     with:
       min_age_days: 7
