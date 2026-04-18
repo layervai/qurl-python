@@ -9,10 +9,6 @@ on:
       - "**/poetry.lock"
       - "**/requirements*.txt"
       - "**/requirements/*.txt"
-      - "pyproject.toml"
-      - "poetry.lock"
-      - "requirements*.txt"
-      - "requirements/*.txt"
   workflow_dispatch:
 
 # Cancel superseded runs on the same PR branch — pypi.org calls are

@@ -30,6 +30,6 @@ jobs:
     # job always runs. That's the desired behavior: manual runs
     # shouldn't be bypassable via PR labels.
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'age-check-bypass') }}
-    uses: layervai/ops-routines/.github/workflows/age-check-actions.yml@435d5be4e82fcf749b1689deb85dbcd5d29f9bac # v0.1.3
+    uses: layervai/ops-routines/.github/workflows/age-check-actions.yml@2b9cb3575a74394cf56092d33ee4fdbab30afc9e # v0.1.4
     permissions:
       contents: read
