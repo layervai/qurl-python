@@ -45,4 +45,10 @@ jobs:
       min_age_days: 7
     permissions:
       contents: read
-    secrets: inherit
+    # Only the App credentials needed for cross-repo checkout of
+    # ops-routines (private/internal repo). Using `secrets: inherit`
+    # would forward ALL org/repo secrets to the reusable; this
+    # explicit block follows least-privilege.
+    secrets:
+      OPS_ROUTINES_APP_ID: ${{ secrets.OPS_ROUTINES_APP_ID }}
+      OPS_ROUTINES_APP_PRIVATE_KEY: ${{ secrets.OPS_ROUTINES_APP_PRIVATE_KEY }}
