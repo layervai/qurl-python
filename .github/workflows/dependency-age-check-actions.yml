@@ -40,15 +40,8 @@ jobs:
     # only if/name/needs/permissions/secrets/strategy/uses/with/concurrency
     # are valid on a job that calls a reusable workflow. The reusable
     # workflow itself sets `timeout-minutes: 5` internally.
-    uses: layervai/ops-routines/.github/workflows/age-check-actions.yml@3922bbc6e7ebaef4d8225cfbd9754412137ebf66 # v0.1.8
+    uses: layervai/ops-routines-workflows/.github/workflows/age-check-actions.yml@c70260f4919aa91e3b5e1494b32d3a8b90f9c592 # v0.1.0
     with:
       min_age_days: 7
     permissions:
       contents: read
-    # Only the App credentials needed for cross-repo checkout of
-    # ops-routines (private/internal repo). Using `secrets: inherit`
-    # would forward ALL org/repo secrets to the reusable; this
-    # explicit block follows least-privilege.
-    secrets:
-      OPS_ROUTINES_APP_ID: ${{ secrets.OPS_ROUTINES_APP_ID }}
-      OPS_ROUTINES_APP_PRIVATE_KEY: ${{ secrets.OPS_ROUTINES_APP_PRIVATE_KEY }}
