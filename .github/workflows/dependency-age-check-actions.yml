@@ -1,12 +1,15 @@
 # Dependency Age Check (GitHub Actions pins)
 # Thin shim calling shared reusable workflow.
+# Source: https://github.com/layervai/ops-routines/blob/main/.github/workflows/age-check-actions.yml
+# Implementation: https://github.com/layervai/ops-routines/blob/main/lib/age-check-actions.sh
 name: Dependency Age Check (Actions)
 
+# Fires on every PR (no path filter) so the status check always reports.
+# This lets branch protection require it without the path-filtered-
+# required-check footgun. The reusable's script exits 0 quickly when
+# no workflow/composite-action changes are in the diff.
 on:
   pull_request:
-    paths:
-      - ".github/workflows/**"
-      - ".github/actions/**"
   workflow_dispatch:
 
 # Cancel superseded runs on the same PR branch.
@@ -31,5 +34,7 @@ jobs:
     # shouldn't be bypassable via PR labels.
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'age-check-bypass') }}
     uses: layervai/ops-routines/.github/workflows/age-check-actions.yml@2b9cb3575a74394cf56092d33ee4fdbab30afc9e # v0.1.4
+    with:
+      min_age_days: 7
     permissions:
       contents: read
