@@ -1,0 +1,42 @@
+# Dependency Age Check (pip / Python)
+# Thin shim calling shared reusable workflow.
+name: Dependency Age Check (pip)
+
+on:
+  pull_request:
+    paths:
+      - "**/pyproject.toml"
+      - "**/poetry.lock"
+      - "**/requirements*.txt"
+      - "**/requirements/*.txt"
+      - "pyproject.toml"
+      - "poetry.lock"
+      - "requirements*.txt"
+      - "requirements/*.txt"
+  workflow_dispatch:
+
+# Cancel superseded runs on the same PR branch — pypi.org calls are
+# rate-limited and we throttle ourselves; no reason to let two race.
+concurrency:
+  group: dep-age-pip-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  age-check:
+    # Honor `age-check-bypass` at the shim level AS WELL AS inside the
+    # reusable workflow. Defense-in-depth: if the reusable workflow
+    # implementation ever drops the label check (or the reusable ref
+    # is bumped to a version that doesn't respect it), the shim still
+    # skips consistently.
+    #
+    # On `workflow_dispatch`, `github.event.pull_request` is null — the
+    # labels array evaluates empty and `contains(...)` is false, so the
+    # job always runs. That's the desired behavior: manual runs
+    # shouldn't be bypassable via PR labels.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'age-check-bypass') }}
+    uses: layervai/ops-routines/.github/workflows/age-check-pip.yml@2b9cb3575a74394cf56092d33ee4fdbab30afc9e # v0.1.4
+    permissions:
+      contents: read
