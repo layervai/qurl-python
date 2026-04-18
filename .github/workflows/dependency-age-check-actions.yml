@@ -16,7 +16,7 @@ on:
 # makes sequential registry calls; no reason to let two race for an
 # outdated diff.
 concurrency:
-  group: dep-age-actions-${{ github.head_ref || github.ref }}
+  group: dep-age-actions-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
