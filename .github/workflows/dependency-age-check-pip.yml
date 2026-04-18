@@ -15,7 +15,7 @@ on:
 # Cancel superseded runs on the same PR branch — pypi.org calls are
 # rate-limited and we throttle ourselves; no reason to let two race.
 concurrency:
-  group: dep-age-pip-${{ github.head_ref || github.ref }}
+  group: dep-age-pip-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
