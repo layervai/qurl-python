@@ -58,7 +58,7 @@ body:
     attributes:
       label: Package version
       description: The installed `layerv-qurl` version. Run `pip show layerv-qurl` or check `requirements.txt` / `pyproject.toml`.
-      placeholder: e.g. 0.1.0
+      placeholder: e.g. 0.3.x
     validations:
       required: true
   - type: input
