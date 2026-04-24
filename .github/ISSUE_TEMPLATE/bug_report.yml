@@ -1,0 +1,90 @@
+name: Bug Report
+description: Report a bug to help us improve. Do NOT use this for security vulnerabilities — see SECURITY.md.
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **Security vulnerabilities: stop.** Report privately via [GitHub Security Advisory](https://github.com/layervai/qurl-python/security/advisories/new) or email `security@layerv.ai`. Do NOT open a public issue. See `SECURITY.md`.
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: |
+        - **critical** — production outage potential, data loss risk, live-customer breakage
+        - **high** — significant user impact, blocker for other work, correctness bug in shipped feature
+        - **medium** — standard bug, non-urgent
+        - **low** — polish, minor fix, tech debt
+      options:
+        - critical
+        - high
+        - medium
+        - low
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Include a minimal code snippet if you can.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: The installed `layerv-qurl` version. Run `pip show layerv-qurl` or check `requirements.txt` / `pyproject.toml`.
+      placeholder: e.g. 0.3.x
+    validations:
+      required: true
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version
+      description: Runtime version where the bug occurred.
+      placeholder: e.g. 3.12.x (paste from `python --version`)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 15, Ubuntu 24.04, Windows 11
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error output
+      description: |
+        Paste the exception traceback and relevant surrounding context.
+        **Redact before pasting:** bearer tokens, API keys (`lv_live_…`), and customer identifiers.
+      # No `render:` — `render: shell` shell-highlights content, which
+      # miscolors Python tracebacks and JSON-structured log lines.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Screenshots, related issues, prior discussion, anything else worth knowing.
