@@ -5,11 +5,13 @@
 [![Python](https://img.shields.io/pypi/pyversions/layerv-qurl)](https://pypi.org/project/layerv-qurl/)
 [![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
 
-Python SDK for the [QURL API](https://docs.layerv.ai) — secure, time-limited access links for AI agents.
+Python SDK for the [qURL™ API](https://docs.layerv.ai) — secure, time-limited access links for AI agents.
 
-## Why QURL?
+> **Quantum URL (qURL)** · The internet has a hidden layer. This is how you enter.
 
-AI agents need to access APIs, databases, and internal tools — but permanent credentials are a security risk. QURL creates **time-limited, auditable access links** that automatically expire:
+## Why qURL?
+
+AI agents need to access APIs, databases, and internal tools — but permanent credentials are a security risk. qURL creates **time-limited, auditable access links** that automatically expire:
 
 - **Time-limited** — links expire after minutes, hours, or days
 - **IP-scoped** — firewall opens only for the requesting IP via NHP
@@ -47,7 +49,7 @@ print(result.qurl_link)  # Share this link
 access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 print(f"Access granted to {access.target_url} for {access.access_grant.expires_in}s")
 
-# Extend a QURL's expiration
+# Extend a qURL's expiration
 qurl = client.extend("r_xxx", "7d")
 
 # Update metadata and policy
@@ -74,7 +76,7 @@ asyncio.run(main())
 ## Pagination
 
 ```python
-# Iterate all active QURLs (auto-paginates)
+# Iterate all active qURLs (auto-paginates)
 for qurl in client.list_all(status="active"):
     print(f"{qurl.resource_id}: {qurl.target_url}")
 
@@ -136,7 +138,7 @@ All error classes inherit from `QURLError`, so `except QURLError` catches everyt
 ```python
 quota = client.get_quota()
 print(f"Plan: {quota.plan}")
-print(f"Active QURLs: {quota.usage.active_qurls}")
+print(f"Active qURLs: {quota.usage.active_qurls}")
 print(f"Rate limit: {quota.rate_limits.create_per_minute}/min")
 ```
 

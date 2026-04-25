@@ -320,7 +320,7 @@ def _parse_access_token(data: dict[str, Any]) -> AccessToken:
 
 
 def parse_qurl(data: dict[str, Any]) -> QURL:
-    """Parse a QURL resource from API response data."""
+    """Parse a qURL resource from API response data."""
     tokens = None
     # API returns "qurls" array; SDK exposes as "access_tokens" for clarity.
     raw_tokens = data.get("qurls") if "qurls" in data else data.get("access_tokens")

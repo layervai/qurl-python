@@ -122,7 +122,7 @@ def test_list_qurls_tool_empty() -> None:
     tool = ListQURLsTool(client=client)
     result = tool._run()
 
-    assert result == "No QURLs found."
+    assert result == "No qURLs found."
 
 
 def test_delete_qurl_tool() -> None:

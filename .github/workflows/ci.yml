@@ -119,16 +119,16 @@ jobs:
           # Determine status
           if [[ "$AGGREGATE" == "success" ]]; then
             COLOR="#36a64f"; EMOJI="white_check_mark"
-            HEADER="QURL Python SDK Build"; STATUS_TEXT="successful"
+            HEADER="qURL Python SDK Build"; STATUS_TEXT="successful"
           elif [[ "$AGGREGATE" == "failure" ]]; then
             COLOR="#dc3545"; EMOJI="x"
-            HEADER="QURL Python SDK Build"; STATUS_TEXT="failed"
+            HEADER="qURL Python SDK Build"; STATUS_TEXT="failed"
           elif [[ "$AGGREGATE" == "cancelled" ]]; then
             COLOR="#ffc107"; EMOJI="warning"
-            HEADER="QURL Python SDK Build"; STATUS_TEXT="cancelled"
+            HEADER="qURL Python SDK Build"; STATUS_TEXT="cancelled"
           else
             COLOR="#ffc107"; EMOJI="warning"
-            HEADER="QURL Python SDK"; STATUS_TEXT="incomplete"
+            HEADER="qURL Python SDK"; STATUS_TEXT="incomplete"
           fi
 
           # Determine per-gate emoji so the Slack message shows which

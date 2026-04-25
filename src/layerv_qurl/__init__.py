@@ -1,4 +1,4 @@
-"""QURL Python SDK — secure, time-limited access links for AI agents."""
+"""qURL Python SDK — secure, time-limited access links for AI agents."""
 
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version

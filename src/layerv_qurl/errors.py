@@ -1,4 +1,4 @@
-"""Error types for the QURL API client."""
+"""Error types for the qURL API client."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class QURLError(Exception):
         except AuthenticationError:
             print("Bad API key")
         except NotFoundError:
-            print("QURL doesn't exist")
+            print("qURL doesn't exist")
         except RateLimitError as e:
             print(f"Rate limited — retry in {e.retry_after}s")
         except QURLError as e:
