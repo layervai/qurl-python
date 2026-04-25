@@ -1,4 +1,4 @@
-"""LangChain tool integration for QURL.
+"""LangChain tool integration for qURL.
 
 Install with: pip install layerv-qurl[langchain]
 """
@@ -34,7 +34,7 @@ class CreateQURLTool(BaseTool):
 
     name: str = "create_qurl"
     description: str = (
-        "Create a QURL — a secure, time-limited access link. "
+        "Create a qURL — a secure, time-limited access link. "
         "Input should be a JSON string with 'target_url' (required), "
         "and optionally 'expires_in' (e.g. '24h', '7d'), 'label'."
     )
@@ -53,7 +53,7 @@ class CreateQURLTool(BaseTool):
             label=label,
         )
         return (
-            f"Created QURL {result.resource_id}\n"
+            f"Created qURL {result.resource_id}\n"
             f"Link: {result.qurl_link}\n"
             f"Site: {result.qurl_site}\n"
             f"Expires: {result.expires_at or 'N/A'}"
@@ -61,11 +61,11 @@ class CreateQURLTool(BaseTool):
 
 
 class ResolveQURLTool(BaseTool):
-    """Resolve a QURL access token to open firewall access."""
+    """Resolve a qURL access token to open firewall access."""
 
     name: str = "resolve_qurl"
     description: str = (
-        "Resolve a QURL access token to gain firewall access to the protected resource. "
+        "Resolve a qURL access token to gain firewall access to the protected resource. "
         "Input should be the access token string (e.g. 'at_k8xqp9h2sj9lx7r4a')."
     )
     client: Any = None
@@ -88,10 +88,10 @@ class ResolveQURLTool(BaseTool):
 
 
 class ListQURLsTool(BaseTool):
-    """List active QURL links."""
+    """List active qURL links."""
 
     name: str = "list_qurls"
-    description: str = "List active QURL links. Optionally filter by status (active, revoked)."
+    description: str = "List active qURL links. Optionally filter by status (active, revoked)."
     client: Any = None
 
     def _run(
@@ -102,7 +102,7 @@ class ListQURLsTool(BaseTool):
     ) -> str:
         result = self.client.list(status=status, limit=limit)
         if not result.qurls:
-            return "No QURLs found."
+            return "No qURLs found."
         lines = []
         for q in result.qurls:
             lines.append(f"- {q.resource_id}: {q.target_url} [{q.status}] expires={q.expires_at}")
@@ -110,10 +110,10 @@ class ListQURLsTool(BaseTool):
 
 
 class DeleteQURLTool(BaseTool):
-    """Revoke a QURL, immediately ending all access."""
+    """Revoke a qURL, immediately ending all access."""
 
     name: str = "delete_qurl"
-    description: str = "Revoke (delete) a QURL by resource ID (e.g. 'r_k8xqp9h2sj9')."
+    description: str = "Revoke (delete) a qURL by resource ID (e.g. 'r_k8xqp9h2sj9')."
     client: Any = None
 
     def _run(
@@ -122,11 +122,11 @@ class DeleteQURLTool(BaseTool):
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> str:
         self.client.delete(resource_id)
-        return f"QURL {resource_id} has been revoked."
+        return f"qURL {resource_id} has been revoked."
 
 
 class QURLToolkit:
-    """LangChain toolkit providing all QURL tools.
+    """LangChain toolkit providing all qURL tools.
 
     Usage::
 
@@ -147,7 +147,7 @@ class QURLToolkit:
         self.client = client
 
     def get_tools(self) -> list[BaseTool]:
-        """Return all QURL tools configured with the client."""
+        """Return all qURL tools configured with the client."""
         return [
             CreateQURLTool(client=self.client),
             ResolveQURLTool(client=self.client),

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "layerv-qurl"
 version = "0.1.0"
-description = "Python SDK for the QURL API - secure, time-limited access links"
+description = "Python SDK for the qURL API - secure, time-limited access links"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

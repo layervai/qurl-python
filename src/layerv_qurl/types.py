@@ -1,4 +1,4 @@
-"""Type definitions for the QURL API."""
+"""Type definitions for the qURL API."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ class AIAgentPolicy:
 
 @dataclass
 class AccessPolicy:
-    """Access control policy for a QURL."""
+    """Access control policy for a qURL."""
 
     ip_allowlist: list[str] | None = None
     ip_denylist: list[str] | None = None
@@ -55,7 +55,7 @@ class AccessPolicy:
 
 @dataclass
 class AccessToken:
-    """An individual access token within a QURL.
+    """An individual access token within a qURL.
 
     ``status`` uses the wider :data:`TokenStatus` alias — tokens can be
     ``active``/``consumed``/``expired``/``revoked`` (per ``QurlSummary.status``
@@ -77,7 +77,7 @@ class AccessToken:
 
 @dataclass
 class QURL:
-    """A QURL resource as returned by the API."""
+    """A qURL resource as returned by the API."""
 
     resource_id: str
     target_url: str
@@ -94,11 +94,11 @@ class QURL:
 
 @dataclass
 class CreateOutput:
-    """Response from creating a QURL.
+    """Response from creating a qURL.
 
     ``resource_id`` identifies the resource container (grouped by target URL).
     ``qurl_id`` identifies the specific access token created (``q_`` prefix).
-    Multiple QURLs for the same target URL share one ``resource_id``.
+    Multiple qURLs for the same target URL share one ``resource_id``.
     """
 
     resource_id: str
@@ -137,7 +137,7 @@ class ResolveOutput:
 
 @dataclass
 class ListOutput:
-    """Response from listing QURLs."""
+    """Response from listing qURLs."""
 
     qurls: list[QURL] = field(default_factory=list)
     next_cursor: str | None = None
@@ -208,7 +208,7 @@ class BatchItemResult:
 
 @dataclass
 class BatchCreateOutput:
-    """Response from batch creating QURLs."""
+    """Response from batch creating qURLs."""
 
     succeeded: int = 0
     failed: int = 0

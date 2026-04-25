@@ -1,4 +1,4 @@
-"""Synchronous QURL API client.
+"""Synchronous qURL API client.
 
 NOTE: Business logic mirrors async_client.py — keep both in sync. Input
 validation, body construction, and error handling must match exactly.
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
 
 
 class QURLClient:
-    """Synchronous QURL API client.
+    """Synchronous qURL API client.
 
     Usage::
 
@@ -78,13 +78,13 @@ class QURLClient:
         # Resolve an access token (opens firewall for your IP)
         access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 
-        # Extend a QURL's expiration
+        # Extend a qURL's expiration
         qurl = client.extend("r_xxx", "7d")
 
         # Update metadata
         qurl = client.update("r_xxx", description="updated")
 
-        # Iterate all active QURLs
+        # Iterate all active qURLs
         for qurl in client.list_all(status="active"):
             print(qurl.resource_id)
 
@@ -147,7 +147,7 @@ class QURLClient:
         access_policy: AccessPolicy | None = None,
         custom_domain: str | None = None,
     ) -> CreateOutput:
-        """Create a new QURL.
+        """Create a new qURL.
 
         Returns a :class:`CreateOutput` with the ``resource_id``, ``qurl_link``,
         ``qurl_site``, and ``expires_at``. Use :meth:`get` to fetch the full
@@ -164,13 +164,13 @@ class QURLClient:
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``). The API
                 uses ``expires_in`` on create; use :meth:`update` with
                 ``expires_at`` if you need an absolute expiry afterwards.
-            label: Human-readable label for the QURL. Max length 500.
-            one_time_use: If True, the QURL is consumed on first access.
+            label: Human-readable label for the qURL. Max length 500.
+            one_time_use: If True, the qURL is consumed on first access.
             max_sessions: Maximum concurrent sessions (0 = unlimited).
                 Must be between 0 and 1000 inclusive.
             session_duration: Duration string for sessions (e.g. ``"1h"``).
             access_policy: IP/geo/user-agent access restrictions.
-            custom_domain: Custom domain for the QURL link. Max length 253.
+            custom_domain: Custom domain for the qURL link. Max length 253.
 
         Raises:
             ValueError: If any field violates the documented API constraints.
@@ -197,14 +197,14 @@ class QURLClient:
         return parse_create_output(resp)
 
     def get(self, resource_id: str) -> QURL:
-        """Get a QURL resource and its access tokens.
+        """Get a qURL resource and its access tokens.
 
-        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
         (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
         automatically.
 
         Args:
-            resource_id: The resource or QURL display ID.
+            resource_id: The resource or qURL display ID.
         """
         validate_id(resource_id)
         resp = self._request("GET", f"/v1/qurls/{resource_id}")
@@ -223,25 +223,25 @@ class QURLClient:
         expires_before: datetime | str | None = None,
         expires_after: datetime | str | None = None,
     ) -> ListOutput:
-        """List QURLs with optional filters.
+        """List qURLs with optional filters.
 
         Args:
             limit: Maximum number of results per page.
             cursor: Pagination cursor from a previous response.
-            status: Filter by QURL status (``"active"``, ``"revoked"``).
+            status: Filter by qURL status (``"active"``, ``"revoked"``).
             q: Search query string.
             sort: Sort order (e.g. ``"created_at"``, ``"-created_at"``).
-            created_after: Filter QURLs created after this timestamp.
+            created_after: Filter qURLs created after this timestamp.
                 Accepts a :class:`datetime` (serialized via ``.isoformat()``)
                 or a string. String values must be ISO 8601 / RFC 3339
                 format (e.g. ``"2026-04-01T00:00:00Z"``) and are passed
                 through to the API unvalidated — the server rejects
                 malformed timestamps with a 400.
-            created_before: Filter QURLs created before this timestamp.
+            created_before: Filter qURLs created before this timestamp.
                 Same format rules as ``created_after``.
-            expires_before: Filter QURLs expiring before this timestamp.
+            expires_before: Filter qURLs expiring before this timestamp.
                 Same format rules as ``created_after``.
-            expires_after: Filter QURLs expiring after this timestamp.
+            expires_after: Filter qURLs expiring after this timestamp.
                 Same format rules as ``created_after``.
         """
         params = build_list_params(
@@ -270,7 +270,7 @@ class QURLClient:
         expires_before: datetime | str | None = None,
         expires_after: datetime | str | None = None,
     ) -> Iterator[QURL]:
-        """Iterate over all QURLs, automatically paginating.
+        """Iterate over all qURLs, automatically paginating.
 
         Yields individual :class:`QURL` objects, fetching pages transparently.
 
@@ -279,17 +279,17 @@ class QURLClient:
             q: Search query string.
             sort: Sort order.
             page_size: Number of items per page (default 50).
-            created_after: Filter QURLs created after this timestamp.
+            created_after: Filter qURLs created after this timestamp.
                 Accepts a :class:`datetime` (serialized via ``.isoformat()``)
                 or a string. String values must be ISO 8601 / RFC 3339
                 format (e.g. ``"2026-04-01T00:00:00Z"``) and are passed
                 through to the API unvalidated — the server rejects
                 malformed timestamps with a 400.
-            created_before: Filter QURLs created before this timestamp.
+            created_before: Filter qURLs created before this timestamp.
                 Same format rules as ``created_after``.
-            expires_before: Filter QURLs expiring before this timestamp.
+            expires_before: Filter qURLs expiring before this timestamp.
                 Same format rules as ``created_after``.
-            expires_after: Filter QURLs expiring after this timestamp.
+            expires_after: Filter qURLs expiring after this timestamp.
                 Same format rules as ``created_after``.
         """
         cursor: str | None = None
@@ -311,9 +311,9 @@ class QURLClient:
             cursor = page.next_cursor
 
     def delete(self, resource_id: str) -> None:
-        """Delete (revoke) a QURL resource and all its access tokens.
+        """Delete (revoke) a qURL resource and all its access tokens.
 
-        Only accepts a resource ID (``r_`` prefix), not a QURL display ID
+        Only accepts a resource ID (``r_`` prefix), not a qURL display ID
         (``q_`` prefix). Per the OpenAPI spec:
         *"Requires a resource ID (r_ prefix). To revoke a single token,
         use DELETE /v1/resources/:id/qurls/:qurl_id"*.
@@ -333,15 +333,15 @@ class QURLClient:
         self._request("DELETE", f"/v1/qurls/{resource_id}")
 
     def extend(self, resource_id: str, duration: str) -> QURL:
-        """Extend a QURL's expiration.
+        """Extend a qURL's expiration.
 
         Convenience method — equivalent to ``update(resource_id, extend_by=duration)``.
-        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
         (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
         automatically.
 
         Args:
-            resource_id: Resource or QURL display ID.
+            resource_id: Resource or qURL display ID.
             duration: Duration to add (e.g. ``"7d"``, ``"24h"``).
         """
         return self.update(resource_id, extend_by=duration)
@@ -355,9 +355,9 @@ class QURLClient:
         description: str | None = None,
         tags: builtins.list[str] | None = None,
     ) -> QURL:
-        """Update a QURL — extend expiration, change description, set tags.
+        """Update a qURL — extend expiration, change description, set tags.
 
-        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
         (``q_`` prefix). All fields are optional, but at least one must be
         provided. ``extend_by`` and ``expires_at`` are mutually exclusive.
 
@@ -369,7 +369,7 @@ class QURLClient:
         scope, base resource policy unchanged).
 
         Args:
-            resource_id: Resource or QURL display ID.
+            resource_id: Resource or qURL display ID.
             extend_by: Duration to add (e.g. ``"7d"``). Mutually exclusive
                 with ``expires_at``.
             expires_at: New absolute expiry. Mutually exclusive with
@@ -434,14 +434,14 @@ class QURLClient:
         session_duration: str | None = None,
         access_policy: AccessPolicy | None = None,
     ) -> MintOutput:
-        """Mint a new access link for a QURL.
+        """Mint a new access link for a qURL.
 
-        Accepts either a resource ID (``r_`` prefix) or a QURL display ID
+        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
         (``q_`` prefix). ``expires_in`` and ``expires_at`` are mutually
         exclusive — if neither is set, the link defaults to 24 hours.
 
         Args:
-            resource_id: Resource or QURL display ID.
+            resource_id: Resource or qURL display ID.
             expires_at: Absolute expiry for the minted link. Mutually
                 exclusive with ``expires_in``.
             expires_in: Duration string for the link (e.g. ``"24h"``).
@@ -482,7 +482,7 @@ class QURLClient:
         self,
         items: Sequence[BatchCreateItem],
     ) -> BatchCreateOutput:
-        """Create multiple QURLs at once (1-100 items).
+        """Create multiple qURLs at once (1-100 items).
 
         Each item is validated against the same spec constraints as
         :meth:`create` before the request is sent, with per-item errors
@@ -559,7 +559,7 @@ class QURLClient:
         return parse_batch_create_output(resp)
 
     def resolve(self, access_token: str) -> ResolveOutput:
-        """Resolve a QURL access token (headless).
+        """Resolve a qURL access token (headless).
 
         Triggers an NHP knock to open firewall access for the caller's IP.
         Requires ``qurl:resolve`` scope on the API key.

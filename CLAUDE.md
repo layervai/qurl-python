@@ -7,7 +7,7 @@
 
 ## Project
 
-Python SDK for the QURL API (`pip install layerv-qurl`). Extracted from `layervai/qurl-integrations`.
+Python SDK for the qURL API (`pip install layerv-qurl`). Extracted from `layervai/qurl-integrations`.
 
 ## Commands
 

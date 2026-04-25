@@ -1,4 +1,4 @@
-"""Tests for the QURL Python client."""
+"""Tests for the qURL Python client."""
 
 from __future__ import annotations
 
