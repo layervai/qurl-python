@@ -5,7 +5,9 @@
 [![Python](https://img.shields.io/pypi/pyversions/layerv-qurl)](https://pypi.org/project/layerv-qurl/)
 [![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
 
-Python SDK for the [qURL API](https://docs.layerv.ai) — secure, time-limited access links for AI agents.
+Python SDK for the [qURL™ API](https://docs.layerv.ai) — secure, time-limited access links for AI agents.
+
+> **Quantum URL (qURL)** · The internet has a hidden layer. This is how you enter.
 
 ## Why qURL?
 
