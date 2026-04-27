@@ -24,15 +24,12 @@ permissions:
 
 jobs:
   age-check:
-    # Bypass is handled inside the reusable workflow's inner job, NOT
-    # here. The required status check context is
-    # `age-check / Check GitHub Actions pin ages` (caller-job /
-    # reusable-inner-job). If we skip at this outer level, the reusable
-    # is never invoked, the inner job never reports, and the required
-    # context sits at "Expected — Waiting for status" forever.
-    # Letting the outer job always run means the inner job's own
-    # bypass `if:` reports `conclusion: skipped`, which satisfies the
-    # required status check.
+    # No outer `if:` for `age-check-bypass`. The required status check
+    # is `age-check / Check GitHub Actions pin ages` (caller-job /
+    # reusable-inner-job). Skipping here means the reusable never runs
+    # and the inner job never reports → required check stuck at
+    # "Expected — Waiting" forever. The reusable's inner `if:` handles
+    # bypass and reports SKIPPED, which satisfies the required check.
     # Note: `timeout-minutes` is intentionally NOT set here. Per GH
     # docs (https://docs.github.com/en/actions/using-workflows/reusing-workflows#supported-keywords-for-jobs-that-call-a-reusable-workflow)
     # only if/name/needs/permissions/secrets/strategy/uses/with/concurrency
