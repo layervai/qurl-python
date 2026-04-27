@@ -23,17 +23,12 @@ permissions:
 
 jobs:
   age-check:
-    # Honor `age-check-bypass` at the shim level AS WELL AS inside the
-    # reusable workflow. Defense-in-depth: if the reusable workflow
-    # implementation ever drops the label check (or the reusable ref
-    # is bumped to a version that doesn't respect it), the shim still
-    # skips consistently.
-    #
-    # On `workflow_dispatch`, `github.event.pull_request` is null — the
-    # labels array evaluates empty and `contains(...)` is false, so the
-    # job always runs. That's the desired behavior: manual runs
-    # shouldn't be bypassable via PR labels.
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'age-check-bypass') }}
+    # No outer `if:` for `age-check-bypass`. The required status check
+    # is `age-check / check-pip-age` (caller-job / reusable-inner-job).
+    # Skipping here means the reusable never runs and the inner job
+    # never reports → required check stuck at "Expected — Waiting"
+    # forever. The reusable's inner `if:` handles bypass and reports
+    # SKIPPED, which satisfies the required check.
     # Note: `timeout-minutes` is intentionally NOT set here. Per GH
     # docs (https://docs.github.com/en/actions/using-workflows/reusing-workflows#supported-keywords-for-jobs-that-call-a-reusable-workflow)
     # only if/name/needs/permissions/secrets/strategy/uses/with/concurrency
