@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class QURLError(Exception):
     """Error raised for API-level errors (4xx/5xx responses).
@@ -56,7 +58,7 @@ class QURLError(Exception):
         invalid_fields: dict[str, str] | None = None,
         request_id: str | None = None,
         retry_after: int | None = None,
-        meta: dict[str, object] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> None:
         # RFC 7807 leaves `detail` optional, and `title` is always present.
         # When `detail` is `None` (omitted), fall back to `title` so the

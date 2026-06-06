@@ -1365,7 +1365,7 @@ def build_list_params(
 def mask_key(api_key: str) -> str:
     """Mask an API key for display, hiding JWT suffix fragments."""
     if api_key.startswith("eyJ") and _JWT_LIKE_PATTERN.match(api_key):
-        return api_key[:4] + "***" if len(api_key) > 4 else "***"
+        return (api_key[:4] + "***") if len(api_key) > 4 else "***"
     if len(api_key) > 8:
         return api_key[:4] + "***" + api_key[-4:]
     return "***"

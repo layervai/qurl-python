@@ -731,6 +731,22 @@ class QURLClient:
             tags=tags,
             custom_domain=None if target_url is not None else custom_domain,
         )
+        if find_or_create is False and not any(
+            value is not None
+            for value in (
+                resource_type,
+                target_url,
+                description,
+                tags,
+                custom_domain,
+                alias,
+                slug,
+            )
+        ):
+            raise ValueError(
+                "create_resource: find_or_create=False is the API default; "
+                "provide at least one resource field"
+            )
         body = build_body(
             {
                 "type": resource_type,
@@ -1496,9 +1512,10 @@ class QURLClient:
                 return envelope.get("data"), envelope.get("meta")
 
             err = parse_error(response)
-            # PATCH can use the wider retry set because _raw_request already
-            # attached a stable per-call idempotency key. POST remains 429-only
-            # because resolve can consume one-time tokens on server failures.
+            # PATCH already uses the wider retry set; attaching a stable
+            # per-call idempotency key makes those retries safe. POST remains
+            # 429-only because resolve can consume one-time tokens on server
+            # failures.
             retryable = RETRYABLE_STATUS_POST if method == "POST" else RETRYABLE_STATUS
             if response.status_code in retryable and attempt < self._max_retries:
                 last_error = err
