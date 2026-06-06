@@ -4562,8 +4562,9 @@ def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> 
 
 @respx.mock
 def test_customer_parser_tolerates_future_usage_object(client: QURLClient) -> None:
-    respx.get(f"{BASE_URL}/v1/customer").mock(
-        return_value=httpx.Response(
+    route = respx.get(f"{BASE_URL}/v1/customer")
+    route.side_effect = [
+        httpx.Response(
             200,
             json={
                 "data": {
@@ -4571,10 +4572,16 @@ def test_customer_parser_tolerates_future_usage_object(client: QURLClient) -> No
                     "current_period_usage": {"count": 9, "period": "current"},
                 }
             },
-        )
-    )
+        ),
+        httpx.Response(
+            200,
+            json={"data": {"tier": "growth", "current_period_usage": {"count": True}}},
+        ),
+    ]
     customer = client.get_customer()
     assert customer.current_period_usage_count == 9
+    customer_with_bool_count = client.get_customer()
+    assert customer_with_bool_count.current_period_usage_count == 0
 
 
 def test_sync_contract_lists_validate_limit_bounds(client: QURLClient) -> None:
@@ -4586,12 +4593,28 @@ def test_sync_contract_lists_validate_limit_bounds(client: QURLClient) -> None:
 
 
 @respx.mock
-def test_invoice_list_tolerates_non_dict_payload(client: QURLClient) -> None:
+def test_invoice_list_tolerates_non_dict_payload(
+    client: QURLClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
-        return_value=httpx.Response(200, json={"data": []})
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "in_unexpected_shape",
+                        "amount_cents": 1,
+                        "status": "paid",
+                    }
+                ]
+            },
+        )
     )
-    invoices = client.list_billing_invoices()
+    with caplog.at_level(logging.DEBUG, logger="layerv_qurl"):
+        invoices = client.list_billing_invoices()
     assert invoices.invoices == []
+    assert any("parse_invoice_list_output" in record.message for record in caplog.records)
 
 
 @respx.mock

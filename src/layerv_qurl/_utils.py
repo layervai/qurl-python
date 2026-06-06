@@ -105,6 +105,9 @@ RETRYABLE_STATUS = {429, 502, 503, 504}
 # POST requests still only retry rate limits: resolve can consume one-time
 # tokens after an NHP knock failure, and service errors are not cached.
 RETRYABLE_STATUS_POST = {429}
+# DELETE keeps the wider HTTP retry set without an idempotency key because
+# repeated deletes are safe by HTTP semantics; create/update mutations need
+# service-side replay protection.
 IDEMPOTENCY_METHODS = {"POST", "PATCH"}
 
 _RESOURCE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
@@ -993,7 +996,9 @@ def parse_customer(data: dict[str, Any]) -> Customer:
         current_period_usage_count = current_period_usage
     elif isinstance(current_period_usage, dict):
         count = current_period_usage.get("count", 0)
-        current_period_usage_count = count if isinstance(count, int) else 0
+        current_period_usage_count = (
+            count if isinstance(count, int) and not isinstance(count, bool) else 0
+        )
     else:
         current_period_usage_count = 0
     return Customer(
@@ -1033,7 +1038,22 @@ def parse_invoice_list_output(
 ) -> InvoiceListOutput:
     """Parse billing invoice list output."""
     next_cursor, has_more = _meta_page(meta)
-    raw_invoices = data.get("invoices") if isinstance(data, dict) else None
+    # qurl-service returns billing invoices as {"invoices": [...]}, unlike
+    # the top-level array shape used by most list endpoints.
+    if isinstance(data, dict):
+        raw_invoices = data.get("invoices")
+        if raw_invoices is None and data:
+            logger.debug(
+                "parse_invoice_list_output: expected data.invoices, got keys=%s",
+                list(data.keys()),
+            )
+    else:
+        raw_invoices = None
+        if data:
+            logger.debug(
+                "parse_invoice_list_output: expected object with invoices, got %s",
+                type(data).__name__,
+            )
     invoices = _parse_list_items(raw_invoices, parse_invoice)
     return InvoiceListOutput(invoices=invoices, next_cursor=next_cursor, has_more=has_more)
 
@@ -1365,7 +1385,7 @@ def build_list_params(
 def mask_key(api_key: str) -> str:
     """Mask an API key for display, hiding JWT suffix fragments."""
     if api_key.startswith("eyJ") and _JWT_LIKE_PATTERN.match(api_key):
-        return (api_key[:4] + "***") if len(api_key) > 4 else "***"
+        return api_key[:4] + "***"
     if len(api_key) > 8:
         return api_key[:4] + "***" + api_key[-4:]
     return "***"
