@@ -877,10 +877,10 @@ class QURLClient:
         self._request("DELETE", f"/v1/resources/{resource_id}/qurls/{qurl_id}")
 
     def list_resource_sessions(self, resource_id: str) -> SessionListOutput:
-        """List active sessions for a resource."""
+        """List all active sessions for a resource."""
         validate_id(resource_id)
-        data, meta = self._raw_request("GET", f"/v1/resources/{resource_id}/sessions")
-        return parse_session_list_output(data, meta)
+        resp = self._request("GET", f"/v1/resources/{resource_id}/sessions")
+        return parse_session_list_output(resp)
 
     def terminate_all_resource_sessions(
         self, resource_id: str
@@ -1204,9 +1204,15 @@ class QURLClient:
         )
         return parse_access_code(resp)
 
-    def list_access_codes(self) -> AccessCodeListOutput:
+    def list_access_codes(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> AccessCodeListOutput:
         """List access codes."""
-        data, meta = self._raw_request("GET", "/v1/access-codes")
+        data, meta = self._raw_request(
+            "GET",
+            "/v1/access-codes",
+            params=build_list_params(limit, cursor),
+        )
         return parse_access_code_list_output(data, meta)
 
     def revoke_access_code(self, access_code_id: str) -> None:

@@ -303,8 +303,6 @@ class SessionListOutput:
     """Response from listing active sessions."""
 
     sessions: list[Session] = field(default_factory=list)
-    next_cursor: str | None = None
-    has_more: bool = False
 
 
 @dataclass

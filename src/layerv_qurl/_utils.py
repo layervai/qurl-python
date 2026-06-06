@@ -606,15 +606,10 @@ def parse_session(data: dict[str, Any]) -> Session:
     )
 
 
-def parse_session_list_output(
-    data: Any, meta: dict[str, Any] | None = None
-) -> SessionListOutput:
+def parse_session_list_output(data: Any) -> SessionListOutput:
     """Parse an active session list response."""
-    next_cursor, has_more = _meta_page(meta)
     sessions = _parse_list_items(data, parse_session)
-    return SessionListOutput(
-        sessions=sessions, next_cursor=next_cursor, has_more=has_more
-    )
+    return SessionListOutput(sessions=sessions)
 
 
 def parse_session_terminate_output(data: dict[str, Any] | None) -> SessionTerminateOutput:

@@ -3688,14 +3688,11 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
                         "src_ip": "203.0.113.42",
                     }
                 ],
-                "meta": {"next_cursor": "cur_sessions", "has_more": True},
             },
         )
     )
     sessions = client.list_resource_sessions("r_tunnel12345")
     assert sessions.sessions[0].src_ip == "203.0.113.42"
-    assert sessions.next_cursor == "cur_sessions"
-    assert sessions.has_more is True
 
     respx.delete(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
         return_value=httpx.Response(200, json={"data": {"terminated": 3}})
@@ -3936,7 +3933,7 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
         == "0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2"
     )
 
-    respx.get(f"{BASE_URL}/v1/access-codes").mock(
+    access_codes_route = respx.get(f"{BASE_URL}/v1/access-codes").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -3951,10 +3948,12 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
             },
         )
     )
-    access_codes = client.list_access_codes()
+    access_codes = client.list_access_codes(limit=10, cursor="cur_prev_codes")
     assert access_codes.access_codes[0].access_code_id == "acd_list123"
     assert access_codes.next_cursor == "cur_codes"
     assert access_codes.has_more is True
+    assert access_codes_route.calls[0].request.url.params["limit"] == "10"
+    assert access_codes_route.calls[0].request.url.params["cursor"] == "cur_prev_codes"
 
     redeem_route = respx.post(f"{BASE_URL}/v1/access-codes/redeem").mock(
         return_value=httpx.Response(
@@ -4329,7 +4328,7 @@ async def test_async_delete_list_and_secret_contracts(
         )
     )
 
-    access_codes = await async_client.list_access_codes()
+    access_codes = await async_client.list_access_codes(limit=5, cursor="cur_async_prev")
     await async_client.delete_resource("r_asyncdelete")
     await async_client.terminate_resource_session("r_asyncdelete", "s_async123")
     await async_client.delete_webhook("wh_asyncabcdefghijkl")
@@ -4341,6 +4340,8 @@ async def test_async_delete_list_and_secret_contracts(
 
     assert access_codes.access_codes[0].access_code_id == "acd_async123"
     assert access_codes.next_cursor == "cur_async_codes"
+    assert access_codes_route.calls[0].request.url.params["limit"] == "5"
+    assert access_codes_route.calls[0].request.url.params["cursor"] == "cur_async_prev"
     assert webhook.secret == "whsec_async"
     assert secret_route.calls[0].request.headers["idempotency-key"] == "idem-async-secret"
     assert access_codes_route.called
@@ -4348,3 +4349,127 @@ async def test_async_delete_list_and_secret_contracts(
     assert session_route.called
     assert webhook_delete_route.called
     assert api_key_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_resource_connector_domain_bootstrap_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    resources_route = respx.get(f"{BASE_URL}/v1/resources").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "resource_id": "r_asyncresource",
+                        "type": "url",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_resources", "has_more": True},
+            },
+        )
+    )
+    connector_route = respx.get(f"{BASE_URL}/v1/connectors/installations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "installation_id": "inst_async",
+                        "plugin_id": "slack",
+                        "label": "Async Slack",
+                        "subject_kind": "slack_workspace",
+                        "subject_display_name": "Async Engineering",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"has_more": False},
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/v1/domains/async.example.com").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"domain": "async.example.com", "status": "verified"}},
+        )
+    )
+    verify_route = respx.post(f"{BASE_URL}/v1/domains/async.example.com/verify").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "async.example.com",
+                    "status": "verified",
+                    "checks": {"txt": {"verified": True}},
+                },
+            },
+        )
+    )
+    regen_route = respx.post(
+        f"{BASE_URL}/v1/domains/async.example.com/regenerate-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "async.example.com",
+                    "status": "pending_verification",
+                    "verification_token": "tok_async",
+                },
+            },
+        )
+    )
+    bootstrap_route = respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "agent_id": "agent-async",
+                    "nhp_server_peer": {
+                        "public_key_b64": "server-key",
+                        "host": "nhp.example.com",
+                        "port": 62206,
+                    },
+                },
+            },
+        )
+    )
+
+    resources = await async_client.list_resources(limit=2, status="active")
+    connectors = await async_client.list_connector_installations(limit=1)
+    domain = await async_client.get_domain("async.example.com")
+    verify = await async_client.verify_domain(
+        "async.example.com",
+        idempotency_key="idem-async-domain-verify",
+    )
+    regenerated = await async_client.regenerate_domain_token(
+        "async.example.com",
+        idempotency_key="idem-async-domain-token",
+    )
+    bootstrap = await async_client.bootstrap_agent(
+        public_key="client-key",
+        agent_id="agent-async",
+        idempotency_key="idem-async-bootstrap",
+    )
+
+    assert resources.resources[0].resource_id == "r_asyncresource"
+    assert resources.next_cursor == "cur_async_resources"
+    assert resources_route.calls[0].request.url.params["limit"] == "2"
+    assert resources_route.calls[0].request.url.params["status"] == "active"
+    assert connectors.installations[0].installation_id == "inst_async"
+    assert connector_route.calls[0].request.url.params["limit"] == "1"
+    assert domain.status == "verified"
+    assert verify.checks["txt"].verified is True
+    assert regenerated.verification_token == "tok_async"
+    assert bootstrap.nhp_server_peer.port == 62206
+    assert verify_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-domain-verify"
+    )
+    assert regen_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-domain-token"
+    )
+    assert bootstrap_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-bootstrap"
+    )

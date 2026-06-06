@@ -851,12 +851,10 @@ class AsyncQURLClient:
         await self._request("DELETE", f"/v1/resources/{resource_id}/qurls/{qurl_id}")
 
     async def list_resource_sessions(self, resource_id: str) -> SessionListOutput:
-        """List active sessions for a resource."""
+        """List all active sessions for a resource."""
         validate_id(resource_id)
-        data, meta = await self._raw_request(
-            "GET", f"/v1/resources/{resource_id}/sessions"
-        )
-        return parse_session_list_output(data, meta)
+        resp = await self._request("GET", f"/v1/resources/{resource_id}/sessions")
+        return parse_session_list_output(resp)
 
     async def terminate_all_resource_sessions(
         self, resource_id: str
@@ -1173,9 +1171,15 @@ class AsyncQURLClient:
         )
         return parse_access_code(resp)
 
-    async def list_access_codes(self) -> AccessCodeListOutput:
+    async def list_access_codes(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> AccessCodeListOutput:
         """List access codes."""
-        data, meta = await self._raw_request("GET", "/v1/access-codes")
+        data, meta = await self._raw_request(
+            "GET",
+            "/v1/access-codes",
+            params=build_list_params(limit, cursor),
+        )
         return parse_access_code_list_output(data, meta)
 
     async def revoke_access_code(self, access_code_id: str) -> None:
