@@ -56,6 +56,18 @@ qurl = client.extend("r_xxx", "7d")
 qurl = client.update("r_xxx", description="extended", extend_by="7d")
 ```
 
+## Authentication Notes
+
+`QURLClient(api_key=...)` accepts either a qURL API key or a JWT bearer token.
+Dashboard/account endpoints such as billing, customer, connector, webhook, and
+API-key management require JWT authentication. You may omit `api_key` only for
+public endpoints such as access-code redemption; authenticated endpoints return
+401 without credentials.
+
+Some resource-list responses intentionally omit `target_url` for redacted
+resource types. Treat `QURL.target_url` as `str | None` before formatting or
+parsing it.
+
 ## Async Usage
 
 ```python

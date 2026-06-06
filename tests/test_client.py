@@ -3710,12 +3710,28 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
         client.update_resource("r_tunnel12345", custom_domain="x" * 254)
 
 
+@respx.mock
+def test_resource_detail_tolerates_missing_resource_wrapper(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/resources/r_partial").mock(
+        return_value=httpx.Response(200, json={"data": {"qurls": []}})
+    )
+    detail = client.get_resource("r_partial")
+    assert detail.resource.resource_id == ""
+    assert detail.resource.status == "unknown"
+    assert detail.qurls == []
+
+
 def test_update_resource_methods_reject_empty_updates(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="at least one field"):
         client.update_resource("r_tunnel12345")
 
     with pytest.raises(ValueError, match="at least one field"):
         client.update_resource_qurl("r_tunnel12345", "q_newtoken12")
+
+
+def test_update_api_key_rejects_empty_update(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_api_key("key_abc123def456")
 
 
 @respx.mock
@@ -4070,6 +4086,9 @@ def test_billing_session_methods_send_idempotency(client: QURLClient) -> None:
 def test_idempotency_key_validation(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="CR/LF"):
         client.create(target_url="https://example.com", idempotency_key="bad\nkey")
+
+    with pytest.raises(ValueError, match="control characters"):
+        client.create(target_url="https://example.com", idempotency_key="bad\tkey")
 
     with pytest.raises(ValueError, match="at least 32 characters"):
         client.create_api_key(

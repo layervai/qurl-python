@@ -219,6 +219,8 @@ def idempotency_headers(
         )
     if "\r" in idempotency_key or "\n" in idempotency_key:
         raise ValueError("idempotency_key: must not contain CR/LF characters")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in idempotency_key):
+        raise ValueError("idempotency_key: must not contain control characters")
     return {"Idempotency-Key": idempotency_key}
 
 
@@ -543,8 +545,8 @@ def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
 def parse_resource(data: dict[str, Any]) -> Resource:
     """Parse a resource-management API resource."""
     return Resource(
-        resource_id=data["resource_id"],
-        status=data["status"],
+        resource_id=data.get("resource_id", ""),
+        status=data.get("status", "unknown"),
         resource_type=data.get("type"),
         target_url=data.get("target_url"),
         knock_resource_id=data.get("knock_resource_id"),

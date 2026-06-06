@@ -102,6 +102,11 @@ def test_list_qurls_tool() -> None:
                 status="active",
                 created_at=datetime(2026, 3, 10, 10, 0, 0, tzinfo=timezone.utc),
                 expires_at=datetime(2026, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
+            ),
+            QURL(
+                resource_id="r_tunnel12345",
+                target_url=None,
+                status="active",
             )
         ],
         has_more=False,
@@ -112,6 +117,7 @@ def test_list_qurls_tool() -> None:
 
     assert "r_abc123def45" in result
     assert "https://example.com" in result
+    assert "r_tunnel12345: <redacted>" in result
     client.list.assert_called_once_with(status="active", limit=10)
 
 
