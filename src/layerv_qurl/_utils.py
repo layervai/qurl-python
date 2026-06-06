@@ -18,7 +18,7 @@ import re
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -88,9 +88,12 @@ from layerv_qurl.types import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import httpx
 
 logger = logging.getLogger("layerv_qurl")
+_T = TypeVar("_T")
 
 DEFAULT_BASE_URL = "https://api.layerv.ai"
 DEFAULT_TIMEOUT = 30.0
@@ -215,6 +218,10 @@ def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
     if not meta:
         return None, False
     return meta.get("next_cursor"), meta.get("has_more", False)
+
+
+def _parse_list_items(data: Any, parser: Callable[[dict[str, Any]], _T]) -> list[_T]:
+    return [parser(item) for item in data] if isinstance(data, list) else []
 
 
 # ---- Spec-derived input validation --------------------------------------
@@ -365,7 +372,7 @@ def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
     # or boolean for ai_agent_policy). Without this, `.get("block_all")`
     # would raise AttributeError. Consistent with the defensive posture
     # in `_validate_batch_create_shape`.
-    if ap is not None and isinstance(ap, dict):
+    if isinstance(ap, dict):
         ai_policy = AIAgentPolicy(
             block_all=ap.get("block_all"),
             deny_categories=ap.get("deny_categories"),
@@ -382,8 +389,8 @@ def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
     )
 
 
-def _parse_access_token(data: dict[str, Any]) -> AccessToken:
-    """Parse an AccessToken from API response data."""
+def parse_access_token(data: dict[str, Any]) -> AccessToken:
+    """Parse a qURL token summary."""
     policy = None
     if data.get("access_policy") is not None:
         policy = _parse_access_policy(data["access_policy"])
@@ -402,18 +409,13 @@ def _parse_access_token(data: dict[str, Any]) -> AccessToken:
     )
 
 
-def parse_access_token(data: dict[str, Any]) -> AccessToken:
-    """Parse a qURL token summary."""
-    return _parse_access_token(data)
-
-
 def parse_qurl(data: dict[str, Any]) -> QURL:
     """Parse a qURL resource from API response data."""
     tokens = None
     # API returns "qurls" array; SDK exposes as "access_tokens" for clarity.
     raw_tokens = data.get("qurls") if "qurls" in data else data.get("access_tokens")
     if raw_tokens is not None:
-        tokens = [_parse_access_token(t) for t in raw_tokens]
+        tokens = _parse_list_items(raw_tokens, parse_access_token)
     return QURL(
         resource_id=data["resource_id"],
         target_url=data.get("target_url"),
@@ -436,8 +438,7 @@ def parse_create_output(data: dict[str, Any]) -> CreateOutput:
     # checks. Intentionally asymmetric with `label` (preserved as-is):
     # `""` is never a meaningful identifier but IS a meaningful "cleared"
     # value for user-facing metadata.
-    qurl_id_raw = data.get("qurl_id")
-    qurl_id = qurl_id_raw if qurl_id_raw else None
+    qurl_id = data.get("qurl_id") or None
     return CreateOutput(
         resource_id=data["resource_id"],
         qurl_link=data["qurl_link"],
@@ -521,7 +522,7 @@ def parse_quota(data: dict[str, Any]) -> Quota:
 
 def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
     """Parse a ListOutput from API response data."""
-    qurls = [parse_qurl(q) for q in data] if isinstance(data, list) else []
+    qurls = _parse_list_items(data, parse_qurl)
     return ListOutput(
         qurls=qurls,
         next_cursor=meta.get("next_cursor") if meta else None,
@@ -554,7 +555,7 @@ def parse_resource(data: dict[str, Any]) -> Resource:
 def parse_resource_detail(data: dict[str, Any]) -> ResourceDetail:
     """Parse a resource detail response."""
     resource = parse_resource(data.get("resource", {}))
-    qurls = [_parse_access_token(q) for q in data.get("qurls", [])]
+    qurls = _parse_list_items(data.get("qurls"), parse_access_token)
     return ResourceDetail(resource=resource, qurls=qurls)
 
 
@@ -563,7 +564,7 @@ def parse_resource_list_output(
 ) -> ResourceListOutput:
     """Parse a resource list response."""
     next_cursor, has_more = _meta_page(meta)
-    resources = [parse_resource(item) for item in data] if isinstance(data, list) else []
+    resources = _parse_list_items(data, parse_resource)
     return ResourceListOutput(resources=resources, next_cursor=next_cursor, has_more=has_more)
 
 
@@ -581,7 +582,7 @@ def parse_session(data: dict[str, Any]) -> Session:
 
 def parse_session_list_output(data: Any) -> SessionListOutput:
     """Parse an active session list response."""
-    sessions = [parse_session(item) for item in data] if isinstance(data, list) else []
+    sessions = _parse_list_items(data, parse_session)
     return SessionListOutput(sessions=sessions)
 
 
@@ -618,7 +619,7 @@ def parse_domain(data: dict[str, Any]) -> Domain:
 def parse_domain_list_output(data: Any, meta: dict[str, Any] | None) -> DomainListOutput:
     """Parse a custom-domain list response."""
     next_cursor, has_more = _meta_page(meta)
-    domains = [parse_domain(item) for item in data] if isinstance(data, list) else []
+    domains = _parse_list_items(data, parse_domain)
     return DomainListOutput(domains=domains, next_cursor=next_cursor, has_more=has_more)
 
 
@@ -665,7 +666,7 @@ def parse_webhook(data: dict[str, Any]) -> Webhook:
 def parse_webhook_list_output(data: Any, meta: dict[str, Any] | None) -> WebhookListOutput:
     """Parse a webhook list response."""
     next_cursor, has_more = _meta_page(meta)
-    webhooks = [parse_webhook(item) for item in data] if isinstance(data, list) else []
+    webhooks = _parse_list_items(data, parse_webhook)
     return WebhookListOutput(webhooks=webhooks, next_cursor=next_cursor, has_more=has_more)
 
 
@@ -691,9 +692,7 @@ def parse_webhook_delivery_list_output(
 ) -> WebhookDeliveryListOutput:
     """Parse a webhook delivery list response."""
     next_cursor, has_more = _meta_page(meta)
-    deliveries = (
-        [parse_webhook_delivery(item) for item in data] if isinstance(data, list) else []
-    )
+    deliveries = _parse_list_items(data, parse_webhook_delivery)
     return WebhookDeliveryListOutput(
         deliveries=deliveries, next_cursor=next_cursor, has_more=has_more
     )
@@ -735,7 +734,7 @@ def parse_api_key(data: dict[str, Any]) -> APIKey:
 def parse_api_key_list_output(data: Any, meta: dict[str, Any] | None) -> APIKeyListOutput:
     """Parse an API key list response."""
     next_cursor, has_more = _meta_page(meta)
-    api_keys = [parse_api_key(item) for item in data] if isinstance(data, list) else []
+    api_keys = _parse_list_items(data, parse_api_key)
     return APIKeyListOutput(api_keys=api_keys, next_cursor=next_cursor, has_more=has_more)
 
 
@@ -761,7 +760,7 @@ def parse_access_code(data: dict[str, Any]) -> AccessCode:
 
 def parse_access_code_list_output(data: Any) -> AccessCodeListOutput:
     """Parse an access-code list response."""
-    access_codes = [parse_access_code(item) for item in data] if isinstance(data, list) else []
+    access_codes = _parse_list_items(data, parse_access_code)
     return AccessCodeListOutput(access_codes=access_codes)
 
 
@@ -885,9 +884,7 @@ def parse_connector_installation_list_output(
 ) -> ConnectorInstallationListOutput:
     """Parse connector installation list output."""
     next_cursor, has_more = _meta_page(meta)
-    installations = (
-        [parse_connector_installation(item) for item in data] if isinstance(data, list) else []
-    )
+    installations = _parse_list_items(data, parse_connector_installation)
     return ConnectorInstallationListOutput(
         installations=installations, next_cursor=next_cursor, has_more=has_more
     )

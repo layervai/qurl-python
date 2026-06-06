@@ -777,9 +777,29 @@ class AsyncQURLClient:
         )
         return parse_create_output(resp)
 
-    async def mint_resource_qurl(self, resource_id: str, **kwargs: Any) -> CreateOutput:
+    async def mint_resource_qurl(
+        self,
+        resource_id: str,
+        *,
+        expires_in: str | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | None = None,
+        access_policy: AccessPolicy | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateOutput:
         """Alias for :meth:`create_qurl_for_resource`."""
-        return await self.create_qurl_for_resource(resource_id, **kwargs)
+        return await self.create_qurl_for_resource(
+            resource_id,
+            expires_in=expires_in,
+            label=label,
+            one_time_use=one_time_use,
+            max_sessions=max_sessions,
+            session_duration=session_duration,
+            access_policy=access_policy,
+            idempotency_key=idempotency_key,
+        )
 
     async def update_resource_qurl(
         self,
@@ -1211,15 +1231,16 @@ class AsyncQURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
     ) -> Any:
-        data, _ = await self._raw_request(
-            method,
-            path,
-            body=body,
-            params=params,
-            allow_statuses=allow_statuses,
-            headers=headers,
-        )
-        return data
+        return (
+            await self._raw_request(
+                method,
+                path,
+                body=body,
+                params=params,
+                allow_statuses=allow_statuses,
+                headers=headers,
+            )
+        )[0]
 
     async def _raw_request(
         self,
