@@ -673,15 +673,9 @@ class AsyncQURLClient:
         resource_type: str | None = None,
     ) -> ResourceListOutput:
         """List resources."""
-        params = build_query_params(
-            {
-                "cursor": cursor,
-                "limit": limit,
-                "alias": alias,
-                "slug": slug,
-                "status": status,
-                "type": resource_type,
-            }
+        params = build_list_params(limit, cursor, status, None, None)
+        params.update(
+            build_query_params({"alias": alias, "slug": slug, "type": resource_type})
         )
         data, meta = await self._raw_request("GET", "/v1/resources", params=params)
         return parse_resource_list_output(data, meta)
@@ -703,7 +697,9 @@ class AsyncQURLClient:
         if target_url is not None:
             validate_create_input(target_url=target_url, custom_domain=custom_domain)
         validate_update_input(
-            description=description, tags=tags, custom_domain=custom_domain
+            description=description,
+            tags=tags,
+            custom_domain=None if target_url is not None else custom_domain,
         )
         body = build_body(
             {
@@ -903,7 +899,7 @@ class AsyncQURLClient:
         data, meta = await self._raw_request(
             "GET",
             "/v1/domains",
-            params=build_query_params({"limit": limit, "cursor": cursor}),
+            params=build_list_params(limit, cursor, None, None, None),
         )
         return parse_domain_list_output(data, meta)
 
@@ -951,7 +947,10 @@ class AsyncQURLClient:
         data, meta = await self._raw_request(
             "GET",
             "/v1/webhooks",
-            params=build_query_params({"limit": limit, "cursor": cursor, "event": event}),
+            params={
+                **build_list_params(limit, cursor, None, None, None),
+                **build_query_params({"event": event}),
+            },
         )
         return parse_webhook_list_output(data, meta)
 
@@ -1047,7 +1046,7 @@ class AsyncQURLClient:
         data, meta = await self._raw_request(
             "GET",
             f"/v1/webhooks/{webhook_id}/deliveries",
-            params=build_query_params({"limit": limit, "cursor": cursor}),
+            params=build_list_params(limit, cursor, None, None, None),
         )
         return parse_webhook_delivery_list_output(data, meta)
 
@@ -1101,7 +1100,7 @@ class AsyncQURLClient:
         data, meta = await self._raw_request(
             "GET",
             "/v1/api-keys",
-            params=build_query_params({"limit": limit, "cursor": cursor, "status": status}),
+            params=build_list_params(limit, cursor, status, None, None),
         )
         return parse_api_key_list_output(data, meta)
 
@@ -1247,7 +1246,7 @@ class AsyncQURLClient:
         data, meta = await self._raw_request(
             "GET",
             "/v1/billing/invoices",
-            params=build_query_params({"limit": limit, "cursor": cursor}),
+            params=build_list_params(limit, cursor, None, None, None),
         )
         return parse_invoice_list_output(data, meta)
 
@@ -1258,7 +1257,7 @@ class AsyncQURLClient:
         data, meta = await self._raw_request(
             "GET",
             "/v1/connectors/installations",
-            params=build_query_params({"limit": limit, "cursor": cursor}),
+            params=build_list_params(limit, cursor, None, None, None),
         )
         return parse_connector_installation_list_output(data, meta)
 

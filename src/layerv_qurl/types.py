@@ -161,7 +161,7 @@ class AccessGrant:
 class ResolveOutput:
     """Response from headless resolution."""
 
-    target_url: str
+    target_url: str | None
     resource_id: str
     access_grant: AccessGrant | None = None
 
@@ -328,7 +328,7 @@ class Domain:
 
     domain: str
     status: str
-    verification_token: str | None = field(default=None, repr=False)
+    verification_token: str | None = None
     token_expires_at: datetime | None = None
     acme_cname_target: str | None = None
     created_at: datetime | None = None

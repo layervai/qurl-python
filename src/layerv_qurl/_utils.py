@@ -485,7 +485,7 @@ def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
             src_ip=grant_data.get("src_ip", ""),
         )
     return ResolveOutput(
-        target_url=data["target_url"],
+        target_url=data.get("target_url"),
         resource_id=data["resource_id"],
         access_grant=grant,
     )
@@ -637,7 +637,7 @@ def parse_domain_list_output(data: Any, meta: dict[str, Any] | None) -> DomainLi
 
 def _parse_check_detail(data: dict[str, Any]) -> CheckDetail:
     return CheckDetail(
-        verified=data["verified"],
+        verified=data.get("verified", False),
         error=data.get("error"),
         found=data.get("found"),
     )

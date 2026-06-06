@@ -80,7 +80,7 @@ def test_resolve_qurl_tool() -> None:
 def test_resolve_qurl_tool_no_grant() -> None:
     client = _mock_client()
     client.resolve.return_value = ResolveOutput(
-        target_url="https://api.example.com/data",
+        target_url=None,
         resource_id="r_abc123def45",
         access_grant=None,
     )
@@ -88,7 +88,7 @@ def test_resolve_qurl_tool_no_grant() -> None:
     tool = ResolveQURLTool(client=client)
     result = tool._run(access_token="at_k8xqp9h2sj9lx7r4a")
 
-    assert "https://api.example.com/data" in result
+    assert "<redacted>" in result
     assert "r_abc123def45" in result
 
 

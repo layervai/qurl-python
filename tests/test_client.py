@@ -172,7 +172,7 @@ def test_secret_dataclass_repr_omits_one_time_values() -> None:
     assert "whsec_secret" not in repr(webhook)
     assert "lv_live_secret" not in repr(api_key)
     assert "ac_code_secret" not in repr(access_code)
-    assert "qurl_verify_secret" not in repr(domain)
+    assert "qurl_verify_secret" in repr(domain)
 
 
 # --- CRUD tests with kwargs API ---
@@ -3767,13 +3767,17 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
                 "data": {
                     "domain": "secure.example.com",
                     "status": "verified",
-                    "checks": {"txt": {"verified": True}},
+                    "checks": {
+                        "txt": {"verified": True},
+                        "cname": {},
+                    },
                 },
             },
         )
     )
     verify = client.verify_domain("secure.example.com", idempotency_key="idem-domain-verify")
     assert verify.checks["txt"].verified is True
+    assert verify.checks["cname"].verified is False
     assert verify_domain_route.calls[0].request.headers["idempotency-key"] == "idem-domain-verify"
 
     respx.post(f"{BASE_URL}/v1/webhooks").mock(
@@ -4034,6 +4038,14 @@ def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> 
     assert customer.frozen_reason == "manual"
 
 
+def test_sync_contract_lists_validate_limit_bounds(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        client.list_domains(limit=0)
+
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        client.list_api_keys(limit=101)
+
+
 @respx.mock
 def test_invoice_list_tolerates_non_dict_payload(client: QURLClient) -> None:
     respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
@@ -4177,3 +4189,35 @@ async def test_async_update_customer_sends_idempotency(
 
     assert customer.current_period_usage_count == 7
     assert route.calls[0].request.headers["idempotency-key"] == "idem-async-customer"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_domain_and_list_limit_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        await async_client.list_webhooks(limit=101)
+
+    route = respx.get(f"{BASE_URL}/v1/domains").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "domain": "async.example.com",
+                        "status": "verified",
+                        "ready_for_qurls": True,
+                    }
+                ],
+                "meta": {"next_cursor": "cur_next", "has_more": True},
+            },
+        )
+    )
+
+    domains = await async_client.list_domains(limit=10, cursor="cur_prev")
+
+    assert domains.domains[0].domain == "async.example.com"
+    assert domains.next_cursor == "cur_next"
+    assert route.calls[0].request.url.params["limit"] == "10"
+    assert route.calls[0].request.url.params["cursor"] == "cur_prev"

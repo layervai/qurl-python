@@ -77,8 +77,9 @@ class ResolveQURLTool(BaseTool):
     ) -> str:
         result = self.client.resolve(access_token)
         grant = result.access_grant
+        target = result.target_url or "<redacted>"
         lines = [
-            f"Resolved: {result.target_url}",
+            f"Resolved: {target}",
             f"Resource: {result.resource_id}",
         ]
         if grant:
