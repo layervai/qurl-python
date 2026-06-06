@@ -1260,7 +1260,7 @@ class QURLClient:
         return parse_current_period_usage(resp)
 
     def get_usage_daily(self) -> DailyUsage:
-        """Get daily qURL creation counts for the current billing period."""
+        """Get daily qURL creation counts. JWT auth is required by the API."""
         resp = self._request("GET", "/v1/usage/daily")
         return parse_daily_usage(resp)
 
