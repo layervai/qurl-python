@@ -26,6 +26,7 @@ from layerv_qurl._utils import (
     build_query_params,
     build_string_list,
     domain_path_segment,
+    ensure_mutation_idempotency,
     parse_resource,
 )
 from layerv_qurl.errors import (
@@ -1132,6 +1133,14 @@ def test_auto_idempotency_applies_to_supported_mutations(client: QURLClient) -> 
     assert "idempotency-key" not in quota_route.calls[0].request.headers
     assert len(customer_route.calls[0].request.headers["idempotency-key"]) == 36
     assert "idempotency-key" not in webhook_route.calls[0].request.headers
+
+
+def test_ensure_mutation_idempotency_preserves_explicit_header() -> None:
+    headers = {"idempotency-key": "caller-provided-key"}
+
+    ensure_mutation_idempotency("POST", headers)
+
+    assert headers == {"idempotency-key": "caller-provided-key"}
 
 
 @respx.mock
