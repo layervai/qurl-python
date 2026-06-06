@@ -21,6 +21,31 @@ TokenStatus = Literal["active", "consumed", "expired", "revoked"] | str
 #: strings so the API can add new plans without a breaking SDK change.
 QuotaPlan = Literal["free", "growth", "enterprise"] | str
 
+#: Valid resource type values. Public callers primarily use ``url`` and
+#: ``tunnel``; the API may also surface integration-owned ``transit`` rows.
+ResourceType = Literal["url", "tunnel", "transit"] | str
+
+WebhookEventType = (
+    Literal[
+        "qurl.created",
+        "qurl.expired",
+        "qurl.revoked",
+        "qurl.updated",
+        "resource.closed",
+        "qurl.accessed",
+        "qurl.access_denied",
+        "qurl.token_exhausted",
+        "quota.warning",
+        "quota.exceeded",
+        "token.minted",
+        "token.expired",
+        "domain.verified",
+        "domain.failed",
+        "domain.deleted",
+    ]
+    | str
+)
+
 
 def _parse_dt(s: str | None) -> datetime | None:
     """Parse an ISO 8601 datetime string, handling Z suffix for Python 3.10 compat."""
@@ -80,7 +105,7 @@ class QURL:
     """A qURL resource as returned by the API."""
 
     resource_id: str
-    target_url: str
+    target_url: str | None
     status: QURLStatus
     created_at: datetime | None = None
     expires_at: datetime | None = None
@@ -88,6 +113,7 @@ class QURL:
     tags: list[str] = field(default_factory=list)
     qurl_site: str | None = None
     custom_domain: str | None = None
+    slug: str | None = None
     qurl_count: int | None = None
     access_tokens: list[AccessToken] | None = None
 
@@ -107,6 +133,8 @@ class CreateOutput:
     expires_at: datetime | None = None
     qurl_id: str | None = None
     label: str | None = None
+    branded_domain: str | None = None
+    resource_type: ResourceType | None = None
 
 
 @dataclass
@@ -114,7 +142,10 @@ class MintOutput:
     """Response from minting an access link."""
 
     qurl_link: str
+    qurl_id: str | None = None
     expires_at: datetime | None = None
+    branded_domain: str | None = None
+    resource_type: ResourceType | None = None
 
 
 @dataclass
@@ -130,7 +161,7 @@ class AccessGrant:
 class ResolveOutput:
     """Response from headless resolution."""
 
-    target_url: str
+    target_url: str | None
     resource_id: str
     access_grant: AccessGrant | None = None
 
@@ -202,6 +233,7 @@ class BatchItemResult:
     resource_id: str | None = None
     qurl_link: str | None = None
     qurl_site: str | None = None
+    branded_domain: str | None = None
     expires_at: datetime | None = None
     error: BatchItemError | None = None
 
@@ -213,6 +245,407 @@ class BatchCreateOutput:
     succeeded: int = 0
     failed: int = 0
     results: list[BatchItemResult] = field(default_factory=list)
+
+
+@dataclass
+class Resource:
+    """Resource container returned by the resource-management API."""
+
+    resource_id: str
+    status: QURLStatus
+    resource_type: ResourceType | None = None
+    target_url: str | None = None
+    knock_resource_id: str | None = None
+    description: str | None = None
+    tags: list[str] = field(default_factory=list)
+    custom_domain: str | None = None
+    alias: str | None = None
+    slug: str | None = None
+    preserve_host: bool = False
+    session_duration_cap: int | None = None
+    qurl_count: int | None = None
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+    tombstoned_at: datetime | None = None
+
+
+@dataclass
+class ResourceDetail:
+    """Detailed resource response with a bounded qURL token preview."""
+
+    resource: Resource
+    qurls: list[AccessToken] = field(default_factory=list)
+
+
+@dataclass
+class ResourceListOutput:
+    """Response from listing resources."""
+
+    resources: list[Resource] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class Session:
+    """Active access session for a resource."""
+
+    session_id: str
+    qurl_id: str | None = None
+    src_ip: str | None = None
+    user_agent: str | None = None
+    created_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+
+@dataclass
+class SessionListOutput:
+    """Response from listing active sessions."""
+
+    sessions: list[Session] = field(default_factory=list)
+
+
+@dataclass
+class SessionTerminateOutput:
+    """Response from terminating all active sessions on a resource."""
+
+    terminated: int = 0
+
+
+@dataclass
+class DNSRecord:
+    """DNS record required for custom-domain setup."""
+
+    type: str = ""
+    name: str = ""
+    value: str = ""
+    verified: bool = False
+
+
+@dataclass
+class Domain:
+    """Custom-domain registration state."""
+
+    domain: str
+    status: str
+    # Verification tokens are public DNS values, so repr keeps them visible.
+    verification_token: str | None = None
+    token_expires_at: datetime | None = None
+    acme_cname_target: str | None = None
+    created_at: datetime | None = None
+    verified_at: datetime | None = None
+    activated_at: datetime | None = None
+    ready_for_qurls: bool = False
+    dns_records: list[DNSRecord] = field(default_factory=list)
+
+
+@dataclass
+class DomainListOutput:
+    """Response from listing custom domains."""
+
+    domains: list[Domain] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class CheckDetail:
+    """DNS verification check detail."""
+
+    verified: bool
+    error: str | None = None
+    found: str | None = None
+
+
+@dataclass
+class DomainVerifyOutput:
+    """Response from triggering custom-domain verification."""
+
+    domain: str
+    status: str
+    checks: dict[str, CheckDetail] = field(default_factory=dict)
+
+
+@dataclass
+class Webhook:
+    """Webhook subscription."""
+
+    webhook_id: str
+    url: str
+    events: list[WebhookEventType]
+    owner_id: str | None = None
+    status: str | None = None
+    description: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    failure_count: int = 0
+    last_delivery_success: bool | None = None
+    last_delivery_time: int | None = None
+    secret: str | None = field(default=None, repr=False)
+
+
+@dataclass
+class WebhookListOutput:
+    """Response from listing webhooks."""
+
+    webhooks: list[Webhook] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class WebhookDelivery:
+    """Webhook delivery attempt."""
+
+    delivery_id: str
+    webhook_id: str | None = None
+    event_type: WebhookEventType | None = None
+    status: str | None = None
+    response_code: int | None = None
+    response_body: str | None = None
+    error_message: str | None = None
+    duration_ms: int | None = None
+    retry_count: int = 0
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+@dataclass
+class WebhookDeliveryListOutput:
+    """Response from listing webhook deliveries."""
+
+    deliveries: list[WebhookDelivery] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class WebhookEventTypeInfo:
+    """Webhook event catalog entry."""
+
+    type: WebhookEventType
+    category: str | None = None
+    description: str | None = None
+
+
+@dataclass
+class WebhookEventTypesOutput:
+    """Response from listing supported webhook event types."""
+
+    events: list[WebhookEventTypeInfo] = field(default_factory=list)
+
+
+@dataclass
+class APIKey:
+    """API key metadata.
+
+    ``api_key`` is populated only on create responses.
+    """
+
+    key_id: str
+    key_prefix: str
+    name: str
+    scopes: list[str] = field(default_factory=list)
+    status: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_used_at: datetime | None = None
+    expires_at: datetime | None = None
+    purpose: str | None = None
+    tunnel_slug: str | None = None
+    api_key: str | None = field(default=None, repr=False)
+
+
+@dataclass
+class APIKeyListOutput:
+    """Response from listing API keys."""
+
+    api_keys: list[APIKey] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class RedeemAccessCodeOutput:
+    """Response from redeeming a public access code."""
+
+    redirect_url: str
+
+
+@dataclass
+class AccessCode:
+    """Access-code metadata.
+
+    ``code`` is populated only on create responses.
+    """
+
+    access_code_id: str
+    resource_id: str
+    name: str | None = None
+    status: str | None = None
+    max_uses: int = 0
+    use_count: int = 0
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+    code: str | None = field(default=None, repr=False)
+
+
+@dataclass
+class AccessCodeListOutput:
+    """Response from listing access codes."""
+
+    access_codes: list[AccessCode] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class UsageCostEstimate:
+    """Estimated usage cost for the current billing period."""
+
+    currency: str
+    amount_cents: int
+    description: str
+
+
+@dataclass
+class CurrentPeriodUsage:
+    """Current billing-period usage summary."""
+
+    tier: QuotaPlan
+    period_start: datetime | None
+    period_end: datetime | None
+    qurls_created: int
+    active_qurls: int
+    cost_estimate: UsageCostEstimate | None = None
+
+
+@dataclass
+class UsageDailyEntry:
+    """Daily qURL creation count."""
+
+    date: str
+    qurls_created: int
+
+
+@dataclass
+class DailyUsage:
+    """Daily usage breakdown for the current billing period."""
+
+    tier: QuotaPlan
+    period_start: datetime | None
+    period_end: datetime | None
+    daily: list[UsageDailyEntry] = field(default_factory=list)
+
+
+@dataclass
+class Customer:
+    """Customer profile and billing settings."""
+
+    tier: QuotaPlan
+    spending_cap_cents: int
+    current_period_usage_count: int
+    frozen: bool
+    frozen_reason: str | None = None
+
+
+@dataclass
+class CheckoutSession:
+    """Stripe checkout session URL."""
+
+    url: str
+
+
+@dataclass
+class PortalSession:
+    """Stripe billing portal session URL."""
+
+    url: str
+
+
+@dataclass
+class Invoice:
+    """Billing invoice summary."""
+
+    id: str
+    amount_cents: int
+    status: str
+    created_at: datetime | None = None
+    pdf_url: str | None = None
+
+
+@dataclass
+class InvoiceListOutput:
+    """Response from listing billing invoices."""
+
+    invoices: list[Invoice] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class ConnectorInstallationStats:
+    """Connector installation activity counters."""
+
+    resources: int = 0
+    qurls: int = 0
+    accesses_24h: int = 0
+    accesses_7d: int = 0
+    errors_24h: int = 0
+
+
+@dataclass
+class ConnectorInstallationCapabilities:
+    """Connector installation capability flags."""
+
+    configure: bool = False
+    disconnect: bool = False
+    reauth: bool = False
+    view_activity: bool = False
+
+
+@dataclass
+class ConnectorInstallation:
+    """Normalized connector installation summary."""
+
+    installation_id: str
+    plugin_id: str
+    label: str
+    subject_kind: str
+    subject_display_name: str
+    status: str
+    installed_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    stats: ConnectorInstallationStats | None = None
+    capabilities: ConnectorInstallationCapabilities | None = None
+
+
+@dataclass
+class ConnectorInstallationListOutput:
+    """Response from listing connector installations."""
+
+    installations: list[ConnectorInstallation] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+@dataclass
+class NHPServerPeerInfo:
+    """NHP server peer info returned to connector agents."""
+
+    public_key_b64: str
+    host: str
+    port: int
+    expire_time: int
+
+
+@dataclass
+class AgentBootstrapOutput:
+    """Response from connector agent bootstrap."""
+
+    agent_id: str
+    registered_at: datetime | None
+    nhp_server_peer: NHPServerPeerInfo
 
 
 # ---- batch_create input shape -------------------------------------------
@@ -247,6 +680,7 @@ class BatchCreateItem(_BatchCreateItemRequired, total=False):
     request time via ``_serialize_value``.
     """
 
+    type: str
     expires_in: str
     label: str
     one_time_use: bool

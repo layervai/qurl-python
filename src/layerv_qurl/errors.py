@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class QURLError(Exception):
     """Error raised for API-level errors (4xx/5xx responses).
@@ -56,6 +58,7 @@ class QURLError(Exception):
         invalid_fields: dict[str, str] | None = None,
         request_id: str | None = None,
         retry_after: int | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> None:
         # RFC 7807 leaves `detail` optional, and `title` is always present.
         # When `detail` is `None` (omitted), fall back to `title` so the
@@ -74,6 +77,7 @@ class QURLError(Exception):
         self.invalid_fields = invalid_fields
         self.request_id = request_id
         self.retry_after = retry_after
+        self.meta = meta
 
 
 class AuthenticationError(QURLError):
@@ -86,6 +90,14 @@ class AuthorizationError(QURLError):
 
 class NotFoundError(QURLError):
     """404 Not Found — resource does not exist."""
+
+
+class ConflictError(QURLError):
+    """409 Conflict — resource already exists or cannot be mutated in this state."""
+
+
+class GoneError(QURLError):
+    """410 Gone — resource lifecycle has closed."""
 
 
 class ValidationError(QURLError):

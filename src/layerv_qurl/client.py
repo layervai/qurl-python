@@ -18,25 +18,64 @@ from layerv_qurl._utils import (
     DEFAULT_TIMEOUT,
     RETRYABLE_STATUS,
     RETRYABLE_STATUS_POST,
+    UNSET,
+    UnsetType,
     build_body,
     build_list_params,
+    build_query_params,
+    build_string_list,
     default_user_agent,
+    domain_path_segment,
+    ensure_mutation_idempotency,
+    idempotency_headers,
     logger,
     mask_key,
+    parse_access_code,
+    parse_access_code_list_output,
+    parse_access_token,
+    parse_agent_bootstrap_output,
+    parse_api_key,
+    parse_api_key_list_output,
     parse_batch_create_output,
+    parse_checkout_session,
+    parse_connector_installation_list_output,
     parse_create_output,
+    parse_current_period_usage,
+    parse_customer,
+    parse_daily_usage,
+    parse_domain,
+    parse_domain_list_output,
+    parse_domain_verify_output,
     parse_error,
+    parse_invoice_list_output,
     parse_list_output,
     parse_mint_output,
+    parse_portal_session,
     parse_quota,
     parse_qurl,
+    parse_redeem_access_code_output,
     parse_resolve_output,
+    parse_resource,
+    parse_resource_detail,
+    parse_resource_list_output,
+    parse_session_list_output,
+    parse_session_terminate_output,
+    parse_webhook,
+    parse_webhook_delivery_list_output,
+    parse_webhook_event_types_output,
+    parse_webhook_list_output,
+    require_nonempty_update,
     require_resource_id_prefix,
     retry_delay,
+    validate_alias,
     validate_create_input,
+    validate_domain_input,
     validate_id,
     validate_mint_input,
+    validate_nonnegative_int,
+    validate_required_string,
     validate_update_input,
+    validate_webhook_url,
 )
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
@@ -46,20 +85,46 @@ if TYPE_CHECKING:
     # must reference `builtins.list[...]` explicitly. The import lives in
     # a TYPE_CHECKING block because it's only needed for type annotations.
     import builtins
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Iterable, Iterator, Sequence
     from datetime import datetime
 
     from layerv_qurl.types import (
         QURL,
+        AccessCode,
+        AccessCodeListOutput,
         AccessPolicy,
+        AccessToken,
+        AgentBootstrapOutput,
+        APIKey,
+        APIKeyListOutput,
         BatchCreateItem,
         BatchCreateOutput,
+        CheckoutSession,
+        ConnectorInstallationListOutput,
         CreateOutput,
+        CurrentPeriodUsage,
+        Customer,
+        DailyUsage,
+        Domain,
+        DomainListOutput,
+        DomainVerifyOutput,
+        InvoiceListOutput,
         ListOutput,
         MintOutput,
+        PortalSession,
         Quota,
         QURLStatus,
+        RedeemAccessCodeOutput,
         ResolveOutput,
+        Resource,
+        ResourceDetail,
+        ResourceListOutput,
+        SessionListOutput,
+        SessionTerminateOutput,
+        Webhook,
+        WebhookDeliveryListOutput,
+        WebhookEventTypesOutput,
+        WebhookListOutput,
     )
 
 
@@ -88,6 +153,10 @@ class QURLClient:
         for qurl in client.list_all(status="active"):
             print(qurl.resource_id)
 
+    ``api_key`` may be omitted for public endpoints such as
+    :meth:`redeem_access_code`; authenticated endpoints will return 401
+    without credentials.
+
     Enable debug logging to see requests::
 
         import logging
@@ -96,7 +165,7 @@ class QURLClient:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | None = None,
         *,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
@@ -104,7 +173,7 @@ class QURLClient:
         user_agent: str | None = None,
         http_client: httpx.Client | None = None,
     ) -> None:
-        if not api_key or not api_key.strip():
+        if api_key is not None and not api_key.strip():
             raise ValueError("api_key must not be empty")
 
         self._base_url = base_url.rstrip("/")
@@ -114,13 +183,15 @@ class QURLClient:
         self._client = http_client or httpx.Client(timeout=timeout)
         self._owns_client = http_client is None
         self._base_headers: dict[str, str] = {
-            "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
             "User-Agent": self._user_agent,
         }
+        if api_key is not None:
+            self._base_headers["Authorization"] = f"Bearer {api_key}"
 
     def __repr__(self) -> str:
-        return f"QURLClient(api_key='{mask_key(self._api_key)}', base_url='{self._base_url}')"
+        api_key = mask_key(self._api_key) if self._api_key is not None else None
+        return f"QURLClient(api_key={api_key!r}, base_url='{self._base_url}')"
 
     def close(self) -> None:
         """Close the underlying HTTP client (only if owned by this instance)."""
@@ -139,6 +210,7 @@ class QURLClient:
         self,
         target_url: str,
         *,
+        resource_type: str | None = None,
         expires_in: str | None = None,
         label: str | None = None,
         one_time_use: bool | None = None,
@@ -146,6 +218,7 @@ class QURLClient:
         session_duration: str | None = None,
         access_policy: AccessPolicy | None = None,
         custom_domain: str | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateOutput:
         """Create a new qURL.
 
@@ -161,6 +234,8 @@ class QURLClient:
 
         Args:
             target_url: The URL to protect. Max length 2048.
+            resource_type: Resource type to create. Defaults to ``"url"``
+                server-side. Public callers usually omit this.
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``). The API
                 uses ``expires_in`` on create; use :meth:`update` with
                 ``expires_at`` if you need an absolute expiry afterwards.
@@ -171,6 +246,7 @@ class QURLClient:
             session_duration: Duration string for sessions (e.g. ``"1h"``).
             access_policy: IP/geo/user-agent access restrictions.
             custom_domain: Custom domain for the qURL link. Max length 253.
+            idempotency_key: Optional idempotency key for safe retries.
 
         Raises:
             ValueError: If any field violates the documented API constraints.
@@ -183,6 +259,7 @@ class QURLClient:
         )
         body = build_body(
             {
+                "type": resource_type,
                 "target_url": target_url,
                 "expires_in": expires_in,
                 "label": label,
@@ -193,7 +270,12 @@ class QURLClient:
                 "custom_domain": custom_domain,
             }
         )
-        resp = self._request("POST", "/v1/qurls", body=body)
+        resp = self._request(
+            "POST",
+            "/v1/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_create_output(resp)
 
     def get(self, resource_id: str) -> QURL:
@@ -247,9 +329,9 @@ class QURLClient:
         params = build_list_params(
             limit,
             cursor,
-            status,
-            q,
-            sort,
+            status=status,
+            q=q,
+            sort=sort,
             created_after=created_after,
             created_before=created_before,
             expires_before=expires_before,
@@ -354,6 +436,7 @@ class QURLClient:
         expires_at: datetime | str | None = None,
         description: str | None = None,
         tags: builtins.list[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> QURL:
         """Update a qURL — extend expiration, change description, set tags.
 
@@ -382,6 +465,7 @@ class QURLClient:
                 ``None`` (the default) to leave the existing tags
                 unchanged. Max 10 items, each 1-50 chars matching
                 ``^[a-zA-Z0-9][a-zA-Z0-9 _-]*$``.
+            idempotency_key: Optional idempotency key for safe retries.
 
         Raises:
             ValueError: If ``extend_by`` and ``expires_at`` are both set, if
@@ -393,16 +477,6 @@ class QURLClient:
             raise ValueError(
                 "update: `extend_by` and `expires_at` are mutually exclusive "
                 "— provide at most one"
-            )
-        if (
-            extend_by is None
-            and expires_at is None
-            and description is None
-            and tags is None
-        ):
-            raise ValueError(
-                "update: at least one field (extend_by, expires_at, description, "
-                "tags) must be provided"
             )
         validate_update_input(description=description, tags=tags)
         # `build_body` strips top-level ``None`` only — falsy values like
@@ -419,7 +493,15 @@ class QURLClient:
                 "tags": tags,
             }
         )
-        resp = self._request("PATCH", f"/v1/qurls/{resource_id}", body=body)
+        require_nonempty_update(
+            body, "update", "extend_by, expires_at, description, tags"
+        )
+        resp = self._request(
+            "PATCH",
+            f"/v1/qurls/{resource_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_qurl(resp)
 
     def mint_link(
@@ -433,6 +515,7 @@ class QURLClient:
         max_sessions: int | None = None,
         session_duration: str | None = None,
         access_policy: AccessPolicy | None = None,
+        idempotency_key: str | None = None,
     ) -> MintOutput:
         """Mint a new access link for a qURL.
 
@@ -452,6 +535,7 @@ class QURLClient:
                 Must be between 0 and 1000 inclusive.
             session_duration: Duration string for sessions (e.g. ``"1h"``).
             access_policy: IP/geo/user-agent access restrictions.
+            idempotency_key: Optional idempotency key for safe retries.
 
         Raises:
             ValueError: If ``expires_in`` and ``expires_at`` are both set
@@ -475,12 +559,19 @@ class QURLClient:
                 "access_policy": access_policy,
             }
         )
-        resp = self._request("POST", f"/v1/qurls/{resource_id}/mint_link", body=body)
+        resp = self._request(
+            "POST",
+            f"/v1/qurls/{resource_id}/mint_link",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_mint_output(resp)
 
     def batch_create(
         self,
         items: Sequence[BatchCreateItem],
+        *,
+        idempotency_key: str | None = None,
     ) -> BatchCreateOutput:
         """Create multiple qURLs at once (1-100 items).
 
@@ -549,6 +640,7 @@ class QURLClient:
             "/v1/qurls/batch",
             body={"items": serialized},
             allow_statuses=(400,),
+            headers=idempotency_headers(idempotency_key),
         )
         # `parse_batch_create_output` runs the shape guard internally
         # (see its docstring) — so if the API returns 400 with an
@@ -558,7 +650,9 @@ class QURLClient:
         # not documented by convention at every call site.
         return parse_batch_create_output(resp)
 
-    def resolve(self, access_token: str) -> ResolveOutput:
+    def resolve(
+        self, access_token: str, *, idempotency_key: str | None = None
+    ) -> ResolveOutput:
         """Resolve a qURL access token (headless).
 
         Triggers an NHP knock to open firewall access for the caller's IP.
@@ -568,13 +662,726 @@ class QURLClient:
             access_token: The access token string (e.g. ``"at_k8xqp9h2sj9lx7r4a"``).
         """
         validate_id(access_token, "access_token")
-        resp = self._request("POST", "/v1/resolve", body={"access_token": access_token})
+        resp = self._request(
+            "POST",
+            "/v1/resolve",
+            body={"access_token": access_token},
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_resolve_output(resp)
 
     def get_quota(self) -> Quota:
         """Get quota and usage information."""
         resp = self._request("GET", "/v1/quota")
         return parse_quota(resp)
+
+    # --- Resources ---
+
+    def list_resources(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        alias: str | None = None,
+        slug: str | None = None,
+        status: str | None = None,
+        resource_type: str | None = None,
+    ) -> ResourceListOutput:
+        """List resources.
+
+        ``resource_type`` serializes to the API's ``type`` query parameter.
+        Supported public filter values are ``"url"`` and ``"tunnel"``.
+        ``alias`` filters use the same format and reserved-word validation
+        as resource alias writes.
+        """
+        validate_alias(alias)
+        params = build_list_params(limit, cursor, status=status)
+        params.update(
+            build_query_params({"alias": alias, "slug": slug, "type": resource_type})
+        )
+        data, meta = self._raw_request("GET", "/v1/resources", params=params)
+        return parse_resource_list_output(data, meta)
+
+    def create_resource(
+        self,
+        *,
+        resource_type: str | None = None,
+        target_url: str | None = None,
+        description: str | None = None,
+        tags: builtins.list[str] | None = None,
+        custom_domain: str | None = None,
+        alias: str | None = None,
+        slug: str | None = None,
+        find_or_create: bool | None = None,
+        idempotency_key: str | None = None,
+    ) -> Resource:
+        """Create or find a resource.
+
+        ``resource_type`` serializes to the API's ``type`` request field.
+        Tunnel resources use ``slug`` and may set ``find_or_create=True``.
+        ``find_or_create=False`` is treated the same as omitting it because
+        the API default is false.
+        """
+        validate_alias(alias)
+        if target_url is not None:
+            validate_create_input(target_url=target_url, custom_domain=custom_domain)
+        # `validate_create_input` already checks custom_domain with target_url.
+        validate_update_input(
+            description=description,
+            tags=tags,
+            custom_domain=None if target_url is not None else custom_domain,
+        )
+        if find_or_create is False and not any(
+            value is not None
+            for value in (
+                resource_type,
+                target_url,
+                description,
+                tags,
+                custom_domain,
+                alias,
+                slug,
+            )
+        ):
+            raise ValueError(
+                "create_resource: find_or_create=False is the API default; "
+                "provide at least one resource field"
+            )
+        body = build_body(
+            {
+                "type": resource_type,
+                "target_url": target_url,
+                "description": description,
+                "tags": tags,
+                "custom_domain": custom_domain,
+                "alias": alias,
+                "slug": slug,
+                "find_or_create": True if find_or_create is True else None,
+            }
+        )
+        require_nonempty_update(
+            body,
+            "create_resource",
+            "type, target_url, description, tags, custom_domain, alias, slug, find_or_create",
+        )
+        resp = self._request(
+            "POST",
+            "/v1/resources",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_resource(resp)
+
+    def get_resource(self, resource_id: str) -> ResourceDetail:
+        """Get resource details and a bounded qURL token preview."""
+        validate_id(resource_id)
+        resp = self._request("GET", f"/v1/resources/{resource_id}")
+        return parse_resource_detail(resp)
+
+    def update_resource(
+        self,
+        resource_id: str,
+        *,
+        description: str | None = None,
+        tags: builtins.list[str] | None = None,
+        custom_domain: str | None = None,
+        preserve_host: bool | None = None,
+        alias: str | None | UnsetType = UNSET,
+        idempotency_key: str | None = None,
+    ) -> Resource:
+        """Update resource metadata.
+
+        ``alias`` is tri-state: omit for no change, pass a string to set
+        or rebind, and pass ``None`` to clear.
+        """
+        validate_id(resource_id)
+        validate_update_input(
+            description=description, tags=tags, custom_domain=custom_domain
+        )
+        if alias is not UNSET:
+            validate_alias(cast("str | None", alias))
+        body = build_body(
+            {
+                "description": description,
+                "tags": tags,
+                "custom_domain": custom_domain,
+                "preserve_host": preserve_host,
+            }
+        )
+        if alias is not UNSET:
+            body["alias"] = alias
+        require_nonempty_update(
+            body,
+            "update_resource",
+            "description, tags, custom_domain, preserve_host, alias",
+        )
+        resp = self._request(
+            "PATCH",
+            f"/v1/resources/{resource_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_resource(resp)
+
+    def delete_resource(self, resource_id: str) -> None:
+        """Revoke a resource and all qURLs associated with it."""
+        validate_id(resource_id)
+        self._request("DELETE", f"/v1/resources/{resource_id}")
+
+    def create_qurl_for_resource(
+        self,
+        resource_id: str,
+        *,
+        expires_in: str | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | None = None,
+        access_policy: AccessPolicy | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateOutput:
+        """Mint a qURL against an existing resource."""
+        validate_id(resource_id)
+        validate_mint_input(label=label, max_sessions=max_sessions)
+        body = build_body(
+            {
+                "expires_in": expires_in,
+                "label": label,
+                "one_time_use": one_time_use,
+                "max_sessions": max_sessions,
+                "session_duration": session_duration,
+                "access_policy": access_policy,
+            }
+        )
+        resp = self._request(
+            "POST",
+            f"/v1/resources/{resource_id}/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_create_output(resp)
+
+    def update_resource_qurl(
+        self,
+        resource_id: str,
+        qurl_id: str,
+        *,
+        extend_by: str | None = None,
+        expires_at: datetime | str | None = None,
+        label: str | None = None,
+        access_policy: AccessPolicy | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> AccessToken:
+        """Update a specific qURL token on a resource."""
+        validate_id(resource_id)
+        validate_id(qurl_id, "qurl_id")
+        if extend_by is not None and expires_at is not None:
+            raise ValueError(
+                "update_resource_qurl: `extend_by` and `expires_at` are mutually "
+                "exclusive — provide at most one"
+            )
+        validate_mint_input(label=label, max_sessions=max_sessions)
+        body = build_body(
+            {
+                "extend_by": extend_by,
+                "expires_at": expires_at,
+                "label": label,
+                "access_policy": access_policy,
+                "max_sessions": max_sessions,
+                "session_duration": session_duration,
+            }
+        )
+        require_nonempty_update(
+            body,
+            "update_resource_qurl",
+            "extend_by, expires_at, label, access_policy, max_sessions, session_duration",
+        )
+        resp = self._request(
+            "PATCH",
+            f"/v1/resources/{resource_id}/qurls/{qurl_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_access_token(resp)
+
+    def revoke_resource_qurl(self, resource_id: str, qurl_id: str) -> None:
+        """Revoke one qURL token without revoking the parent resource."""
+        validate_id(resource_id)
+        validate_id(qurl_id, "qurl_id")
+        self._request("DELETE", f"/v1/resources/{resource_id}/qurls/{qurl_id}")
+
+    def list_resource_sessions(self, resource_id: str) -> SessionListOutput:
+        """List all active sessions for a resource."""
+        validate_id(resource_id)
+        resp = self._request("GET", f"/v1/resources/{resource_id}/sessions")
+        return parse_session_list_output(resp)
+
+    def terminate_all_resource_sessions(
+        self, resource_id: str
+    ) -> SessionTerminateOutput:
+        """Terminate all active sessions for a resource."""
+        validate_id(resource_id)
+        resp = self._request("DELETE", f"/v1/resources/{resource_id}/sessions")
+        return parse_session_terminate_output(resp)
+
+    def terminate_resource_session(self, resource_id: str, session_id: str) -> None:
+        """Terminate a specific active session."""
+        validate_id(resource_id)
+        validate_id(session_id, "session_id")
+        self._request(
+            "DELETE",
+            f"/v1/resources/{resource_id}/sessions/{session_id}",
+        )
+
+    # --- Custom Domains ---
+
+    def register_domain(
+        self, domain: str, *, idempotency_key: str | None = None
+    ) -> Domain:
+        """Register a custom domain and return DNS setup records."""
+        validate_domain_input(domain)
+        resp = self._request(
+            "POST",
+            "/v1/domains",
+            body={"domain": domain},
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_domain(resp)
+
+    def list_domains(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> DomainListOutput:
+        """List custom domains."""
+        data, meta = self._raw_request(
+            "GET",
+            "/v1/domains",
+            params=build_list_params(limit, cursor),
+        )
+        return parse_domain_list_output(data, meta)
+
+    def get_domain(self, domain: str) -> Domain:
+        """Get custom-domain status and DNS configuration."""
+        validate_domain_input(domain)
+        resp = self._request("GET", f"/v1/domains/{domain_path_segment(domain)}")
+        return parse_domain(resp)
+
+    def delete_domain(self, domain: str) -> None:
+        """Remove a custom-domain registration."""
+        validate_domain_input(domain)
+        self._request("DELETE", f"/v1/domains/{domain_path_segment(domain)}")
+
+    def verify_domain(
+        self, domain: str, *, idempotency_key: str | None = None
+    ) -> DomainVerifyOutput:
+        """Trigger DNS verification for a custom domain."""
+        validate_domain_input(domain)
+        resp = self._request(
+            "POST",
+            f"/v1/domains/{domain_path_segment(domain)}/verify",
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_domain_verify_output(resp)
+
+    def regenerate_domain_token(
+        self, domain: str, *, idempotency_key: str | None = None
+    ) -> Domain:
+        """Regenerate a custom-domain verification token."""
+        validate_domain_input(domain)
+        resp = self._request(
+            "POST",
+            f"/v1/domains/{domain_path_segment(domain)}/regenerate-token",
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_domain(resp)
+
+    # --- Webhooks ---
+
+    def list_webhooks(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        event: str | None = None,
+    ) -> WebhookListOutput:
+        """List webhook subscriptions."""
+        data, meta = self._raw_request(
+            "GET",
+            "/v1/webhooks",
+            params={
+                **build_list_params(limit, cursor),
+                **build_query_params({"event": event}),
+            },
+        )
+        return parse_webhook_list_output(data, meta)
+
+    def create_webhook(
+        self,
+        *,
+        url: str,
+        events: Iterable[str],
+        description: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Webhook:
+        """Create a webhook subscription.
+
+        The returned ``Webhook.secret`` is only available on create and
+        regenerate-secret responses.
+        """
+        validate_webhook_url(url)
+        body = build_body(
+            {
+                "url": url,
+                "events": build_string_list(events, "events"),
+                "description": description,
+            }
+        )
+        resp = self._request(
+            "POST",
+            "/v1/webhooks",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_webhook(resp)
+
+    def get_webhook(self, webhook_id: str) -> Webhook:
+        """Get webhook subscription details."""
+        validate_id(webhook_id, "webhook_id")
+        resp = self._request("GET", f"/v1/webhooks/{webhook_id}")
+        return parse_webhook(resp)
+
+    def update_webhook(
+        self,
+        webhook_id: str,
+        *,
+        url: str | None = None,
+        events: Iterable[str] | None = None,
+        description: str | None = None,
+        status: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Webhook:
+        """Update a webhook subscription."""
+        validate_id(webhook_id, "webhook_id")
+        if url is not None:
+            validate_webhook_url(url)
+        body = build_body(
+            {
+                "url": url,
+                "events": build_string_list(events, "events") if events is not None else None,
+                "description": description,
+                "status": status,
+            }
+        )
+        require_nonempty_update(
+            body,
+            "update_webhook",
+            "url, events, description, status",
+        )
+        resp = self._request(
+            "PATCH",
+            f"/v1/webhooks/{webhook_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_webhook(resp)
+
+    def delete_webhook(self, webhook_id: str) -> None:
+        """Delete a webhook subscription."""
+        validate_id(webhook_id, "webhook_id")
+        self._request("DELETE", f"/v1/webhooks/{webhook_id}")
+
+    def regenerate_webhook_secret(
+        self, webhook_id: str, *, idempotency_key: str | None = None
+    ) -> Webhook:
+        """Regenerate a webhook signing secret."""
+        validate_id(webhook_id, "webhook_id")
+        resp = self._request(
+            "POST",
+            f"/v1/webhooks/{webhook_id}/secret",
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_webhook(resp)
+
+    def list_webhook_deliveries(
+        self,
+        webhook_id: str,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> WebhookDeliveryListOutput:
+        """List delivery attempts for a webhook."""
+        validate_id(webhook_id, "webhook_id")
+        data, meta = self._raw_request(
+            "GET",
+            f"/v1/webhooks/{webhook_id}/deliveries",
+            params=build_list_params(limit, cursor),
+        )
+        return parse_webhook_delivery_list_output(data, meta)
+
+    def list_webhook_event_types(self) -> WebhookEventTypesOutput:
+        """List supported webhook event types."""
+        resp = self._request("GET", "/v1/webhooks/events")
+        return parse_webhook_event_types_output(resp)
+
+    # --- API Keys ---
+
+    def create_api_key(
+        self,
+        *,
+        name: str,
+        scopes: Iterable[str],
+        expires_in: str | None = None,
+        purpose: str | None = None,
+        tunnel_slug: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> APIKey:
+        """Create an API key.
+
+        JWT auth is required for normal key management; API-key auth may
+        only create restricted tunnel-bootstrap keys.
+
+        If provided, ``idempotency_key`` must be 32-256 characters for
+        this security-sensitive endpoint so replay keys have enough
+        caller-controlled entropy.
+        """
+        validate_required_string(name, "name")
+        body = build_body(
+            {
+                "name": name,
+                "scopes": build_string_list(scopes, "scopes"),
+                "expires_in": expires_in,
+                "purpose": purpose,
+                "tunnel_slug": tunnel_slug,
+            }
+        )
+        resp = self._request(
+            "POST",
+            "/v1/api-keys",
+            body=body,
+            headers=idempotency_headers(
+                idempotency_key,
+                min_length=32,  # API-key issuance uses a higher entropy floor.
+            ),
+        )
+        return parse_api_key(resp)
+
+    def list_api_keys(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        status: str | None = None,
+    ) -> APIKeyListOutput:
+        """List API keys. JWT auth is required by the API."""
+        data, meta = self._raw_request(
+            "GET",
+            "/v1/api-keys",
+            params=build_list_params(limit, cursor, status=status),
+        )
+        return parse_api_key_list_output(data, meta)
+
+    def update_api_key(
+        self,
+        key_id: str,
+        *,
+        name: str | None = None,
+        scopes: Iterable[str] | None = None,
+        idempotency_key: str | None = None,
+    ) -> APIKey:
+        """Update API key name or scopes. JWT auth is required by the API."""
+        validate_id(key_id, "key_id")
+        body = build_body(
+            {
+                "name": name,
+                "scopes": build_string_list(scopes, "scopes")
+                if scopes is not None
+                else None,
+            }
+        )
+        require_nonempty_update(body, "update_api_key", "name, scopes")
+        resp = self._request(
+            "PATCH",
+            f"/v1/api-keys/{key_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_api_key(resp)
+
+    def revoke_api_key(self, key_id: str) -> None:
+        """Revoke an API key. JWT auth is required by the API."""
+        validate_id(key_id, "key_id")
+        self._request("DELETE", f"/v1/api-keys/{key_id}")
+
+    # --- Access Codes ---
+
+    def redeem_access_code(
+        self,
+        *,
+        code: str,
+        honeypot: str | None = None,
+        elapsed_ms: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> RedeemAccessCodeOutput:
+        """Redeem a public access code and return its redirect URL."""
+        validate_required_string(code, "code")
+        if elapsed_ms is not None:
+            validate_nonnegative_int(elapsed_ms, "elapsed_ms")
+        body = build_body({"code": code, "honeypot": honeypot, "elapsed_ms": elapsed_ms})
+        resp = self._request(
+            "POST",
+            "/v1/access-codes/redeem",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+            include_auth=False,
+        )
+        return parse_redeem_access_code_output(resp)
+
+    def create_access_code(
+        self,
+        *,
+        resource_id: str,
+        name: str | None = None,
+        max_uses: int | None = None,
+        expires_at: datetime | str | None = None,
+        idempotency_key: str | None = None,
+    ) -> AccessCode:
+        """Create an access code for a resource."""
+        validate_id(resource_id)
+        body = build_body(
+            {
+                "resource_id": resource_id,
+                "name": name,
+                "max_uses": max_uses,
+                "expires_at": expires_at,
+            }
+        )
+        resp = self._request(
+            "POST",
+            "/v1/access-codes",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_access_code(resp)
+
+    def list_access_codes(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> AccessCodeListOutput:
+        """List access codes."""
+        data, meta = self._raw_request(
+            "GET",
+            "/v1/access-codes",
+            params=build_list_params(limit, cursor),
+        )
+        return parse_access_code_list_output(data, meta)
+
+    def revoke_access_code(self, access_code_id: str) -> None:
+        """Revoke an access code."""
+        validate_id(access_code_id, "access_code_id")
+        self._request("DELETE", f"/v1/access-codes/{access_code_id}")
+
+    # --- Usage, Customer, Billing, Connectors, Agent ---
+
+    def get_usage_current_period(self) -> CurrentPeriodUsage:
+        """Get current billing-period usage. JWT auth is required by the API."""
+        resp = self._request("GET", "/v1/usage/current-period")
+        return parse_current_period_usage(resp)
+
+    def get_usage_daily(self) -> DailyUsage:
+        """Get daily qURL creation counts. JWT auth is required by the API."""
+        resp = self._request("GET", "/v1/usage/daily")
+        return parse_daily_usage(resp)
+
+    def get_customer(self) -> Customer:
+        """Get the authenticated customer profile. JWT auth is required by the API."""
+        resp = self._request("GET", "/v1/customer")
+        return parse_customer(resp)
+
+    def update_customer(
+        self, *, spending_cap_cents: int, idempotency_key: str | None = None
+    ) -> Customer:
+        """Update customer billing settings. JWT auth is required by the API."""
+        validate_nonnegative_int(spending_cap_cents, "spending_cap_cents")
+        resp = self._request(
+            "PATCH",
+            "/v1/customer",
+            body={"spending_cap_cents": spending_cap_cents},
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_customer(resp)
+
+    def create_billing_checkout(
+        self, *, plan: str, idempotency_key: str | None = None
+    ) -> CheckoutSession:
+        """Create a Stripe checkout session. JWT auth is required by the API."""
+        validate_required_string(plan, "plan")
+        resp = self._request(
+            "POST",
+            "/v1/billing/checkout",
+            body={"plan": plan},
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_checkout_session(resp)
+
+    def create_billing_portal(
+        self, *, idempotency_key: str | None = None
+    ) -> PortalSession:
+        """Create a Stripe billing portal session. JWT auth is required by the API."""
+        resp = self._request(
+            "POST",
+            "/v1/billing/portal",
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_portal_session(resp)
+
+    def list_billing_invoices(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> InvoiceListOutput:
+        """List billing invoices. JWT auth is required by the API."""
+        data, meta = self._raw_request(
+            "GET",
+            "/v1/billing/invoices",
+            params=build_list_params(limit, cursor),
+        )
+        return parse_invoice_list_output(data, meta)
+
+    def list_connector_installations(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> ConnectorInstallationListOutput:
+        """List normalized connector installations."""
+        data, meta = self._raw_request(
+            "GET",
+            "/v1/connectors/installations",
+            params=build_list_params(limit, cursor),
+        )
+        return parse_connector_installation_list_output(data, meta)
+
+    def bootstrap_agent(
+        self,
+        *,
+        public_key: str,
+        agent_id: str | None = None,
+        hostname: str | None = None,
+        version: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> AgentBootstrapOutput:
+        """Bootstrap a LayerV qURL Connector agent."""
+        validate_required_string(public_key, "public_key")
+        body = build_body(
+            {
+                "public_key": public_key,
+                "agent_id": agent_id,
+                "hostname": hostname,
+                "version": version,
+            }
+        )
+        resp = self._request(
+            "POST",
+            "/v1/agent/bootstrap",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_agent_bootstrap_output(resp)
 
     # --- Internal HTTP plumbing ---
 
@@ -586,11 +1393,18 @@ class QURLClient:
         body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
         allow_statuses: tuple[int, ...] = (),
+        headers: dict[str, str] | None = None,
+        include_auth: bool = True,
     ) -> Any:
-        data, _ = self._raw_request(
-            method, path, body=body, params=params, allow_statuses=allow_statuses
-        )
-        return data
+        return self._raw_request(
+            method,
+            path,
+            body=body,
+            params=params,
+            allow_statuses=allow_statuses,
+            headers=headers,
+            include_auth=include_auth,
+        )[0]
 
     def _raw_request(
         self,
@@ -600,8 +1414,14 @@ class QURLClient:
         body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
         allow_statuses: tuple[int, ...] = (),
+        headers: dict[str, str] | None = None,
+        include_auth: bool = True,
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
+
+        ``include_auth=False`` is for public flows such as
+        :meth:`redeem_access_code`, where the bearer token should stay off
+        the wire even when the client was constructed with one.
 
         ``allow_statuses`` lets a caller opt specific non-2xx codes out of
         the default raise-on-error path and receive the parsed body
@@ -635,6 +1455,12 @@ class QURLClient:
         """
         url = f"{self._base_url}{path}"
         last_error: Exception | None = None
+        request_headers = dict(self._base_headers)
+        if not include_auth:
+            request_headers.pop("Authorization", None)
+        if headers:
+            request_headers.update(headers)
+        ensure_mutation_idempotency(method, request_headers)
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
@@ -650,7 +1476,7 @@ class QURLClient:
                     url,
                     json=body,
                     params=params,
-                    headers=self._base_headers,
+                    headers=request_headers,
                 )
             except httpx.TimeoutException as exc:
                 logger.debug("%s %s timed out", method, url)
@@ -688,6 +1514,10 @@ class QURLClient:
                 return envelope.get("data"), envelope.get("meta")
 
             err = parse_error(response)
+            # PATCH already uses the wider retry set; attaching a stable
+            # per-call idempotency key makes those retries safe. POST remains
+            # 429-only because resolve can consume one-time tokens on server
+            # failures.
             retryable = RETRYABLE_STATUS_POST if method == "POST" else RETRYABLE_STATUS
             if response.status_code in retryable and attempt < self._max_retries:
                 last_error = err

@@ -15,14 +15,19 @@ import functools
 import logging
 import random
 import re
+from collections.abc import Iterable, Mapping, Set
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
+from uuid import uuid4
 
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
+    ConflictError,
+    GoneError,
     NotFoundError,
     QURLError,
     RateLimitError,
@@ -31,33 +36,79 @@ from layerv_qurl.errors import (
 )
 from layerv_qurl.types import (
     QURL,
+    AccessCode,
+    AccessCodeListOutput,
     AccessGrant,
     AccessPolicy,
     AccessToken,
+    AgentBootstrapOutput,
     AIAgentPolicy,
+    APIKey,
+    APIKeyListOutput,
     BatchCreateOutput,
     BatchItemError,
     BatchItemResult,
+    CheckDetail,
+    CheckoutSession,
+    ConnectorInstallation,
+    ConnectorInstallationCapabilities,
+    ConnectorInstallationListOutput,
+    ConnectorInstallationStats,
     CreateOutput,
+    CurrentPeriodUsage,
+    Customer,
+    DailyUsage,
+    DNSRecord,
+    Domain,
+    DomainListOutput,
+    DomainVerifyOutput,
+    Invoice,
+    InvoiceListOutput,
     ListOutput,
     MintOutput,
+    NHPServerPeerInfo,
+    PortalSession,
     Quota,
     RateLimits,
+    RedeemAccessCodeOutput,
     ResolveOutput,
+    Resource,
+    ResourceDetail,
+    ResourceListOutput,
+    Session,
+    SessionListOutput,
+    SessionTerminateOutput,
     Usage,
+    UsageCostEstimate,
+    UsageDailyEntry,
+    Webhook,
+    WebhookDelivery,
+    WebhookDeliveryListOutput,
+    WebhookEventTypeInfo,
+    WebhookEventTypesOutput,
+    WebhookListOutput,
     _parse_dt,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import httpx
 
 logger = logging.getLogger("layerv_qurl")
+_T = TypeVar("_T")
 
 DEFAULT_BASE_URL = "https://api.layerv.ai"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 3
 RETRYABLE_STATUS = {429, 502, 503, 504}
-RETRYABLE_STATUS_POST = {429}  # POST is not idempotent — only retry rate limits
+# POST requests still only retry rate limits: resolve can consume one-time
+# tokens after an NHP knock failure, and service errors are not cached.
+RETRYABLE_STATUS_POST = {429}
+# DELETE keeps the wider HTTP retry set without an idempotency key because
+# repeated deletes are safe by HTTP semantics; create/update mutations need
+# service-side replay protection.
+IDEMPOTENCY_METHODS = {"POST", "PATCH"}
 
 _RESOURCE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
@@ -66,9 +117,18 @@ _ERROR_CLASS_MAP: dict[int, type[QURLError]] = {
     401: AuthenticationError,
     403: AuthorizationError,
     404: NotFoundError,
+    409: ConflictError,
+    410: GoneError,
     422: ValidationError,
     429: RateLimitError,
 }
+
+
+class UnsetType:
+    """Sentinel for fields where omitted and explicit null differ."""
+
+
+UNSET = UnsetType()
 
 
 @functools.lru_cache(maxsize=1)
@@ -134,6 +194,106 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def build_string_list(value: Any, field: str) -> list[str]:
+    """Build a non-empty list of strings without accepting strings or mappings."""
+    if isinstance(value, str):
+        raise ValueError(f"{field}: must be an iterable of strings, not a string")
+    if isinstance(value, Mapping):
+        raise ValueError(f"{field}: must be an iterable of strings, not a mapping")
+    if isinstance(value, Set):
+        raise ValueError(f"{field}: must be an ordered iterable of strings, not a set")
+    if not isinstance(value, Iterable):
+        raise ValueError(f"{field}: must be an iterable of strings")
+    items = list(value)
+    if not items:
+        raise ValueError(f"{field}: cannot be empty; pass at least one value")
+    if any(not isinstance(item, str) for item in items):
+        raise ValueError(f"{field}: all values must be strings")
+    return items
+
+
+def build_query_params(pairs: dict[str, Any]) -> dict[str, str]:
+    """Build query params from optional values, dropping ``None`` values."""
+    return {k: _query_value(v) for k, v in pairs.items() if v is not None}
+
+
+def _query_value(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
+def idempotency_headers(
+    idempotency_key: str | None, *, min_length: int = 1
+) -> dict[str, str] | None:
+    """Build the optional Idempotency-Key header."""
+    if idempotency_key is None:
+        return None
+    if len(idempotency_key) < min_length:
+        raise ValueError(
+            f"idempotency_key: must be at least {min_length} characters "
+            f"(got {len(idempotency_key)})"
+        )
+    if len(idempotency_key) > 256:
+        raise ValueError(
+            f"idempotency_key: must be 256 characters or fewer (got {len(idempotency_key)})"
+        )
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in idempotency_key):
+        raise ValueError("idempotency_key: must not contain control characters")
+    return {"Idempotency-Key": idempotency_key}
+
+
+def ensure_mutation_idempotency(method: str, headers: dict[str, str]) -> None:
+    """Generate a per-call idempotency key for supported mutating requests."""
+    if method.upper() not in IDEMPOTENCY_METHODS:
+        return
+    if any(key.lower() == "idempotency-key" for key in headers):
+        return
+    headers["Idempotency-Key"] = str(uuid4())
+
+
+def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
+    if not meta:
+        return None, False
+    return meta.get("next_cursor"), meta.get("has_more", False)
+
+
+def _parse_list_items(data: Any, parser: Callable[[dict[str, Any]], _T]) -> list[_T]:
+    if not isinstance(data, list):
+        return []
+    items: list[_T] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            items.append(parser(item))
+        except KeyError as exc:
+            missing = exc.args[0] if exc.args else "<unknown>"
+            parser_name = getattr(parser, "__name__", "parser")
+            logger.debug(
+                "Skipping malformed API list item in %s: missing %r",
+                parser_name,
+                missing,
+            )
+            continue
+    return items
+
+
+def domain_path_segment(domain: str) -> str:
+    """Encode a custom domain for use as one URL path segment."""
+    return quote(domain, safe="")
+
+
+def require_nonempty_update(body: dict[str, Any], method: str, fields: str) -> None:
+    """Raise a consistent error when an update method has no fields."""
+    if not body:
+        raise ValueError(f"{method}: at least one field ({fields}) must be provided")
+
+
 # ---- Spec-derived input validation --------------------------------------
 # These mirror the constraints documented on each request schema in
 # qurl/api/openapi.yaml so obvious mistakes fail fast with a ValueError
@@ -152,6 +312,44 @@ MAX_TAG_LENGTH = 50
 # (e.g. allowing colons) the SDK must widen this regex or it will
 # reject strings the API would otherwise accept.
 _TAG_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _-]*$")
+_ALIAS_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
+_JWT_LIKE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+_RESERVED_ALIASES = frozenset(
+    {
+        "setalias",
+        "unsetalias",
+        "get",
+        "aliases",
+        "admin",
+        "claim",
+        "register",
+        "agent",
+        "knock",
+        "token",
+        "bootstrap",
+        "status",
+        "info",
+        "whoami",
+        "revoke",
+        "delete",
+        "enable",
+        "disable",
+        "audit",
+        "version",
+        "health",
+        "create",
+        "new",
+        "list",
+        "help",
+        "all",
+        "frpc",
+        "frps",
+        "tunnel",
+        "qurl",
+        "me",
+        "*",
+    }
+)
 RESOURCE_ID_PREFIX = "r_"
 # target_url must use an http(s) scheme per the API's SSRF protection.
 # This is a cheap client-side sanity check — the server is still the
@@ -165,6 +363,39 @@ def _require_max_length(value: str | None, field_name: str, maximum: int) -> Non
         raise ValueError(
             f"{field_name}: must be {maximum} characters or fewer (got {len(value)})"
         )
+
+
+def validate_required_string(value: str, field_name: str) -> None:
+    """Validate required string request fields that have no richer local schema."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name}: must be a non-empty string")
+
+
+def validate_alias(value: str | None, field_name: str = "alias") -> None:
+    """Validate resource alias strings against the qurl-service contract."""
+    if value is None:
+        return
+    if not isinstance(value, str) or not _ALIAS_PATTERN.match(value):
+        raise ValueError(
+            f"{field_name}: must be 3-64 lowercase alphanumeric characters or "
+            "hyphens, start with a letter, and end alphanumeric"
+        )
+    if value in _RESERVED_ALIASES:
+        raise ValueError(f"{field_name}: reserved alias")
+
+
+def validate_nonnegative_int(value: int, field_name: str) -> None:
+    """Validate required non-negative integer request fields."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field_name}: must be a non-negative integer")
+
+
+def _require_http_url(value: str, field_name: str) -> None:
+    if not isinstance(value, str) or not value.startswith(_ALLOWED_URL_SCHEMES):
+        raise ValueError(
+            f"{field_name}: must start with http:// or https:// (got {repr(value)[:40]})"
+        )
+    _require_max_length(value, field_name, MAX_TARGET_URL)
 
 
 def _require_max_sessions_in_range(value: int | None) -> None:
@@ -213,16 +444,10 @@ def validate_create_input(
     Raises ``ValueError`` on constraint violations so obvious mistakes
     fail fast instead of round-tripping to the API.
     """
-    if not isinstance(target_url, str) or not target_url.startswith(_ALLOWED_URL_SCHEMES):
-        # `repr(...)[:40]` instead of `target_url[:32]!r` — the original
-        # subscript would raise `TypeError` on any non-subscriptable
-        # input (None, int, bool, …) *before* the ValueError could
-        # surface, masking the real validation failure with a cryptic
-        # slicing error. `repr()` works on any object.
-        raise ValueError(
-            f"target_url: must start with http:// or https:// (got {repr(target_url)[:40]})"
-        )
-    _require_max_length(target_url, "target_url", MAX_TARGET_URL)
+    # `repr(...)[:40]` inside `_require_http_url` avoids the old
+    # `target_url[:32]!r` trap for non-subscriptable inputs (None, int,
+    # bool, ...), surfacing a clean ValueError instead of TypeError.
+    _require_http_url(target_url, "target_url")
     _require_max_length(label, "label", MAX_LABEL)
     _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
     _require_max_sessions_in_range(max_sessions)
@@ -232,10 +457,23 @@ def validate_update_input(
     *,
     description: str | None = None,
     tags: list[str] | None = None,
+    custom_domain: str | None = None,
 ) -> None:
     """Validate update_qurl input against spec-documented constraints."""
     _require_max_length(description, "description", MAX_DESCRIPTION)
+    _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
     _require_valid_tags(tags)
+
+
+def validate_domain_input(domain: str) -> None:
+    """Validate custom-domain strings before using them in URL path segments."""
+    validate_required_string(domain, "domain")
+    _require_max_length(domain, "domain", MAX_CUSTOM_DOMAIN)
+
+
+def validate_webhook_url(url: str) -> None:
+    """Validate webhook callback URLs with the same basic HTTP(S) guard."""
+    _require_http_url(url, "url")
 
 
 def validate_mint_input(
@@ -274,15 +512,17 @@ def require_resource_id_prefix(resource_id: str, operation: str = "delete") -> N
         )
 
 
-def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
+def _parse_access_policy(data: dict[str, Any] | None) -> AccessPolicy | None:
     """Parse an AccessPolicy from API response data."""
+    if data is None:
+        return None
     ai_policy = None
     ap = data.get("ai_agent_policy")
     # Guard against non-dict values (e.g. API returning a bare string
     # or boolean for ai_agent_policy). Without this, `.get("block_all")`
     # would raise AttributeError. Consistent with the defensive posture
     # in `_validate_batch_create_shape`.
-    if ap is not None and isinstance(ap, dict):
+    if isinstance(ap, dict):
         ai_policy = AIAgentPolicy(
             block_all=ap.get("block_all"),
             deny_categories=ap.get("deny_categories"),
@@ -299,11 +539,8 @@ def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
     )
 
 
-def _parse_access_token(data: dict[str, Any]) -> AccessToken:
-    """Parse an AccessToken from API response data."""
-    policy = None
-    if data.get("access_policy") is not None:
-        policy = _parse_access_policy(data["access_policy"])
+def parse_access_token(data: dict[str, Any]) -> AccessToken:
+    """Parse a qURL token summary."""
     return AccessToken(
         qurl_id=data["qurl_id"],
         status=data["status"],
@@ -313,10 +550,20 @@ def _parse_access_token(data: dict[str, Any]) -> AccessToken:
         use_count=data.get("use_count", 0),
         label=data.get("label"),
         qurl_site=data.get("qurl_site"),
-        access_policy=policy,
+        access_policy=_parse_access_policy(data.get("access_policy")),
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
     )
+
+
+def _parse_access_token_preview_items(data: Any) -> list[AccessToken]:
+    if not isinstance(data, list):
+        return []
+    return [
+        parse_access_token(item)
+        for item in data
+        if isinstance(item, dict) and "qurl_id" in item and "status" in item
+    ]
 
 
 def parse_qurl(data: dict[str, Any]) -> QURL:
@@ -325,17 +572,18 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
     # API returns "qurls" array; SDK exposes as "access_tokens" for clarity.
     raw_tokens = data.get("qurls") if "qurls" in data else data.get("access_tokens")
     if raw_tokens is not None:
-        tokens = [_parse_access_token(t) for t in raw_tokens]
+        tokens = _parse_list_items(raw_tokens, parse_access_token)
     return QURL(
         resource_id=data["resource_id"],
-        target_url=data["target_url"],
+        target_url=data.get("target_url"),
         status=data["status"],
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
         description=data.get("description"),
-        tags=data.get("tags", []),
+        tags=data.get("tags") or [],
         qurl_site=data.get("qurl_site"),
         custom_domain=data.get("custom_domain"),
+        slug=data.get("slug"),
         qurl_count=data.get("qurl_count"),
         access_tokens=tokens,
     )
@@ -347,8 +595,7 @@ def parse_create_output(data: dict[str, Any]) -> CreateOutput:
     # checks. Intentionally asymmetric with `label` (preserved as-is):
     # `""` is never a meaningful identifier but IS a meaningful "cleared"
     # value for user-facing metadata.
-    qurl_id_raw = data.get("qurl_id")
-    qurl_id = qurl_id_raw if qurl_id_raw else None
+    qurl_id = data.get("qurl_id") or None
     return CreateOutput(
         resource_id=data["resource_id"],
         qurl_link=data["qurl_link"],
@@ -356,6 +603,8 @@ def parse_create_output(data: dict[str, Any]) -> CreateOutput:
         expires_at=_parse_dt(data.get("expires_at")),
         qurl_id=qurl_id,
         label=data.get("label"),
+        branded_domain=data.get("branded_domain"),
+        resource_type=data.get("type"),
     )
 
 
@@ -363,52 +612,34 @@ def parse_mint_output(data: dict[str, Any]) -> MintOutput:
     """Parse a MintOutput from API response data."""
     return MintOutput(
         qurl_link=data["qurl_link"],
+        qurl_id=data.get("qurl_id") or None,
         expires_at=_parse_dt(data.get("expires_at")),
+        branded_domain=data.get("branded_domain"),
+        resource_type=data.get("type"),
+    )
+
+
+def _parse_access_grant(data: dict[str, Any] | None) -> AccessGrant | None:
+    if data is None:
+        return None
+    return AccessGrant(
+        expires_in=data["expires_in"],
+        granted_at=_parse_dt(data.get("granted_at")),
+        src_ip=data.get("src_ip", ""),
     )
 
 
 def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
     """Parse a ResolveOutput from API response data."""
-    grant = None
-    if data.get("access_grant") is not None:
-        grant_data = data["access_grant"]
-        grant = AccessGrant(
-            expires_in=grant_data["expires_in"],
-            granted_at=_parse_dt(grant_data.get("granted_at")),
-            src_ip=grant_data.get("src_ip", ""),
-        )
     return ResolveOutput(
-        target_url=data["target_url"],
+        target_url=data.get("target_url"),
         resource_id=data["resource_id"],
-        access_grant=grant,
+        access_grant=_parse_access_grant(data.get("access_grant")),
     )
 
 
 def parse_quota(data: dict[str, Any]) -> Quota:
     """Parse a Quota from API response data."""
-    rate_limits = None
-    if data.get("rate_limits") is not None:
-        limits_data = data["rate_limits"]
-        rate_limits = RateLimits(
-            create_per_minute=limits_data.get("create_per_minute", 0),
-            create_per_hour=limits_data.get("create_per_hour", 0),
-            list_per_minute=limits_data.get("list_per_minute", 0),
-            resolve_per_minute=limits_data.get("resolve_per_minute", 0),
-            max_active_qurls=limits_data.get("max_active_qurls", 0),
-            max_tokens_per_qurl=limits_data.get("max_tokens_per_qurl", 0),
-            max_expiry_seconds=limits_data.get("max_expiry_seconds", 0),
-        )
-    usage = None
-    if data.get("usage") is not None:
-        usage_data = data["usage"]
-        usage = Usage(
-            qurls_created=usage_data.get("qurls_created", 0),
-            active_qurls=usage_data.get("active_qurls", 0),
-            # Nullable per the API spec — the field is null when
-            # max_active_qurls is unlimited.
-            active_qurls_percent=usage_data.get("active_qurls_percent"),
-            total_accesses=usage_data.get("total_accesses", 0),
-        )
     return Quota(
         # Fall back to the same sentinel the dataclass default uses
         # (see ``Quota.plan`` in types.py) so a malformed API response
@@ -420,18 +651,480 @@ def parse_quota(data: dict[str, Any]) -> Quota:
         plan=data.get("plan", "unknown"),
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
-        rate_limits=rate_limits,
-        usage=usage,
+        rate_limits=_parse_rate_limits(data.get("rate_limits")),
+        usage=_parse_usage_block(data.get("usage")),
+    )
+
+
+def _parse_rate_limits(data: dict[str, Any] | None) -> RateLimits | None:
+    if data is None:
+        return None
+    return RateLimits(
+        create_per_minute=data.get("create_per_minute", 0),
+        create_per_hour=data.get("create_per_hour", 0),
+        list_per_minute=data.get("list_per_minute", 0),
+        resolve_per_minute=data.get("resolve_per_minute", 0),
+        max_active_qurls=data.get("max_active_qurls", 0),
+        max_tokens_per_qurl=data.get("max_tokens_per_qurl", 0),
+        max_expiry_seconds=data.get("max_expiry_seconds", 0),
+    )
+
+
+def _parse_usage_block(data: dict[str, Any] | None) -> Usage | None:
+    if data is None:
+        return None
+    return Usage(
+        qurls_created=data.get("qurls_created", 0),
+        active_qurls=data.get("active_qurls", 0),
+        # Nullable per the API spec — the field is null when
+        # max_active_qurls is unlimited.
+        active_qurls_percent=data.get("active_qurls_percent"),
+        total_accesses=data.get("total_accesses", 0),
     )
 
 
 def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
     """Parse a ListOutput from API response data."""
-    qurls = [parse_qurl(q) for q in data] if isinstance(data, list) else []
-    return ListOutput(
-        qurls=qurls,
-        next_cursor=meta.get("next_cursor") if meta else None,
-        has_more=meta.get("has_more", False) if meta else False,
+    next_cursor, has_more = _meta_page(meta)
+    qurls = _parse_list_items(data, parse_qurl)
+    return ListOutput(qurls=qurls, next_cursor=next_cursor, has_more=has_more)
+
+
+def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
+    resource_id = data["resource_id"] if strict_identity else data.get("resource_id", "")
+    status = data["status"] if strict_identity else data.get("status", "unknown")
+    return Resource(
+        resource_id=resource_id,
+        status=status,
+        resource_type=data.get("type"),
+        target_url=data.get("target_url"),
+        knock_resource_id=data.get("knock_resource_id"),
+        description=data.get("description"),
+        tags=data.get("tags") or [],
+        custom_domain=data.get("custom_domain"),
+        alias=data.get("alias"),
+        slug=data.get("slug"),
+        preserve_host=data.get("preserve_host", False),
+        session_duration_cap=data.get("session_duration_cap"),
+        qurl_count=data.get("qurl_count"),
+        created_at=_parse_dt(data.get("created_at")),
+        expires_at=_parse_dt(data.get("expires_at")),
+        tombstoned_at=_parse_dt(data.get("tombstoned_at")),
+    )
+
+
+def parse_resource(data: dict[str, Any]) -> Resource:
+    """Parse a resource-management API resource."""
+    return _parse_resource(data, strict_identity=True)
+
+
+def parse_resource_detail(data: dict[str, Any]) -> ResourceDetail:
+    """Parse a resource detail response."""
+    raw_resource = data.get("resource")
+    resource = _parse_resource(
+        raw_resource if isinstance(raw_resource, dict) else {},
+        strict_identity=False,
+    )
+    qurls = _parse_access_token_preview_items(data.get("qurls"))
+    return ResourceDetail(resource=resource, qurls=qurls)
+
+
+def parse_resource_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> ResourceListOutput:
+    """Parse a resource list response."""
+    next_cursor, has_more = _meta_page(meta)
+    resources = _parse_list_items(data, parse_resource)
+    return ResourceListOutput(resources=resources, next_cursor=next_cursor, has_more=has_more)
+
+
+def parse_session(data: dict[str, Any]) -> Session:
+    """Parse an active resource session."""
+    return Session(
+        session_id=data["session_id"],
+        qurl_id=data.get("qurl_id"),
+        src_ip=data.get("src_ip"),
+        user_agent=data.get("user_agent"),
+        created_at=_parse_dt(data.get("created_at")),
+        last_seen_at=_parse_dt(data.get("last_seen_at")),
+    )
+
+
+def parse_session_list_output(data: Any) -> SessionListOutput:
+    """Parse an active session list response."""
+    sessions = _parse_list_items(data, parse_session)
+    return SessionListOutput(sessions=sessions)
+
+
+def parse_session_terminate_output(data: dict[str, Any] | None) -> SessionTerminateOutput:
+    """Parse a session termination response."""
+    return SessionTerminateOutput(terminated=(data or {}).get("terminated", 0))
+
+
+def _parse_dns_record(data: dict[str, Any]) -> DNSRecord:
+    return DNSRecord(
+        type=data.get("type", ""),
+        name=data.get("name", ""),
+        value=data.get("value", ""),
+        verified=data.get("verified", False),
+    )
+
+
+# Object identity fields stay strict so malformed rows fail at the parser,
+# while ancillary fields use defaults for partial-payload tolerance.
+def parse_domain(data: dict[str, Any]) -> Domain:
+    """Parse a custom domain response."""
+    return Domain(
+        domain=data["domain"],
+        status=data["status"],
+        verification_token=data.get("verification_token"),
+        token_expires_at=_parse_dt(data.get("token_expires_at")),
+        acme_cname_target=data.get("acme_cname_target"),
+        created_at=_parse_dt(data.get("created_at")),
+        verified_at=_parse_dt(data.get("verified_at")),
+        activated_at=_parse_dt(data.get("activated_at")),
+        ready_for_qurls=data.get("ready_for_qurls", False),
+        dns_records=[
+            _parse_dns_record(r)
+            for r in data.get("dns_records") or []
+            if isinstance(r, dict)
+        ],
+    )
+
+
+def parse_domain_list_output(data: Any, meta: dict[str, Any] | None) -> DomainListOutput:
+    """Parse a custom-domain list response."""
+    next_cursor, has_more = _meta_page(meta)
+    domains = _parse_list_items(data, parse_domain)
+    return DomainListOutput(domains=domains, next_cursor=next_cursor, has_more=has_more)
+
+
+def _parse_check_detail(data: dict[str, Any]) -> CheckDetail:
+    return CheckDetail(
+        verified=data.get("verified", False),
+        error=data.get("error"),
+        found=data.get("found"),
+    )
+
+
+def parse_domain_verify_output(data: dict[str, Any]) -> DomainVerifyOutput:
+    """Parse custom-domain verification output."""
+    checks = {
+        name: _parse_check_detail(check)
+        for name, check in data.get("checks", {}).items()
+        if isinstance(check, dict)
+    }
+    return DomainVerifyOutput(
+        domain=data["domain"],
+        status=data["status"],
+        checks=checks,
+    )
+
+
+def parse_webhook(data: dict[str, Any]) -> Webhook:
+    """Parse webhook subscription data."""
+    return Webhook(
+        webhook_id=data["webhook_id"],
+        owner_id=data.get("owner_id"),
+        url=data.get("url", ""),
+        events=data.get("events") or [],
+        status=data.get("status"),
+        description=data.get("description"),
+        created_at=_parse_dt(data.get("created_at")),
+        updated_at=_parse_dt(data.get("updated_at")),
+        failure_count=data.get("failure_count", 0),
+        last_delivery_success=data.get("last_delivery_success"),
+        last_delivery_time=data.get("last_delivery_time"),
+        secret=data.get("secret"),
+    )
+
+
+def parse_webhook_list_output(data: Any, meta: dict[str, Any] | None) -> WebhookListOutput:
+    """Parse a webhook list response."""
+    next_cursor, has_more = _meta_page(meta)
+    webhooks = _parse_list_items(data, parse_webhook)
+    return WebhookListOutput(webhooks=webhooks, next_cursor=next_cursor, has_more=has_more)
+
+
+def parse_webhook_delivery(data: dict[str, Any]) -> WebhookDelivery:
+    """Parse webhook delivery data."""
+    return WebhookDelivery(
+        delivery_id=data["delivery_id"],
+        webhook_id=data.get("webhook_id"),
+        event_type=data.get("event_type"),
+        status=data.get("status"),
+        response_code=data.get("response_code"),
+        response_body=data.get("response_body"),
+        error_message=data.get("error_message"),
+        duration_ms=data.get("duration_ms"),
+        retry_count=data.get("retry_count", 0),
+        created_at=_parse_dt(data.get("created_at")),
+        completed_at=_parse_dt(data.get("completed_at")),
+    )
+
+
+def parse_webhook_delivery_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> WebhookDeliveryListOutput:
+    """Parse a webhook delivery list response."""
+    next_cursor, has_more = _meta_page(meta)
+    deliveries = _parse_list_items(data, parse_webhook_delivery)
+    return WebhookDeliveryListOutput(
+        deliveries=deliveries, next_cursor=next_cursor, has_more=has_more
+    )
+
+
+def _parse_event_type_info(data: dict[str, Any]) -> WebhookEventTypeInfo:
+    return WebhookEventTypeInfo(
+        type=data.get("type", ""),
+        category=data.get("category"),
+        description=data.get("description"),
+    )
+
+
+def parse_webhook_event_types_output(data: Any) -> WebhookEventTypesOutput:
+    """Parse supported webhook event types."""
+    events = [
+        event
+        for event in _parse_list_items(data, _parse_event_type_info)
+        if event.type
+    ]
+    return WebhookEventTypesOutput(events=events)
+
+
+def parse_api_key(data: dict[str, Any]) -> APIKey:
+    """Parse API key metadata."""
+    return APIKey(
+        key_id=data["key_id"],
+        key_prefix=data["key_prefix"],
+        name=data.get("name", ""),
+        scopes=data.get("scopes") or [],
+        status=data.get("status"),
+        created_at=_parse_dt(data.get("created_at")),
+        updated_at=_parse_dt(data.get("updated_at")),
+        last_used_at=_parse_dt(data.get("last_used_at")),
+        expires_at=_parse_dt(data.get("expires_at")),
+        purpose=data.get("purpose"),
+        tunnel_slug=data.get("tunnel_slug"),
+        api_key=data.get("api_key"),
+    )
+
+
+def parse_api_key_list_output(data: Any, meta: dict[str, Any] | None) -> APIKeyListOutput:
+    """Parse an API key list response."""
+    next_cursor, has_more = _meta_page(meta)
+    api_keys = _parse_list_items(data, parse_api_key)
+    return APIKeyListOutput(api_keys=api_keys, next_cursor=next_cursor, has_more=has_more)
+
+
+def parse_redeem_access_code_output(data: dict[str, Any]) -> RedeemAccessCodeOutput:
+    """Parse public access-code redemption output."""
+    return RedeemAccessCodeOutput(redirect_url=data["redirect_url"])
+
+
+def parse_access_code(data: dict[str, Any]) -> AccessCode:
+    """Parse access-code metadata."""
+    return AccessCode(
+        access_code_id=data["access_code_id"],
+        resource_id=data["resource_id"],
+        name=data.get("name"),
+        status=data.get("status"),
+        max_uses=data.get("max_uses", 0),
+        use_count=data.get("use_count", 0),
+        created_at=_parse_dt(data.get("created_at")),
+        expires_at=_parse_dt(data.get("expires_at")),
+        code=data.get("code"),
+    )
+
+
+def parse_access_code_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> AccessCodeListOutput:
+    """Parse an access-code list response."""
+    next_cursor, has_more = _meta_page(meta)
+    access_codes = _parse_list_items(data, parse_access_code)
+    return AccessCodeListOutput(
+        access_codes=access_codes, next_cursor=next_cursor, has_more=has_more
+    )
+
+
+def _parse_usage_cost(data: dict[str, Any] | None) -> UsageCostEstimate | None:
+    if data is None:
+        return None
+    return UsageCostEstimate(
+        currency=data.get("currency", ""),
+        amount_cents=data.get("amount_cents", 0),
+        description=data.get("description", ""),
+    )
+
+
+def parse_current_period_usage(data: dict[str, Any]) -> CurrentPeriodUsage:
+    """Parse current-period usage."""
+    return CurrentPeriodUsage(
+        tier=data.get("tier", "unknown"),
+        period_start=_parse_dt(data.get("period_start")),
+        period_end=_parse_dt(data.get("period_end")),
+        qurls_created=data.get("qurls_created", 0),
+        active_qurls=data.get("active_qurls", 0),
+        cost_estimate=_parse_usage_cost(data.get("cost_estimate")),
+    )
+
+
+def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
+    """Parse daily usage breakdown."""
+    return DailyUsage(
+        tier=data.get("tier", "unknown"),
+        period_start=_parse_dt(data.get("period_start")),
+        period_end=_parse_dt(data.get("period_end")),
+        daily=[
+            UsageDailyEntry(
+                date=item.get("date", ""),
+                qurls_created=item.get("qurls_created", 0),
+            )
+            for item in data.get("daily") or []
+            if isinstance(item, dict)
+        ],
+    )
+
+
+def parse_customer(data: dict[str, Any]) -> Customer:
+    """Parse customer profile data."""
+    # The current OpenAPI schema is an integer; tolerate older/future object
+    # wrappers without letting bool sneak through Python's int hierarchy.
+    current_period_usage = data.get("current_period_usage", 0)
+    if isinstance(current_period_usage, bool):
+        current_period_usage_count = 0
+    elif isinstance(current_period_usage, int):
+        current_period_usage_count = current_period_usage
+    elif isinstance(current_period_usage, dict):
+        count = current_period_usage.get("count", 0)
+        current_period_usage_count = (
+            count if isinstance(count, int) and not isinstance(count, bool) else 0
+        )
+    else:
+        current_period_usage_count = 0
+    return Customer(
+        tier=data.get("tier", "unknown"),
+        spending_cap_cents=data.get("spending_cap_cents", 0),
+        # Wire name is `current_period_usage`; SDK suffixes `_count` to
+        # avoid confusion with the richer CurrentPeriodUsage response.
+        current_period_usage_count=current_period_usage_count,
+        frozen=data.get("frozen", False),
+        frozen_reason=data.get("frozen_reason"),
+    )
+
+
+def parse_checkout_session(data: dict[str, Any]) -> CheckoutSession:
+    """Parse a Stripe checkout session response."""
+    return CheckoutSession(url=data["url"])
+
+
+def parse_portal_session(data: dict[str, Any]) -> PortalSession:
+    """Parse a Stripe billing portal session response."""
+    return PortalSession(url=data["url"])
+
+
+def parse_invoice(data: dict[str, Any]) -> Invoice:
+    """Parse a billing invoice summary."""
+    return Invoice(
+        id=data.get("id", ""),
+        amount_cents=data.get("amount_cents", 0),
+        status=data.get("status", ""),
+        created_at=_parse_dt(data.get("created_at")),
+        pdf_url=data.get("pdf_url"),
+    )
+
+
+def parse_invoice_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> InvoiceListOutput:
+    """Parse billing invoice list output."""
+    next_cursor, has_more = _meta_page(meta)
+    # qurl-service returns billing invoices as {"invoices": [...]}, unlike
+    # the top-level array shape used by most list endpoints.
+    if isinstance(data, dict):
+        raw_invoices = data.get("invoices")
+        if raw_invoices is None and data:
+            logger.debug(
+                "parse_invoice_list_output: expected data.invoices, got keys=%s",
+                list(data.keys()),
+            )
+    else:
+        raw_invoices = None
+        if data:
+            logger.debug(
+                "parse_invoice_list_output: expected object with invoices, got %s",
+                type(data).__name__,
+            )
+    invoices = _parse_list_items(raw_invoices, parse_invoice)
+    return InvoiceListOutput(invoices=invoices, next_cursor=next_cursor, has_more=has_more)
+
+
+def _parse_connector_stats(data: dict[str, Any] | None) -> ConnectorInstallationStats | None:
+    if data is None:
+        return None
+    return ConnectorInstallationStats(
+        resources=data.get("resources", 0),
+        qurls=data.get("qurls", 0),
+        accesses_24h=data.get("accesses_24h", 0),
+        accesses_7d=data.get("accesses_7d", 0),
+        errors_24h=data.get("errors_24h", 0),
+    )
+
+
+def _parse_connector_capabilities(
+    data: dict[str, Any] | None,
+) -> ConnectorInstallationCapabilities | None:
+    if data is None:
+        return None
+    return ConnectorInstallationCapabilities(
+        configure=data.get("configure", False),
+        disconnect=data.get("disconnect", False),
+        reauth=data.get("reauth", False),
+        view_activity=data.get("view_activity", False),
+    )
+
+
+def parse_connector_installation(data: dict[str, Any]) -> ConnectorInstallation:
+    """Parse a connector installation summary."""
+    return ConnectorInstallation(
+        installation_id=data["installation_id"],
+        plugin_id=data["plugin_id"],
+        label=data["label"],
+        subject_kind=data["subject_kind"],
+        subject_display_name=data["subject_display_name"],
+        status=data["status"],
+        installed_at=_parse_dt(data.get("installed_at")),
+        last_activity_at=_parse_dt(data.get("last_activity_at")),
+        stats=_parse_connector_stats(data.get("stats")),
+        capabilities=_parse_connector_capabilities(data.get("capabilities")),
+    )
+
+
+def parse_connector_installation_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> ConnectorInstallationListOutput:
+    """Parse connector installation list output."""
+    next_cursor, has_more = _meta_page(meta)
+    installations = _parse_list_items(data, parse_connector_installation)
+    return ConnectorInstallationListOutput(
+        installations=installations, next_cursor=next_cursor, has_more=has_more
+    )
+
+
+def parse_agent_bootstrap_output(data: dict[str, Any]) -> AgentBootstrapOutput:
+    """Parse connector agent bootstrap output."""
+    raw_peer = data.get("nhp_server_peer")
+    peer = raw_peer if isinstance(raw_peer, dict) else {}
+    return AgentBootstrapOutput(
+        agent_id=data.get("agent_id", ""),
+        registered_at=_parse_dt(data.get("registered_at")),
+        nhp_server_peer=NHPServerPeerInfo(
+            public_key_b64=peer.get("public_key_b64", ""),
+            host=peer.get("host", ""),
+            port=peer.get("port", 0),
+            expire_time=peer.get("expire_time", 0),
+        ),
     )
 
 
@@ -535,7 +1228,7 @@ def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
     """
     _validate_batch_create_shape(data)
     results: list[BatchItemResult] = []
-    for item in data.get("results", []):
+    for item in data.get("results") or []:
         err = None
         if item.get("error"):
             e = item["error"]
@@ -550,6 +1243,7 @@ def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
                 resource_id=item.get("resource_id"),
                 qurl_link=item.get("qurl_link"),
                 qurl_site=item.get("qurl_site"),
+                branded_domain=item.get("branded_domain"),
                 expires_at=_parse_dt(item.get("expires_at")),
                 error=err,
             )
@@ -624,6 +1318,7 @@ def parse_error(response: httpx.Response) -> QURLError:
             instance=err.get("instance"),
             invalid_fields=err.get("invalid_fields"),
             request_id=(envelope.get("meta") or {}).get("request_id"),
+            meta=envelope.get("meta"),
             retry_after=retry_after,
         )
     except (ValueError, KeyError, TypeError):
@@ -648,9 +1343,10 @@ def retry_delay(attempt: int, last_error: Exception | None) -> float:
 def build_list_params(
     limit: int | None,
     cursor: str | None,
-    status: str | None,
-    q: str | None,
-    sort: str | None,
+    *,
+    status: str | None = None,
+    q: str | None = None,
+    sort: str | None = None,
     created_after: datetime | str | None = None,
     created_before: datetime | str | None = None,
     expires_before: datetime | str | None = None,
@@ -685,15 +1381,13 @@ def build_list_params(
         "expires_before": expires_before,
         "expires_after": expires_after,
     }
-    return {
-        k: v.isoformat() if isinstance(v, datetime) else str(v)
-        for k, v in pairs.items()
-        if v is not None
-    }
+    return build_query_params(pairs)
 
 
 def mask_key(api_key: str) -> str:
-    """Mask an API key for display, showing first 4 + last 4 chars."""
+    """Mask an API key for display, hiding JWT suffix fragments."""
+    if api_key.startswith("eyJ") and _JWT_LIKE_PATTERN.match(api_key):
+        return api_key[:4] + "***"
     if len(api_key) > 8:
         return api_key[:4] + "***" + api_key[-4:]
     return "***"

@@ -41,7 +41,7 @@ client = QURLClient(api_key="lv_live_xxx")
 result = client.create(
     target_url="https://api.example.com/data",
     expires_in="24h",
-    description="API access for agent",
+    label="API access for agent",
 )
 print(result.qurl_link)  # Share this link
 
@@ -52,9 +52,34 @@ print(f"Access granted to {access.target_url} for {access.access_grant.expires_i
 # Extend a qURL's expiration
 qurl = client.extend("r_xxx", "7d")
 
-# Update metadata and policy
+# Update resource metadata
 qurl = client.update("r_xxx", description="extended", extend_by="7d")
 ```
+
+## Authentication Notes
+
+`QURLClient(api_key=...)` accepts either a qURL API key or a JWT bearer token.
+Dashboard/account endpoints such as billing, customer, connector, webhook, and
+API-key management require JWT authentication. You may omit `api_key` only for
+public endpoints such as access-code redemption; authenticated endpoints return
+401 without credentials.
+
+Some resource-list responses intentionally omit `target_url` for redacted
+resource types. Treat `QURL.target_url` as `str | None` before formatting or
+parsing it.
+
+Mutating SDK methods generate a per-call `Idempotency-Key` when you do not
+provide one and reuse it across the client's internal retries; qurl-service
+supports that header on mutating endpoints, including `POST /v1/resolve`.
+Automatic POST status-code retries remain limited to rate limits because
+one-time resolve tokens can be consumed by server-side knock failures. Pass a
+stable `idempotency_key` when you need retry-safe behavior across your own retry
+loop, process restart, or job replay. Caller-supplied keys should be globally
+unique for each logical operation; UUID or ULID values are recommended.
+
+Fields such as webhook `events` and API-key `scopes` accept ordered non-string
+iterables of strings. Lists, tuples, and generators preserve the caller's
+iteration order; sets are rejected because their iteration order is not stable.
 
 ## Async Usage
 
@@ -78,12 +103,49 @@ asyncio.run(main())
 ```python
 # Iterate all active qURLs (auto-paginates)
 for qurl in client.list_all(status="active"):
-    print(f"{qurl.resource_id}: {qurl.target_url}")
+    target = qurl.target_url or "<redacted>"
+    print(f"{qurl.resource_id}: {target}")
 
 # Or fetch a single page
 page = client.list(status="active", limit=10)
 for qurl in page.qurls:
     print(qurl.resource_id)
+```
+
+## Resources
+
+```python
+# Create a resource explicitly, then mint scoped qURLs against it
+resource = client.create_resource(
+    resource_type="url",
+    target_url="https://api.example.com/data",
+    alias="reports-api",
+)
+
+link = client.create_qurl_for_resource(
+    resource.resource_id,
+    expires_in="1h",
+    label="Alice from Acme",
+    idempotency_key="invite-alice-2026-03-10",
+)
+
+# Revoke one token without closing the whole resource
+assert link.qurl_id is not None
+client.revoke_resource_qurl(resource.resource_id, link.qurl_id)
+```
+
+## Custom Domains And Webhooks
+
+```python
+domain = client.register_domain("secure.example.com")
+for record in domain.dns_records:
+    print(record.type, record.name, record.value)
+
+webhook = client.create_webhook(
+    url="https://example.com/qurl-webhooks",
+    events=["qurl.accessed", "domain.verified"],
+)
+print(webhook.secret)  # Returned only on create/regenerate
 ```
 
 ## Error Handling
@@ -141,6 +203,11 @@ print(f"Plan: {quota.plan}")
 print(f"Active qURLs: {quota.usage.active_qurls}")
 print(f"Rate limit: {quota.rate_limits.create_per_minute}/min")
 ```
+
+JWT-authenticated dashboard endpoints are also available for usage, customer
+settings, billing sessions, invoices, and API-key management. API-key auth
+continues to work for normal qURL, resource, domain, webhook, connector, and
+access-code operations according to the API scopes on the key.
 
 ## Debug Logging
 

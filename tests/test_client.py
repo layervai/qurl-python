@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -21,15 +22,33 @@ from layerv_qurl import (
     QURLNetworkError,
     QURLTimeoutError,
 )
+from layerv_qurl._utils import (
+    build_query_params,
+    build_string_list,
+    domain_path_segment,
+    ensure_mutation_idempotency,
+    parse_resource,
+)
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
+    ConflictError,
+    GoneError,
     NotFoundError,
     RateLimitError,
     ServerError,
     ValidationError,
 )
-from layerv_qurl.types import AccessPolicy, AccessToken, AIAgentPolicy, BatchCreateItem
+from layerv_qurl.types import (
+    AccessCode,
+    AccessPolicy,
+    AccessToken,
+    AIAgentPolicy,
+    APIKey,
+    BatchCreateItem,
+    Domain,
+    Webhook,
+)
 
 BASE_URL = "https://api.test.layerv.ai"
 
@@ -125,6 +144,61 @@ def test_repr_short_api_key() -> None:
     assert "***" in r
     assert "short123" not in r
     c.close()
+
+
+def test_repr_masks_jwt_without_suffix_fragment() -> None:
+    token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturetail"
+    c = QURLClient(api_key=token, base_url=BASE_URL)
+    r = repr(c)
+    assert "eyJh***" in r
+    assert "signaturetail" not in r
+    assert token not in r
+    c.close()
+
+
+def test_repr_masks_non_jwt_two_dot_secret_normally() -> None:
+    c = QURLClient(api_key="lv_live.segment.tail1234", base_url=BASE_URL)
+    r = repr(c)
+    assert "lv_l" in r
+    assert "1234" in r
+    assert "segment" not in r
+    c.close()
+
+
+def test_repr_no_auth_api_key_is_unquoted_none() -> None:
+    c = QURLClient(base_url=BASE_URL)
+    assert "api_key=None" in repr(c)
+    c.close()
+
+
+def test_secret_dataclass_repr_omits_one_time_values() -> None:
+    webhook = Webhook(
+        webhook_id="wh_secret",
+        url="https://example.com/hook",
+        events=["qurl.created"],
+        secret="whsec_secret",
+    )
+    api_key = APIKey(
+        key_id="key_secret",
+        key_prefix="lv_live_abcd",
+        name="Production",
+        api_key="lv_live_secret",
+    )
+    access_code = AccessCode(
+        access_code_id="ac_secret",
+        resource_id="r_secret",
+        code="ac_code_secret",
+    )
+    domain = Domain(
+        domain="example.com",
+        status="pending",
+        verification_token="qurl_verify_secret",
+    )
+
+    assert "whsec_secret" not in repr(webhook)
+    assert "lv_live_secret" not in repr(api_key)
+    assert "ac_code_secret" not in repr(access_code)
+    assert "qurl_verify_secret" in repr(domain)
 
 
 # --- CRUD tests with kwargs API ---
@@ -556,6 +630,7 @@ def test_mint_link(client: QURLClient) -> None:
             json={
                 "data": {
                     "qurl_link": "https://qurl.link/#at_newtoken",
+                    "qurl_id": "",
                     "expires_at": "2026-03-20T10:00:00Z",
                 },
             },
@@ -564,6 +639,7 @@ def test_mint_link(client: QURLClient) -> None:
 
     result = client.mint_link("r_abc123def45", expires_at="2026-03-20T10:00:00Z")
     assert result.qurl_link == "https://qurl.link/#at_newtoken"
+    assert result.qurl_id is None
     assert isinstance(result.expires_at, datetime)
 
 
@@ -588,7 +664,7 @@ def test_mint_link_no_input(client: QURLClient) -> None:
 @respx.mock
 def test_resolve_plain_string(client: QURLClient) -> None:
     """resolve() accepts a plain string token."""
-    respx.post(f"{BASE_URL}/v1/resolve").mock(
+    route = respx.post(f"{BASE_URL}/v1/resolve").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -605,8 +681,9 @@ def test_resolve_plain_string(client: QURLClient) -> None:
         )
     )
 
-    result = client.resolve("at_k8xqp9h2sj9lx7r4a")
+    result = client.resolve("at_k8xqp9h2sj9lx7r4a", idempotency_key="idem-resolve")
     assert result.target_url == "https://api.example.com/data"
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-resolve"
     assert result.access_grant is not None
     assert result.access_grant.expires_in == 305
     assert result.access_grant.src_ip == "203.0.113.42"
@@ -945,12 +1022,11 @@ async def test_async_retry_after_http_date_falls_back_to_exponential_backoff() -
         await client.close()
 
 
-# --- POST retry safety ---
-# POST is non-idempotent (create() might actually hit the DB even if the
-# response is 5xx), so the client deliberately restricts POST retries to
-# {429} only — retrying a 5xx on a create request risks duplicate records.
-# These tests lock that decision in so a future refactor that naively
-# unifies retry sets across methods will trip the guard.
+# --- Mutation retry safety ---
+# Mutating requests carry an idempotency key across internal retries, but the
+# client still deliberately restricts POST status-code retries to {429}. These
+# tests lock that split in so a future refactor that naively unifies retry sets
+# across methods will trip the guard.
 
 
 @respx.mock
@@ -967,6 +1043,37 @@ def test_post_does_not_retry_on_503(retry_client: QURLClient) -> None:
     # retry_client has max_retries=2, so a retry-on-503 regression would
     # produce 3 attempts. Assert exactly one — no retries for POST 5xx.
     assert route.call_count == 1
+
+
+@respx.mock
+def test_resolve_stable_idempotency_key_can_cross_caller_retries(
+    client: QURLClient,
+) -> None:
+    route = respx.post(f"{BASE_URL}/v1/resolve")
+    route.side_effect = [
+        httpx.Response(503, json=_ERR_503),
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "target_url": "https://api.example.com/data",
+                    "resource_id": "r_abc123def45",
+                }
+            },
+        ),
+    ]
+
+    with pytest.raises(ServerError):
+        client.resolve("at_k8xqp9h2sj9lx7r4a", idempotency_key="idem-resolve-stable")
+    result = client.resolve(
+        "at_k8xqp9h2sj9lx7r4a",
+        idempotency_key="idem-resolve-stable",
+    )
+
+    assert result.target_url == "https://api.example.com/data"
+    assert route.call_count == 2
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-resolve-stable"
+    assert route.calls[1].request.headers["idempotency-key"] == "idem-resolve-stable"
 
 
 @respx.mock
@@ -993,6 +1100,79 @@ def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
 
     assert result.resource_id == "r_abc123def45"
     assert route.call_count == 2
+    first_key = route.calls[0].request.headers["idempotency-key"]
+    assert first_key == route.calls[1].request.headers["idempotency-key"]
+    assert len(first_key) == 36
+
+
+@respx.mock
+def test_auto_idempotency_applies_to_supported_mutations(client: QURLClient) -> None:
+    quota_route = respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(200, json=_QUOTA_OK)
+    )
+    customer_route = respx.patch(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "spending_cap_cents": 100,
+                    "current_period_usage": 0,
+                },
+            },
+        )
+    )
+    webhook_route = respx.delete(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop"
+    ).mock(return_value=httpx.Response(204))
+
+    client.get_quota()
+    client.update_customer(spending_cap_cents=100)
+    client.delete_webhook("wh_abcdefghijklmnop")
+
+    assert "idempotency-key" not in quota_route.calls[0].request.headers
+    assert len(customer_route.calls[0].request.headers["idempotency-key"]) == 36
+    assert "idempotency-key" not in webhook_route.calls[0].request.headers
+
+
+def test_ensure_mutation_idempotency_preserves_explicit_header() -> None:
+    headers = {"idempotency-key": "caller-provided-key"}
+
+    ensure_mutation_idempotency("POST", headers)
+
+    assert headers == {"idempotency-key": "caller-provided-key"}
+
+
+@respx.mock
+def test_patch_retry_reuses_auto_idempotency_key(retry_client: QURLClient) -> None:
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc123def45")
+    route.side_effect = [
+        httpx.Response(503, json=_ERR_503),
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "expires_at": "2026-03-20T10:00:00Z",
+                    "tags": [],
+                },
+            },
+        ),
+    ]
+
+    with patch("layerv_qurl.client.time.sleep"):
+        result = retry_client.update("r_abc123def45", extend_by="7d")
+
+    assert isinstance(result.expires_at, datetime)
+    assert route.call_count == 2
+    first_key = route.calls[0].request.headers["idempotency-key"]
+    assert first_key == route.calls[1].request.headers["idempotency-key"]
+    assert len(first_key) == 36
+    assert json.loads(route.calls[0].request.content) == {"extend_by": "7d"}
+    assert json.loads(route.calls[1].request.content) == {"extend_by": "7d"}
 
 
 @respx.mock
@@ -1013,6 +1193,44 @@ async def test_async_post_does_not_retry_on_503() -> None:
 
         assert exc_info.value.status == 503
         assert route.call_count == 1
+        assert len(route.calls[0].request.headers["idempotency-key"]) == 36
+    finally:
+        await client.close()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_patch_retry_reuses_auto_idempotency_key() -> None:
+    client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=2)
+    try:
+        route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc")
+        route.side_effect = [
+            httpx.Response(503, json=_ERR_503),
+            httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "resource_id": "r_abc",
+                        "target_url": "https://example.com",
+                        "status": "active",
+                        "created_at": "2026-03-10T10:00:00Z",
+                        "expires_at": "2026-03-20T10:00:00Z",
+                        "tags": [],
+                    },
+                },
+            ),
+        ]
+
+        with patch("layerv_qurl.async_client.asyncio.sleep"):
+            result = await client.update("r_abc", extend_by="7d")
+
+        assert isinstance(result.expires_at, datetime)
+        assert route.call_count == 2
+        first_key = route.calls[0].request.headers["idempotency-key"]
+        assert first_key == route.calls[1].request.headers["idempotency-key"]
+        assert len(first_key) == 36
+        assert json.loads(route.calls[0].request.content) == {"extend_by": "7d"}
+        assert json.loads(route.calls[1].request.content) == {"extend_by": "7d"}
     finally:
         await client.close()
 
@@ -1222,7 +1440,7 @@ async def test_async_create(async_client: AsyncQURLClient) -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_async_resolve(async_client: AsyncQURLClient) -> None:
-    respx.post(f"{BASE_URL}/v1/resolve").mock(
+    route = respx.post(f"{BASE_URL}/v1/resolve").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -1241,6 +1459,7 @@ async def test_async_resolve(async_client: AsyncQURLClient) -> None:
 
     result = await async_client.resolve("at_test_token")
     assert result.target_url == "https://api.example.com/data"
+    assert len(route.calls[0].request.headers["idempotency-key"]) == 36
     assert result.access_grant is not None
     assert result.access_grant.expires_in == 305
 
@@ -2995,6 +3214,11 @@ def test_create_normalizes_empty_qurl_id_to_none(client: QURLClient) -> None:
     assert result.qurl_id is None
 
 
+def test_build_query_params_serializes_booleans_lowercase() -> None:
+    params = build_query_params({"enabled": True, "archived": False, "skip": None})
+    assert params == {"enabled": "true", "archived": "false"}
+
+
 # ---- Target URL scheme validation (create) --------------------------------
 
 
@@ -3422,3 +3646,1714 @@ def test_batch_create_accepts_access_policy_dataclass(
     # dropped by _serialize_value's dataclass rule, not preserved.
     assert "block_all" not in body["items"][0]["access_policy"]["ai_agent_policy"]
     assert "deny_categories" not in body["items"][0]["access_policy"]["ai_agent_policy"]
+
+
+@respx.mock
+def test_latest_create_contract_fields_and_idempotency_header(client: QURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "qurl_id": "q_abc123def45",
+                    "resource_id": "r_abc123def45",
+                    "qurl_link": "https://qurl.link/#at_test",
+                    "branded_domain": "secure.example.com",
+                    "qurl_site": "https://q_abc123def45.qurl.site",
+                    "expires_at": "2026-03-15T10:00:00Z",
+                    "label": "contract",
+                    "type": "url",
+                },
+            },
+        )
+    )
+
+    result = client.create(
+        target_url="https://example.com",
+        resource_type="url",
+        idempotency_key="idem-create-1",
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["type"] == "url"
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-create-1"
+    assert result.qurl_id == "q_abc123def45"
+    assert result.branded_domain == "secure.example.com"
+    assert result.resource_type == "url"
+
+
+@respx.mock
+def test_batch_create_serializes_type_and_parses_branded_domain(client: QURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_batch",
+                            "qurl_link": "https://qurl.link/#at_batch",
+                            "branded_domain": "files.example.com",
+                            "qurl_site": "https://r_batch.qurl.site",
+                        }
+                    ],
+                },
+            },
+        )
+    )
+
+    item: BatchCreateItem = {
+        "type": "url",
+        "target_url": "https://example.com",
+        "custom_domain": "files.example.com",
+    }
+    result = client.batch_create([item], idempotency_key="idem-batch-1")
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["items"][0]["type"] == "url"
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-batch-1"
+    assert result.results[0].branded_domain == "files.example.com"
+
+
+@respx.mock
+def test_resource_create_update_and_detail_contract_methods(client: QURLClient) -> None:
+    create_resource = respx.post(f"{BASE_URL}/v1/resources").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_tunnel12345",
+                    "type": "tunnel",
+                    "status": "active",
+                    "slug": "prod-dashboard",
+                    "knock_resource_id": "qurl-tunnel-server",
+                    "preserve_host": False,
+                    "created_at": "2026-03-10T10:00:00Z",
+                },
+            },
+        )
+    )
+    resource = client.create_resource(
+        resource_type="tunnel",
+        slug="prod-dashboard",
+        find_or_create=True,
+        idempotency_key="idem-resource-create",
+    )
+    create_body = json.loads(create_resource.calls[0].request.content)
+    assert create_body == {"type": "tunnel", "slug": "prod-dashboard", "find_or_create": True}
+    assert create_resource.calls[0].request.headers["idempotency-key"] == "idem-resource-create"
+    assert resource.resource_type == "tunnel"
+    assert resource.knock_resource_id == "qurl-tunnel-server"
+
+    update_resource = respx.patch(f"{BASE_URL}/v1/resources/r_tunnel12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_tunnel12345",
+                    "type": "tunnel",
+                    "status": "active",
+                    "alias": None,
+                    "tags": [],
+                },
+            },
+        )
+    )
+    client.update_resource(
+        "r_tunnel12345",
+        alias=None,
+        tags=[],
+        preserve_host=False,
+        idempotency_key="idem-resource-update",
+    )
+    update_body = json.loads(update_resource.calls[0].request.content)
+    assert update_body == {"tags": [], "preserve_host": False, "alias": None}
+    assert update_resource.calls[0].request.headers["idempotency-key"] == "idem-resource-update"
+
+    client.update_resource("r_tunnel12345", alias="prod-dashboard")
+    set_alias_body = json.loads(update_resource.calls[1].request.content)
+    assert set_alias_body == {"alias": "prod-dashboard"}
+
+    respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource": {
+                        "resource_id": "r_tunnel12345",
+                        "type": "tunnel",
+                        "status": "active",
+                        "qurl_count": 1,
+                    },
+                    "qurls": [
+                        {
+                            "qurl_id": "q_token12345",
+                            "status": "active",
+                            "session_duration": 3600,
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    detail = client.get_resource("r_tunnel12345")
+    assert detail.resource.qurl_count == 1
+    assert detail.qurls[0].session_duration == 3600
+
+
+@respx.mock
+def test_resource_qurl_token_contract_methods(client: QURLClient) -> None:
+    mint_route = respx.post(f"{BASE_URL}/v1/resources/r_tunnel12345/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "qurl_id": "q_newtoken12",
+                    "resource_id": "r_tunnel12345",
+                    "qurl_link": "https://qurl.link/#at_new",
+                    "qurl_site": "https://q_newtoken12.qurl.site",
+                    "type": "tunnel",
+                },
+            },
+        )
+    )
+    minted = client.create_qurl_for_resource(
+        "r_tunnel12345",
+        session_duration="1h",
+        idempotency_key="idem-resource-mint",
+    )
+    assert minted.qurl_id == "q_newtoken12"
+    assert mint_route.calls[0].request.headers["idempotency-key"] == "idem-resource-mint"
+
+    update_token_route = respx.patch(
+        f"{BASE_URL}/v1/resources/r_tunnel12345/qurls/q_newtoken12"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurl_id": "q_newtoken12",
+                    "status": "active",
+                    "label": "updated",
+                    "max_sessions": 2,
+                },
+            },
+        )
+    )
+    token = client.update_resource_qurl(
+        "r_tunnel12345",
+        "q_newtoken12",
+        label="updated",
+        idempotency_key="idem-token-update",
+    )
+    assert token.label == "updated"
+    assert token.max_sessions == 2
+    assert update_token_route.calls[0].request.headers["idempotency-key"] == "idem-token-update"
+
+
+@respx.mock
+def test_resource_session_contract_methods(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "session_id": "s_active123",
+                        "qurl_id": "q_newtoken12",
+                        "src_ip": "203.0.113.42",
+                    }
+                ],
+            },
+        )
+    )
+    sessions = client.list_resource_sessions("r_tunnel12345")
+    assert sessions.sessions[0].src_ip == "203.0.113.42"
+
+    respx.delete(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
+        return_value=httpx.Response(200, json={"data": {"terminated": 3}})
+    )
+    assert client.terminate_all_resource_sessions("r_tunnel12345").terminated == 3
+
+    session_route = respx.delete(
+        f"{BASE_URL}/v1/resources/r_tunnel12345/sessions/s_active123"
+    ).mock(return_value=httpx.Response(204))
+    client.terminate_resource_session("r_tunnel12345", "s_active123")
+    assert session_route.called
+
+
+def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="create_resource"):
+        client.create_resource()
+
+    with pytest.raises(ValueError, match="target_url"):
+        client.create_resource(target_url="ftp://example.com")
+
+    with pytest.raises(ValueError, match="tags"):
+        client.create_resource(target_url="https://example.com", tags=["bad/tag"])
+
+    with pytest.raises(ValueError, match="custom_domain"):
+        client.update_resource("r_tunnel12345", custom_domain="x" * 254)
+
+    with pytest.raises(ValueError, match="domain"):
+        client.get_domain("")
+
+    with pytest.raises(ValueError, match="url"):
+        client.create_webhook(url="ftp://example.com/webhook", events=["qurl.created"])
+
+    with pytest.raises(ValueError, match="code"):
+        client.redeem_access_code(code="")
+
+    with pytest.raises(ValueError, match="elapsed_ms"):
+        client.redeem_access_code(code="ac_k8xqp9h2sj9lx7r4abcdef", elapsed_ms=-1)
+
+    with pytest.raises(ValueError, match="name"):
+        client.create_api_key(name="", scopes=["qurl:read"])
+
+    with pytest.raises(ValueError, match="plan"):
+        client.create_billing_checkout(plan="")
+
+    with pytest.raises(ValueError, match="public_key"):
+        client.bootstrap_agent(public_key="")
+
+    with pytest.raises(ValueError, match="spending_cap_cents"):
+        client.update_customer(spending_cap_cents=-1)
+
+    with pytest.raises(ValueError, match="alias"):
+        client.create_resource(alias="ab")
+
+    with pytest.raises(ValueError, match="create_resource"):
+        client.create_resource(find_or_create=False)
+
+    with pytest.raises(ValueError, match="alias"):
+        client.update_resource("r_tunnel12345", alias="Bad_Alias")
+
+    with pytest.raises(ValueError, match="reserved"):
+        client.list_resources(alias="qurl")
+
+
+@respx.mock
+def test_resource_detail_tolerates_missing_resource_wrapper(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/resources/r_partial").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurls": [
+                        {"qurl_id": "q_valid", "status": "active"},
+                        {"qurl_id": "q_missing_status"},
+                        "ignored",
+                    ]
+                }
+            },
+        )
+    )
+    detail = client.get_resource("r_partial")
+    assert detail.resource.resource_id == ""
+    assert detail.resource.status == "unknown"
+    assert [qurl.qurl_id for qurl in detail.qurls] == ["q_valid"]
+
+
+def test_parse_resource_requires_identity_fields() -> None:
+    with pytest.raises(KeyError):
+        parse_resource({"status": "active"})
+
+    with pytest.raises(KeyError):
+        parse_resource({"resource_id": "r_tunnel12345"})
+
+
+def test_update_resource_methods_reject_empty_updates(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_resource("r_tunnel12345")
+
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_resource_qurl("r_tunnel12345", "q_newtoken12")
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        client.update_resource_qurl(
+            "r_tunnel12345",
+            "q_newtoken12",
+            extend_by="1h",
+            expires_at="2026-04-01T00:00:00Z",
+        )
+
+
+def test_update_api_key_rejects_empty_update(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_api_key("key_abc123def456")
+
+
+def test_string_sequence_fields_reject_bare_string_and_empty_lists(
+    client: QURLClient,
+) -> None:
+    assert build_string_list((item for item in ["qurl.created"]), "events") == [
+        "qurl.created"
+    ]
+
+    with pytest.raises(ValueError, match="events"):
+        client.create_webhook(
+            url="https://example.com/webhook",
+            events="qurl.created",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        client.update_webhook("wh_abcdefghijklmnop", events=[])
+
+    with pytest.raises(ValueError, match="mapping"):
+        build_string_list({"event": "qurl.created"}, "events")
+
+    with pytest.raises(ValueError, match="set"):
+        build_string_list({"qurl.created"}, "events")
+
+    with pytest.raises(ValueError, match="scopes"):
+        client.create_api_key(
+            name="bad scopes",
+            scopes="qurl:read",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="scopes"):
+        client.update_api_key("key_abc123def456", scopes=[])
+
+
+@respx.mock
+def test_domain_path_segments_are_url_encoded(client: QURLClient) -> None:
+    domain = "../evil%2Fhost.example.com"
+    encoded_domain = "..%2Fevil%252Fhost.example.com"
+    assert domain_path_segment(domain) == encoded_domain
+    route = respx.delete(f"{BASE_URL}/v1/domains/{encoded_domain}").mock(
+        return_value=httpx.Response(204)
+    )
+
+    client.delete_domain(domain)
+
+    assert route.called
+
+
+@respx.mock
+def test_delete_contract_wrappers(client: QURLClient) -> None:
+    resource_route = respx.delete(f"{BASE_URL}/v1/resources/r_delete123").mock(
+        return_value=httpx.Response(204)
+    )
+    webhook_route = respx.delete(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop"
+    ).mock(return_value=httpx.Response(204))
+    api_key_route = respx.delete(f"{BASE_URL}/v1/api-keys/key_abc123def456").mock(
+        return_value=httpx.Response(204)
+    )
+
+    client.delete_resource("r_delete123")
+    client.delete_webhook("wh_abcdefghijklmnop")
+    client.revoke_api_key("key_abc123def456")
+
+    assert resource_route.called
+    assert webhook_route.called
+    assert api_key_route.called
+
+
+@respx.mock
+def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
+    respx.post(f"{BASE_URL}/v1/domains").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "domain": "secure.example.com",
+                    "status": "pending_verification",
+                    "verification_token": "tok_123",
+                    "ready_for_qurls": False,
+                    "dns_records": [
+                        {
+                            "type": "TXT",
+                            "name": "_qurl.secure.example.com",
+                            "value": "tok_123",
+                            "verified": False,
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    domain = client.register_domain("secure.example.com")
+    assert domain.dns_records[0].type == "TXT"
+
+    verify_domain_route = respx.post(f"{BASE_URL}/v1/domains/secure.example.com/verify").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "secure.example.com",
+                    "status": "verified",
+                    "checks": {
+                        "txt": {"verified": True},
+                        "cname": {},
+                    },
+                },
+            },
+        )
+    )
+    verify = client.verify_domain("secure.example.com", idempotency_key="idem-domain-verify")
+    assert verify.checks["txt"].verified is True
+    assert verify.checks["cname"].verified is False
+    assert verify_domain_route.calls[0].request.headers["idempotency-key"] == "idem-domain-verify"
+
+    regenerate_domain_route = respx.post(
+        f"{BASE_URL}/v1/domains/secure.example.com/regenerate-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "secure.example.com",
+                    "status": "pending_verification",
+                    "verification_token": "tok_regenerated",
+                },
+            },
+        )
+    )
+    regenerated = client.regenerate_domain_token(
+        "secure.example.com",
+        idempotency_key="idem-domain-regenerate",
+    )
+    assert regenerated.verification_token == "tok_regenerated"
+    assert (
+        regenerate_domain_route.calls[0].request.headers["idempotency-key"]
+        == "idem-domain-regenerate"
+    )
+
+    respx.post(f"{BASE_URL}/v1/webhooks").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.accessed"],
+                    "status": "active",
+                    "secret": "whsec_test",
+                },
+            },
+        )
+    )
+    webhook = client.create_webhook(
+        url="https://example.com/webhook",
+        events=["qurl.accessed"],
+    )
+    assert webhook.secret == "whsec_test"
+
+    respx.get(f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.accessed"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    assert client.get_webhook("wh_abcdefghijklmnop").status == "active"
+
+    update_webhook_route = respx.patch(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    client.update_webhook(
+        "wh_abcdefghijklmnop",
+        events=["qurl.created"],
+        idempotency_key="idem-webhook-update",
+    )
+    assert (
+        update_webhook_route.calls[0].request.headers["idempotency-key"]
+        == "idem-webhook-update"
+    )
+
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_webhook("wh_abcdefghijklmnop")
+
+    secret_route = respx.post(f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop/secret").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                    "secret": "whsec_rotated",
+                },
+            },
+        )
+    )
+    rotated = client.regenerate_webhook_secret(
+        "wh_abcdefghijklmnop",
+        idempotency_key="idem-webhook-secret",
+    )
+    assert rotated.secret == "whsec_rotated"
+    assert secret_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-webhook-secret"
+    )
+
+    deliveries_route = respx.get(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop/deliveries"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "delivery_id": "wd_123",
+                        "webhook_id": "wh_abcdefghijklmnop",
+                        "event_type": "qurl.created",
+                        "status": "delivered",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_delivery", "has_more": True},
+            },
+        )
+    )
+    deliveries = client.list_webhook_deliveries(
+        "wh_abcdefghijklmnop",
+        limit=5,
+        cursor="cur_previous_delivery",
+    )
+    assert deliveries.deliveries[0].delivery_id == "wd_123"
+    assert deliveries.next_cursor == "cur_delivery"
+    assert deliveries_route.calls[0].request.url.params["limit"] == "5"
+    assert (
+        deliveries_route.calls[0].request.url.params["cursor"]
+        == "cur_previous_delivery"
+    )
+
+    respx.get(f"{BASE_URL}/v1/webhooks/events").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "type": "domain.verified",
+                        "category": "resource",
+                        "description": "Custom domain verified",
+                    },
+                    {},
+                    "ignored",
+                ],
+            },
+        )
+    )
+    event_types = client.list_webhook_event_types().events
+    assert [event.type for event in event_types] == ["domain.verified"]
+
+    respx.get(f"{BASE_URL}/v1/qurls/r_conflict").mock(
+        return_value=httpx.Response(
+            409,
+            json={"error": {"status": 409, "code": "conflict", "title": "Conflict"}},
+        )
+    )
+    with pytest.raises(ConflictError):
+        client.get("r_conflict")
+
+    respx.get(f"{BASE_URL}/v1/qurls/r_gone").mock(
+        return_value=httpx.Response(
+            410,
+            json={
+                "error": {"status": 410, "code": "gone", "title": "Gone"},
+                "meta": {"tombstone": {"tombstoned_at": "2026-01-01T00:00:00Z"}},
+            },
+        )
+    )
+    with pytest.raises(GoneError) as exc_info:
+        client.get("r_gone")
+    assert exc_info.value.meta is not None
+    assert "tombstone" in exc_info.value.meta
+
+
+@respx.mock
+def test_api_key_and_access_code_contracts(client: QURLClient) -> None:
+    key_route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "key_id": "key_abc123def456",
+                    "key_prefix": "lv_live_a3x9",
+                    "api_key": "lv_live_secret",
+                    "name": "Production",
+                    "scopes": ["qurl:read", "qurl:write"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    key = client.create_api_key(
+        name="Production",
+        scopes=["qurl:read", "qurl:write"],
+        idempotency_key="0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2",
+    )
+    assert key.api_key == "lv_live_secret"
+    assert (
+        key_route.calls[0].request.headers["idempotency-key"]
+        == "0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2"
+    )
+
+    create_access_code_route = respx.post(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "access_code_id": "acd_create123",
+                    "resource_id": "r_code12345",
+                    "name": "Partner access",
+                    "status": "active",
+                    "max_uses": 5,
+                    "code": "ac_k8xqp9h2sj9lx7r4abcdef",
+                },
+            },
+        )
+    )
+    access_code = client.create_access_code(
+        resource_id="r_code12345",
+        name="Partner access",
+        max_uses=5,
+        idempotency_key="idem-access-code-create",
+    )
+    create_access_code_body = json.loads(
+        create_access_code_route.calls[0].request.content
+    )
+    assert access_code.code == "ac_k8xqp9h2sj9lx7r4abcdef"
+    assert create_access_code_body == {
+        "resource_id": "r_code12345",
+        "name": "Partner access",
+        "max_uses": 5,
+    }
+    assert (
+        create_access_code_route.calls[0].request.headers["idempotency-key"]
+        == "idem-access-code-create"
+    )
+
+    access_codes_route = respx.get(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "access_code_id": "acd_list123",
+                        "resource_id": "r_code12345",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_codes", "has_more": True},
+            },
+        )
+    )
+    access_codes = client.list_access_codes(limit=10, cursor="cur_prev_codes")
+    assert access_codes.access_codes[0].access_code_id == "acd_list123"
+    assert access_codes.next_cursor == "cur_codes"
+    assert access_codes.has_more is True
+    assert access_codes_route.calls[0].request.url.params["limit"] == "10"
+    assert access_codes_route.calls[0].request.url.params["cursor"] == "cur_prev_codes"
+
+
+@respx.mock
+def test_public_access_code_redeem_contracts() -> None:
+    client = QURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0)
+    no_auth_client = QURLClient(base_url=BASE_URL, max_retries=0)
+
+    redeem_route = respx.post(f"{BASE_URL}/v1/access-codes/redeem").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"redirect_url": "https://qurl.link/#at_code"}},
+        )
+    )
+    redeem = no_auth_client.redeem_access_code(
+        code="ac_k8xqp9h2sj9lx7r4abcdef",
+        elapsed_ms=5200,
+        idempotency_key="idem-public-redeem",
+    )
+    assert redeem.redirect_url == "https://qurl.link/#at_code"
+    assert "authorization" not in redeem_route.calls[0].request.headers
+    assert redeem_route.calls[0].request.headers["idempotency-key"] == "idem-public-redeem"
+    redeem_body = json.loads(redeem_route.calls[0].request.content)
+    assert redeem_body == {
+        "code": "ac_k8xqp9h2sj9lx7r4abcdef",
+        "elapsed_ms": 5200,
+    }
+
+    no_auth_client.redeem_access_code(
+        code="ac_k8xqp9h2sj9lx7r4abcdef",
+        honeypot="bot",
+    )
+    assert len(redeem_route.calls[1].request.headers["idempotency-key"]) == 36
+    explicit_honeypot_body = json.loads(redeem_route.calls[1].request.content)
+    assert explicit_honeypot_body["honeypot"] == "bot"
+
+    client.redeem_access_code(code="ac_k8xqp9h2sj9lx7r4abcdef")
+    assert "authorization" not in redeem_route.calls[2].request.headers
+    assert len(redeem_route.calls[2].request.headers["idempotency-key"]) == 36
+
+
+@respx.mock
+def test_usage_and_billing_contracts(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-03-31T23:59:59Z",
+                    "qurls_created": 12,
+                    "active_qurls": 3,
+                    "cost_estimate": {
+                        "currency": "usd",
+                        "amount_cents": 120,
+                        "description": "12 qURLs",
+                    },
+                },
+            },
+        )
+    )
+    assert client.get_usage_current_period().cost_estimate is not None
+
+    respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "invoices": [
+                        {
+                            "id": "in_123",
+                            "amount_cents": 1500,
+                            "status": "paid",
+                            "created_at": "2026-02-01T00:00:00Z",
+                            "pdf_url": None,
+                        }
+                    ]
+                },
+                "meta": {"has_more": False},
+            },
+        )
+    )
+    assert client.list_billing_invoices().invoices[0].id == "in_123"
+
+
+@respx.mock
+def test_connector_and_agent_contracts(
+    client: QURLClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    respx.get(f"{BASE_URL}/v1/connectors/installations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"installation_id": "inst_missing_identity"},
+                    {
+                        "installation_id": "inst_1",
+                        "plugin_id": "slack",
+                        "label": "Engineering Slack",
+                        "subject_kind": "slack_workspace",
+                        "subject_display_name": "LayerV Engineering",
+                        "status": "active",
+                        "installed_at": "2026-03-01T00:00:00Z",
+                        "stats": {
+                            "resources": 2,
+                            "qurls": 4,
+                            "accesses_24h": 1,
+                            "accesses_7d": 5,
+                            "errors_24h": 0,
+                        },
+                        "capabilities": {
+                            "configure": True,
+                            "disconnect": True,
+                            "reauth": False,
+                            "view_activity": True,
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    with caplog.at_level(logging.DEBUG, logger="layerv_qurl"):
+        connector = client.list_connector_installations().installations[0]
+
+    assert connector.installation_id == "inst_1"
+    assert connector.stats is not None
+    assert connector.stats.qurls == 4
+    assert any(
+        "parse_connector_installation" in record.message and "plugin_id" in record.message
+        for record in caplog.records
+    )
+
+    bootstrap_route = respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "agent_id": "prod-us-east-1",
+                    "registered_at": "2026-05-10T15:30:00Z",
+                    "nhp_server_peer": {
+                        "public_key_b64": "EqHTVFh6t5DUK1aA2nkq82x5HLRqrO6FPqxcwSfKCl8=",
+                        "host": "nhp.layerv.ai",
+                        "port": 62206,
+                        "expire_time": 0,
+                    },
+                },
+            },
+        )
+    )
+    bootstrap = client.bootstrap_agent(
+        public_key="62cFrVBeF1Tl7lUAJ9MNa9lFykVf6D7mNqLaEYggFN0=",
+        agent_id="prod-us-east-1",
+        idempotency_key="idem-bootstrap",
+    )
+    assert bootstrap.nhp_server_peer.port == 62206
+    assert bootstrap_route.calls[0].request.headers["idempotency-key"] == "idem-bootstrap"
+
+
+@respx.mock
+def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
+        return_value=httpx.Response(200, json={"data": {}})
+    )
+    usage = client.get_usage_current_period()
+    assert usage.tier == "unknown"
+    assert usage.qurls_created == 0
+    assert usage.active_qurls == 0
+    assert usage.cost_estimate is None
+
+    respx.get(f"{BASE_URL}/v1/usage/daily").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"daily": [{}, {"date": "2026-03-02"}]}},
+        )
+    )
+    daily = client.get_usage_daily()
+    assert daily.tier == "unknown"
+    assert daily.daily[0].date == ""
+    assert daily.daily[0].qurls_created == 0
+    assert daily.daily[1].date == "2026-03-02"
+    assert daily.daily[1].qurls_created == 0
+
+    respx.get(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(200, json={"data": {"frozen_reason": "manual"}})
+    )
+    customer = client.get_customer()
+    assert customer.tier == "unknown"
+    assert customer.current_period_usage_count == 0
+    assert customer.frozen is False
+    assert customer.frozen_reason == "manual"
+
+
+@respx.mock
+def test_customer_parser_tolerates_future_usage_object(client: QURLClient) -> None:
+    route = respx.get(f"{BASE_URL}/v1/customer")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "current_period_usage": {"count": 9, "period": "current"},
+                }
+            },
+        ),
+        httpx.Response(
+            200,
+            json={"data": {"tier": "growth", "current_period_usage": {"count": True}}},
+        ),
+    ]
+    customer = client.get_customer()
+    assert customer.current_period_usage_count == 9
+    customer_with_bool_count = client.get_customer()
+    assert customer_with_bool_count.current_period_usage_count == 0
+
+
+def test_sync_contract_lists_validate_limit_bounds(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        client.list_domains(limit=0)
+
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        client.list_api_keys(limit=101)
+
+
+@respx.mock
+def test_invoice_list_tolerates_non_dict_payload(
+    client: QURLClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "in_unexpected_shape",
+                        "amount_cents": 1,
+                        "status": "paid",
+                    }
+                ]
+            },
+        )
+    )
+    with caplog.at_level(logging.DEBUG, logger="layerv_qurl"):
+        invoices = client.list_billing_invoices()
+    assert invoices.invoices == []
+    assert any("parse_invoice_list_output" in record.message for record in caplog.records)
+
+
+@respx.mock
+def test_agent_bootstrap_tolerates_partial_peer_payload(client: QURLClient) -> None:
+    respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
+        return_value=httpx.Response(200, json={"data": {"nhp_server_peer": None}})
+    )
+    bootstrap = client.bootstrap_agent(public_key="pk_test")
+    assert bootstrap.agent_id == ""
+    assert bootstrap.nhp_server_peer.public_key_b64 == ""
+    assert bootstrap.nhp_server_peer.port == 0
+
+
+@respx.mock
+def test_billing_session_methods_send_idempotency(client: QURLClient) -> None:
+    checkout_route = respx.post(f"{BASE_URL}/v1/billing/checkout").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://checkout.stripe.com/c/pay/cs_test"}},
+        )
+    )
+    portal_route = respx.post(f"{BASE_URL}/v1/billing/portal").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://billing.stripe.com/p/session/test"}},
+        )
+    )
+
+    assert (
+        client.create_billing_checkout(
+            plan="growth",
+            idempotency_key="idem-checkout",
+        ).url
+        == "https://checkout.stripe.com/c/pay/cs_test"
+    )
+    assert client.create_billing_portal(idempotency_key="idem-portal").url == (
+        "https://billing.stripe.com/p/session/test"
+    )
+    assert checkout_route.calls[0].request.headers["idempotency-key"] == "idem-checkout"
+    assert portal_route.calls[0].request.headers["idempotency-key"] == "idem-portal"
+
+
+def test_idempotency_key_validation(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="control characters"):
+        client.create(target_url="https://example.com", idempotency_key="bad\nkey")
+
+    with pytest.raises(ValueError, match="control characters"):
+        client.create(target_url="https://example.com", idempotency_key="bad\tkey")
+
+    with pytest.raises(ValueError, match="256 characters"):
+        client.create(
+            target_url="https://example.com",
+            idempotency_key="x" * 257,
+        )
+
+    with pytest.raises(ValueError, match="at least 32 characters"):
+        client.create_api_key(
+            name="too short",
+            scopes=["qurl:read"],
+            idempotency_key="short",
+        )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_resource_scoped_mint_parity(async_client: AsyncQURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/resources/r_async/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "qurl_id": "q_async12345",
+                    "resource_id": "r_async",
+                    "qurl_link": "https://qurl.link/#at_async",
+                    "qurl_site": "https://q_async12345.qurl.site",
+                    "branded_domain": "async.example.com",
+                    "type": "url",
+                },
+            },
+        )
+    )
+
+    result = await async_client.create_qurl_for_resource(
+        "r_async",
+        label="async",
+        idempotency_key="idem-async-resource",
+    )
+
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-async-resource"
+    assert result.branded_domain == "async.example.com"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_public_redeem_omits_auth_and_sends_idempotency() -> None:
+    client = AsyncQURLClient(base_url=BASE_URL, max_retries=0)
+    route = respx.post(f"{BASE_URL}/v1/access-codes/redeem").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"redirect_url": "https://qurl.link/#at_async_code"}},
+        )
+    )
+
+    try:
+        redeem = await client.redeem_access_code(
+            code="ac_async",
+            idempotency_key="idem-async-redeem",
+        )
+    finally:
+        await client.close()
+
+    assert redeem.redirect_url == "https://qurl.link/#at_async_code"
+    assert "authorization" not in route.calls[0].request.headers
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-async-redeem"
+    assert json.loads(route.calls[0].request.content) == {"code": "ac_async"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_update_customer_sends_idempotency(
+    async_client: AsyncQURLClient,
+) -> None:
+    route = respx.patch(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "spending_cap_cents": 5000,
+                    "current_period_usage": 7,
+                    "frozen": False,
+                },
+            },
+        )
+    )
+
+    customer = await async_client.update_customer(
+        spending_cap_cents=5000,
+        idempotency_key="idem-async-customer",
+    )
+
+    assert customer.current_period_usage_count == 7
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-async-customer"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_domain_and_list_limit_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        await async_client.list_webhooks(limit=101)
+
+    route = respx.get(f"{BASE_URL}/v1/domains").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "domain": "async.example.com",
+                        "status": "verified",
+                        "ready_for_qurls": True,
+                    }
+                ],
+                "meta": {"next_cursor": "cur_next", "has_more": True},
+            },
+        )
+    )
+
+    domains = await async_client.list_domains(limit=10, cursor="cur_prev")
+
+    assert domains.domains[0].domain == "async.example.com"
+    assert domains.next_cursor == "cur_next"
+    assert route.calls[0].request.url.params["limit"] == "10"
+    assert route.calls[0].request.url.params["cursor"] == "cur_prev"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_delete_list_and_secret_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    access_codes_route = respx.get(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "access_code_id": "acd_async123",
+                        "resource_id": "r_asynccode",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_codes", "has_more": True},
+            },
+        )
+    )
+    resource_route = respx.delete(f"{BASE_URL}/v1/resources/r_asyncdelete").mock(
+        return_value=httpx.Response(204)
+    )
+    session_route = respx.delete(
+        f"{BASE_URL}/v1/resources/r_asyncdelete/sessions/s_async123"
+    ).mock(return_value=httpx.Response(204))
+    webhook_delete_route = respx.delete(
+        f"{BASE_URL}/v1/webhooks/wh_asyncabcdefghijkl"
+    ).mock(return_value=httpx.Response(204))
+    api_key_route = respx.delete(f"{BASE_URL}/v1/api-keys/key_async123456").mock(
+        return_value=httpx.Response(204)
+    )
+    secret_route = respx.post(
+        f"{BASE_URL}/v1/webhooks/wh_asyncabcdefghijkl/secret"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_asyncabcdefghijkl",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                    "secret": "whsec_async",
+                },
+            },
+        )
+    )
+
+    access_codes = await async_client.list_access_codes(limit=5, cursor="cur_async_prev")
+    await async_client.delete_resource("r_asyncdelete")
+    await async_client.terminate_resource_session("r_asyncdelete", "s_async123")
+    await async_client.delete_webhook("wh_asyncabcdefghijkl")
+    await async_client.revoke_api_key("key_async123456")
+    webhook = await async_client.regenerate_webhook_secret(
+        "wh_asyncabcdefghijkl",
+        idempotency_key="idem-async-secret",
+    )
+
+    assert access_codes.access_codes[0].access_code_id == "acd_async123"
+    assert access_codes.next_cursor == "cur_async_codes"
+    assert access_codes_route.calls[0].request.url.params["limit"] == "5"
+    assert access_codes_route.calls[0].request.url.params["cursor"] == "cur_async_prev"
+    assert webhook.secret == "whsec_async"
+    assert secret_route.calls[0].request.headers["idempotency-key"] == "idem-async-secret"
+    assert access_codes_route.called
+    assert resource_route.called
+    assert session_route.called
+    assert webhook_delete_route.called
+    assert api_key_route.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_resource_connector_domain_bootstrap_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    resources_route = respx.get(f"{BASE_URL}/v1/resources").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "resource_id": "r_asyncresource",
+                        "type": "url",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_resources", "has_more": True},
+            },
+        )
+    )
+    connector_route = respx.get(f"{BASE_URL}/v1/connectors/installations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"installation_id": "inst_async_missing_identity"},
+                    {
+                        "installation_id": "inst_async",
+                        "plugin_id": "slack",
+                        "label": "Async Slack",
+                        "subject_kind": "slack_workspace",
+                        "subject_display_name": "Async Engineering",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"has_more": False},
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/v1/domains/async.example.com").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"domain": "async.example.com", "status": "verified"}},
+        )
+    )
+    verify_route = respx.post(f"{BASE_URL}/v1/domains/async.example.com/verify").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "async.example.com",
+                    "status": "verified",
+                    "checks": {"txt": {"verified": True}},
+                },
+            },
+        )
+    )
+    regen_route = respx.post(
+        f"{BASE_URL}/v1/domains/async.example.com/regenerate-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "async.example.com",
+                    "status": "pending_verification",
+                    "verification_token": "tok_async",
+                },
+            },
+        )
+    )
+    bootstrap_route = respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "agent_id": "agent-async",
+                    "nhp_server_peer": {
+                        "public_key_b64": "server-key",
+                        "host": "nhp.example.com",
+                        "port": 62206,
+                    },
+                },
+            },
+        )
+    )
+
+    resources = await async_client.list_resources(limit=2, status="active")
+    connectors = await async_client.list_connector_installations(limit=1)
+    domain = await async_client.get_domain("async.example.com")
+    verify = await async_client.verify_domain(
+        "async.example.com",
+        idempotency_key="idem-async-domain-verify",
+    )
+    regenerated = await async_client.regenerate_domain_token(
+        "async.example.com",
+        idempotency_key="idem-async-domain-token",
+    )
+    bootstrap = await async_client.bootstrap_agent(
+        public_key="client-key",
+        agent_id="agent-async",
+        idempotency_key="idem-async-bootstrap",
+    )
+
+    assert resources.resources[0].resource_id == "r_asyncresource"
+    assert resources.next_cursor == "cur_async_resources"
+    assert resources_route.calls[0].request.url.params["limit"] == "2"
+    assert resources_route.calls[0].request.url.params["status"] == "active"
+    assert connectors.installations[0].installation_id == "inst_async"
+    assert len(connectors.installations) == 1
+    assert connector_route.calls[0].request.url.params["limit"] == "1"
+    assert domain.status == "verified"
+    assert verify.checks["txt"].verified is True
+    assert regenerated.verification_token == "tok_async"
+    assert bootstrap.nhp_server_peer.port == 62206
+    assert verify_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-domain-verify"
+    )
+    assert regen_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-domain-token"
+    )
+    assert bootstrap_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-bootstrap"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_webhook_crud_and_delivery_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    list_route = respx.get(f"{BASE_URL}/v1/webhooks").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "webhook_id": "wh_asynccrud12345",
+                        "url": "https://example.com/async-hook",
+                        "events": ["qurl.created"],
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_hooks", "has_more": True},
+            },
+        )
+    )
+    create_route = respx.post(f"{BASE_URL}/v1/webhooks").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "webhook_id": "wh_asynccrud12345",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                    "secret": "whsec_async_create",
+                },
+            },
+        )
+    )
+    get_route = respx.get(f"{BASE_URL}/v1/webhooks/wh_asynccrud12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_asynccrud12345",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    update_route = respx.patch(f"{BASE_URL}/v1/webhooks/wh_asynccrud12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_asynccrud12345",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created", "qurl.accessed"],
+                    "status": "paused",
+                },
+            },
+        )
+    )
+    deliveries_route = respx.get(
+        f"{BASE_URL}/v1/webhooks/wh_asynccrud12345/deliveries"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "delivery_id": "wd_async123",
+                        "webhook_id": "wh_asynccrud12345",
+                        "event_type": "qurl.created",
+                        "status": "delivered",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_delivery", "has_more": False},
+            },
+        )
+    )
+
+    webhooks = await async_client.list_webhooks(
+        limit=2,
+        cursor="cur_async_hooks_prev",
+        event="qurl.created",
+    )
+    created = await async_client.create_webhook(
+        url="https://example.com/async-hook",
+        events=["qurl.created"],
+        idempotency_key="idem-async-webhook-create",
+    )
+    fetched = await async_client.get_webhook("wh_asynccrud12345")
+    updated = await async_client.update_webhook(
+        "wh_asynccrud12345",
+        events=["qurl.created", "qurl.accessed"],
+        status="paused",
+        idempotency_key="idem-async-webhook-update",
+    )
+    deliveries = await async_client.list_webhook_deliveries(
+        "wh_asynccrud12345",
+        limit=1,
+        cursor="cur_async_delivery_prev",
+    )
+
+    assert webhooks.webhooks[0].webhook_id == "wh_asynccrud12345"
+    assert webhooks.next_cursor == "cur_async_hooks"
+    assert list_route.calls[0].request.url.params["limit"] == "2"
+    assert list_route.calls[0].request.url.params["cursor"] == "cur_async_hooks_prev"
+    assert list_route.calls[0].request.url.params["event"] == "qurl.created"
+    assert created.secret == "whsec_async_create"
+    assert create_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-webhook-create"
+    )
+    assert json.loads(create_route.calls[0].request.content)["events"] == [
+        "qurl.created"
+    ]
+    assert fetched.status == "active"
+    assert get_route.called
+    assert updated.status == "paused"
+    assert update_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-webhook-update"
+    )
+    assert json.loads(update_route.calls[0].request.content) == {
+        "events": ["qurl.created", "qurl.accessed"],
+        "status": "paused",
+    }
+    assert deliveries.deliveries[0].delivery_id == "wd_async123"
+    assert deliveries.next_cursor == "cur_async_delivery"
+    assert deliveries_route.calls[0].request.url.params["limit"] == "1"
+    assert (
+        deliveries_route.calls[0].request.url.params["cursor"]
+        == "cur_async_delivery_prev"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_api_key_and_access_code_create_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    key_route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "key_id": "key_asynccreate",
+                    "key_prefix": "lv_live_async",
+                    "api_key": "lv_live_async_secret",
+                    "name": "Async Production",
+                    "scopes": ["qurl:read", "qurl:write"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    list_keys_route = respx.get(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "key_id": "key_asynccreate",
+                        "key_prefix": "lv_live_async",
+                        "name": "Async Production",
+                        "scopes": ["qurl:read"],
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_keys", "has_more": True},
+            },
+        )
+    )
+    update_key_route = respx.patch(f"{BASE_URL}/v1/api-keys/key_asynccreate").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "key_id": "key_asynccreate",
+                    "key_prefix": "lv_live_async",
+                    "name": "Async CI",
+                    "scopes": ["qurl:read"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    code_route = respx.post(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "access_code_id": "acd_asynccreate",
+                    "resource_id": "r_asyncaccess",
+                    "name": "Async access",
+                    "status": "active",
+                    "code": "ac_async_code",
+                },
+            },
+        )
+    )
+
+    key = await async_client.create_api_key(
+        name="Async Production",
+        scopes=["qurl:read", "qurl:write"],
+        idempotency_key="0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2",
+    )
+    listed = await async_client.list_api_keys(
+        limit=3,
+        cursor="cur_async_keys_prev",
+        status="active",
+    )
+    updated = await async_client.update_api_key(
+        "key_asynccreate",
+        name="Async CI",
+        scopes=["qurl:read"],
+        idempotency_key="idem-async-api-key-update",
+    )
+    code = await async_client.create_access_code(
+        resource_id="r_asyncaccess",
+        name="Async access",
+        idempotency_key="idem-async-access-code-create",
+    )
+
+    assert key.api_key == "lv_live_async_secret"
+    assert key_route.calls[0].request.headers["idempotency-key"] == (
+        "0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2"
+    )
+    assert json.loads(key_route.calls[0].request.content)["scopes"] == [
+        "qurl:read",
+        "qurl:write",
+    ]
+    assert listed.api_keys[0].key_id == "key_asynccreate"
+    assert listed.next_cursor == "cur_async_keys"
+    assert list_keys_route.calls[0].request.url.params["limit"] == "3"
+    assert list_keys_route.calls[0].request.url.params["cursor"] == (
+        "cur_async_keys_prev"
+    )
+    assert list_keys_route.calls[0].request.url.params["status"] == "active"
+    assert updated.name == "Async CI"
+    assert update_key_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-api-key-update"
+    )
+    assert code.code == "ac_async_code"
+    assert code_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-access-code-create"
+    )
+    assert json.loads(code_route.calls[0].request.content) == {
+        "resource_id": "r_asyncaccess",
+        "name": "Async access",
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_usage_billing_and_resource_qurl_validation_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-03-31T23:59:59Z",
+                    "qurls_created": 12,
+                    "active_qurls": 4,
+                },
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/v1/usage/daily").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-03-31T23:59:59Z",
+                    "daily": [{"date": "2026-03-01", "qurls_created": 2}],
+                },
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "spending_cap_cents": 10000,
+                    "current_period_usage": {"count": 9},
+                    "frozen": False,
+                },
+            },
+        )
+    )
+    checkout_route = respx.post(f"{BASE_URL}/v1/billing/checkout").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://billing.example.com/checkout"}},
+        )
+    )
+    portal_route = respx.post(f"{BASE_URL}/v1/billing/portal").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://billing.example.com/portal"}},
+        )
+    )
+    invoices_route = respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "invoices": [
+                        {
+                            "id": "in_async",
+                            "amount_cents": 1500,
+                            "status": "paid",
+                            "created_at": "2026-02-01T00:00:00Z",
+                        }
+                    ]
+                },
+                "meta": {"next_cursor": "cur_async_invoice", "has_more": True},
+            },
+        )
+    )
+
+    usage = await async_client.get_usage_current_period()
+    daily = await async_client.get_usage_daily()
+    customer = await async_client.get_customer()
+    checkout = await async_client.create_billing_checkout(
+        plan="growth",
+        idempotency_key="idem-async-checkout",
+    )
+    portal = await async_client.create_billing_portal(
+        idempotency_key="idem-async-portal"
+    )
+    invoices = await async_client.list_billing_invoices(
+        limit=1,
+        cursor="cur_async_invoice_prev",
+    )
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await async_client.update_resource_qurl(
+            "r_asyncresource",
+            "q_async12345",
+            extend_by="7d",
+            expires_at="2026-04-01T00:00:00Z",
+        )
+
+    assert usage.qurls_created == 12
+    assert daily.daily[0].qurls_created == 2
+    assert customer.current_period_usage_count == 9
+    assert checkout.url == "https://billing.example.com/checkout"
+    assert checkout_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-checkout"
+    )
+    assert portal.url == "https://billing.example.com/portal"
+    assert portal_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-portal"
+    )
+    assert invoices.invoices[0].id == "in_async"
+    assert invoices.next_cursor == "cur_async_invoice"
+    assert invoices_route.calls[0].request.url.params["limit"] == "1"
+    assert invoices_route.calls[0].request.url.params["cursor"] == (
+        "cur_async_invoice_prev"
+    )

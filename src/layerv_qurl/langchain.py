@@ -77,8 +77,9 @@ class ResolveQURLTool(BaseTool):
     ) -> str:
         result = self.client.resolve(access_token)
         grant = result.access_grant
+        target = result.target_url or "<redacted>"
         lines = [
-            f"Resolved: {result.target_url}",
+            f"Resolved: {target}",
             f"Resource: {result.resource_id}",
         ]
         if grant:
@@ -105,7 +106,8 @@ class ListQURLsTool(BaseTool):
             return "No qURLs found."
         lines = []
         for q in result.qurls:
-            lines.append(f"- {q.resource_id}: {q.target_url} [{q.status}] expires={q.expires_at}")
+            target = q.target_url or "<redacted>"
+            lines.append(f"- {q.resource_id}: {target} [{q.status}] expires={q.expires_at}")
         return "\n".join(lines)
 
 
