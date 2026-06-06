@@ -253,7 +253,9 @@ def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
 
 
 def _parse_list_items(data: Any, parser: Callable[[dict[str, Any]], _T]) -> list[_T]:
-    return [parser(item) for item in data] if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    return [parser(item) for item in data if isinstance(item, dict)]
 
 
 def domain_path_segment(domain: str) -> str:
@@ -409,8 +411,10 @@ def require_resource_id_prefix(resource_id: str, operation: str = "delete") -> N
         )
 
 
-def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
+def _parse_access_policy(data: dict[str, Any] | None) -> AccessPolicy | None:
     """Parse an AccessPolicy from API response data."""
+    if data is None:
+        return None
     ai_policy = None
     ap = data.get("ai_agent_policy")
     # Guard against non-dict values (e.g. API returning a bare string
@@ -436,9 +440,6 @@ def _parse_access_policy(data: dict[str, Any]) -> AccessPolicy:
 
 def parse_access_token(data: dict[str, Any]) -> AccessToken:
     """Parse a qURL token summary."""
-    policy = None
-    if data.get("access_policy") is not None:
-        policy = _parse_access_policy(data["access_policy"])
     return AccessToken(
         qurl_id=data["qurl_id"],
         status=data["status"],
@@ -448,7 +449,7 @@ def parse_access_token(data: dict[str, Any]) -> AccessToken:
         use_count=data.get("use_count", 0),
         label=data.get("label"),
         qurl_site=data.get("qurl_site"),
-        access_policy=policy,
+        access_policy=_parse_access_policy(data.get("access_policy")),
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
     )
@@ -500,27 +501,29 @@ def parse_mint_output(data: dict[str, Any]) -> MintOutput:
     """Parse a MintOutput from API response data."""
     return MintOutput(
         qurl_link=data["qurl_link"],
-        qurl_id=data.get("qurl_id"),
+        qurl_id=data.get("qurl_id") or None,
         expires_at=_parse_dt(data.get("expires_at")),
         branded_domain=data.get("branded_domain"),
         resource_type=data.get("type"),
     )
 
 
+def _parse_access_grant(data: dict[str, Any] | None) -> AccessGrant | None:
+    if data is None:
+        return None
+    return AccessGrant(
+        expires_in=data["expires_in"],
+        granted_at=_parse_dt(data.get("granted_at")),
+        src_ip=data.get("src_ip", ""),
+    )
+
+
 def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
     """Parse a ResolveOutput from API response data."""
-    grant = None
-    if data.get("access_grant") is not None:
-        grant_data = data["access_grant"]
-        grant = AccessGrant(
-            expires_in=grant_data["expires_in"],
-            granted_at=_parse_dt(grant_data.get("granted_at")),
-            src_ip=grant_data.get("src_ip", ""),
-        )
     return ResolveOutput(
         target_url=data.get("target_url"),
         resource_id=data["resource_id"],
-        access_grant=grant,
+        access_grant=_parse_access_grant(data.get("access_grant")),
     )
 
 
@@ -746,20 +749,19 @@ def parse_webhook_delivery_list_output(
     )
 
 
+def _parse_event_type_info(data: dict[str, Any]) -> WebhookEventTypeInfo:
+    return WebhookEventTypeInfo(
+        type=data.get("type", ""),
+        category=data.get("category"),
+        description=data.get("description"),
+    )
+
+
 def parse_webhook_event_types_output(data: Any) -> WebhookEventTypesOutput:
     """Parse supported webhook event types."""
-    events = []
-    if isinstance(data, list):
-        events = [
-            WebhookEventTypeInfo(
-                type=item.get("type", ""),
-                category=item.get("category"),
-                description=item.get("description"),
-            )
-            for item in data
-            if isinstance(item, dict)
-        ]
-    return WebhookEventTypesOutput(events=events)
+    return WebhookEventTypesOutput(
+        events=_parse_list_items(data, _parse_event_type_info)
+    )
 
 
 def parse_api_key(data: dict[str, Any]) -> APIKey:

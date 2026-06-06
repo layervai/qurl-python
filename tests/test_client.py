@@ -604,6 +604,7 @@ def test_mint_link(client: QURLClient) -> None:
             json={
                 "data": {
                     "qurl_link": "https://qurl.link/#at_newtoken",
+                    "qurl_id": "",
                     "expires_at": "2026-03-20T10:00:00Z",
                 },
             },
@@ -612,6 +613,7 @@ def test_mint_link(client: QURLClient) -> None:
 
     result = client.mint_link("r_abc123def45", expires_at="2026-03-20T10:00:00Z")
     assert result.qurl_link == "https://qurl.link/#at_newtoken"
+    assert result.qurl_id is None
     assert isinstance(result.expires_at, datetime)
 
 
@@ -1044,6 +1046,36 @@ def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
     first_key = route.calls[0].request.headers["idempotency-key"]
     assert first_key == route.calls[1].request.headers["idempotency-key"]
     assert len(first_key) == 36
+
+
+@respx.mock
+def test_auto_idempotency_only_applies_to_post(client: QURLClient) -> None:
+    quota_route = respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(200, json=_QUOTA_OK)
+    )
+    customer_route = respx.patch(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "spending_cap_cents": 100,
+                    "current_period_usage": 0,
+                },
+            },
+        )
+    )
+    webhook_route = respx.delete(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop"
+    ).mock(return_value=httpx.Response(204))
+
+    client.get_quota()
+    client.update_customer(spending_cap_cents=100)
+    client.delete_webhook("wh_abcdefghijklmnop")
+
+    assert "idempotency-key" not in quota_route.calls[0].request.headers
+    assert "idempotency-key" not in customer_route.calls[0].request.headers
+    assert "idempotency-key" not in webhook_route.calls[0].request.headers
 
 
 @respx.mock

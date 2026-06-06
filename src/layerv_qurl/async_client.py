@@ -1338,6 +1338,10 @@ class AsyncQURLClient:
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
 
+        ``include_auth=False`` is for public flows such as
+        :meth:`redeem_access_code`, where the bearer token should stay off
+        the wire even when the client was constructed with one.
+
         ``allow_statuses`` lets a caller opt specific non-2xx codes out of
         the default raise-on-error path and receive the parsed body
         instead. This is used by :meth:`batch_create`, where the API
