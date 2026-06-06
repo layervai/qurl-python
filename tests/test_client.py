@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -3660,7 +3661,7 @@ def test_batch_create_serializes_type_and_parses_branded_domain(client: QURLClie
 
 
 @respx.mock
-def test_resource_token_and_session_contract_methods(client: QURLClient) -> None:
+def test_resource_create_update_and_detail_contract_methods(client: QURLClient) -> None:
     create_resource = respx.post(f"{BASE_URL}/v1/resources").mock(
         return_value=httpx.Response(
             201,
@@ -3713,6 +3714,7 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
     update_body = json.loads(update_resource.calls[0].request.content)
     assert update_body == {"tags": [], "preserve_host": False, "alias": None}
     assert update_resource.calls[0].request.headers["idempotency-key"] == "idem-resource-update"
+
     client.update_resource("r_tunnel12345", alias="prod-dashboard")
     set_alias_body = json.loads(update_resource.calls[1].request.content)
     assert set_alias_body == {"alias": "prod-dashboard"}
@@ -3743,6 +3745,9 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
     assert detail.resource.qurl_count == 1
     assert detail.qurls[0].session_duration == 3600
 
+
+@respx.mock
+def test_resource_qurl_token_contract_methods(client: QURLClient) -> None:
     mint_route = respx.post(f"{BASE_URL}/v1/resources/r_tunnel12345/qurls").mock(
         return_value=httpx.Response(
             201,
@@ -3790,6 +3795,9 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
     assert token.max_sessions == 2
     assert update_token_route.calls[0].request.headers["idempotency-key"] == "idem-token-update"
 
+
+@respx.mock
+def test_resource_session_contract_methods(client: QURLClient) -> None:
     respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
         return_value=httpx.Response(
             200,
@@ -4094,10 +4102,7 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
 
 
 @respx.mock
-def test_account_billing_connector_agent_and_public_access_code_contracts() -> None:
-    client = QURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0)
-    no_auth_client = QURLClient(base_url=BASE_URL, max_retries=0)
-
+def test_api_key_and_access_code_contracts(client: QURLClient) -> None:
     key_route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
         return_value=httpx.Response(
             201,
@@ -4146,6 +4151,12 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     assert access_codes_route.calls[0].request.url.params["limit"] == "10"
     assert access_codes_route.calls[0].request.url.params["cursor"] == "cur_prev_codes"
 
+
+@respx.mock
+def test_public_access_code_redeem_contracts() -> None:
+    client = QURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0)
+    no_auth_client = QURLClient(base_url=BASE_URL, max_retries=0)
+
     redeem_route = respx.post(f"{BASE_URL}/v1/access-codes/redeem").mock(
         return_value=httpx.Response(
             200,
@@ -4175,6 +4186,9 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     assert "authorization" not in redeem_route.calls[2].request.headers
     assert len(redeem_route.calls[2].request.headers["idempotency-key"]) == 36
 
+
+@respx.mock
+def test_usage_and_billing_contracts(client: QURLClient) -> None:
     respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
         return_value=httpx.Response(
             200,
@@ -4217,6 +4231,11 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     )
     assert client.list_billing_invoices().invoices[0].id == "in_123"
 
+
+@respx.mock
+def test_connector_and_agent_contracts(
+    client: QURLClient, caplog: pytest.LogCaptureFixture
+) -> None:
     respx.get(f"{BASE_URL}/v1/connectors/installations").mock(
         return_value=httpx.Response(
             200,
@@ -4249,10 +4268,16 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
             },
         )
     )
-    connector = client.list_connector_installations().installations[0]
+    with caplog.at_level(logging.DEBUG, logger="layerv_qurl"):
+        connector = client.list_connector_installations().installations[0]
+
     assert connector.installation_id == "inst_1"
     assert connector.stats is not None
     assert connector.stats.qurls == 4
+    assert any(
+        "parse_connector_installation" in record.message and "plugin_id" in record.message
+        for record in caplog.records
+    )
 
     bootstrap_route = respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
         return_value=httpx.Response(

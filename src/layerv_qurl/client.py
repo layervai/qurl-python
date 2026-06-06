@@ -19,7 +19,7 @@ from layerv_qurl._utils import (
     RETRYABLE_STATUS,
     RETRYABLE_STATUS_POST,
     UNSET,
-    _UnsetType,
+    UnsetType,
     build_body,
     build_list_params,
     build_query_params,
@@ -763,7 +763,7 @@ class QURLClient:
         tags: builtins.list[str] | None = None,
         custom_domain: str | None = None,
         preserve_host: bool | None = None,
-        alias: str | None | _UnsetType = UNSET,
+        alias: str | None | UnsetType = UNSET,
         idempotency_key: str | None = None,
     ) -> Resource:
         """Update resource metadata.

@@ -121,11 +121,11 @@ _ERROR_CLASS_MAP: dict[int, type[QURLError]] = {
 }
 
 
-class _UnsetType:
+class UnsetType:
     """Sentinel for fields where omitted and explicit null differ."""
 
 
-UNSET = _UnsetType()
+UNSET = UnsetType()
 
 
 @functools.lru_cache(maxsize=1)
@@ -266,7 +266,14 @@ def _parse_list_items(data: Any, parser: Callable[[dict[str, Any]], _T]) -> list
             continue
         try:
             items.append(parser(item))
-        except KeyError:
+        except KeyError as exc:
+            missing = exc.args[0] if exc.args else "<unknown>"
+            parser_name = getattr(parser, "__name__", "parser")
+            logger.debug(
+                "Skipping malformed API list item in %s: missing %r",
+                parser_name,
+                missing,
+            )
             continue
     return items
 

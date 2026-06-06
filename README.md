@@ -74,7 +74,8 @@ supports that header on mutating endpoints, including `POST /v1/resolve`.
 Automatic POST status-code retries remain limited to rate limits because
 one-time resolve tokens can be consumed by server-side knock failures. Pass a
 stable `idempotency_key` when you need retry-safe behavior across your own retry
-loop, process restart, or job replay.
+loop, process restart, or job replay. Caller-supplied keys should be globally
+unique for each logical operation; UUID or ULID values are recommended.
 
 Fields such as webhook `events` and API-key `scopes` accept any non-string
 iterable of strings. Values are serialized in iteration order, so pass a list or
