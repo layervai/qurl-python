@@ -4278,3 +4278,73 @@ async def test_async_domain_and_list_limit_contracts(
     assert domains.next_cursor == "cur_next"
     assert route.calls[0].request.url.params["limit"] == "10"
     assert route.calls[0].request.url.params["cursor"] == "cur_prev"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_delete_list_and_secret_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    access_codes_route = respx.get(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "access_code_id": "acd_async123",
+                        "resource_id": "r_asynccode",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_codes", "has_more": True},
+            },
+        )
+    )
+    resource_route = respx.delete(f"{BASE_URL}/v1/resources/r_asyncdelete").mock(
+        return_value=httpx.Response(204)
+    )
+    session_route = respx.delete(
+        f"{BASE_URL}/v1/resources/r_asyncdelete/sessions/s_async123"
+    ).mock(return_value=httpx.Response(204))
+    webhook_delete_route = respx.delete(
+        f"{BASE_URL}/v1/webhooks/wh_asyncabcdefghijkl"
+    ).mock(return_value=httpx.Response(204))
+    api_key_route = respx.delete(f"{BASE_URL}/v1/api-keys/key_async123456").mock(
+        return_value=httpx.Response(204)
+    )
+    secret_route = respx.post(
+        f"{BASE_URL}/v1/webhooks/wh_asyncabcdefghijkl/secret"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_asyncabcdefghijkl",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                    "secret": "whsec_async",
+                },
+            },
+        )
+    )
+
+    access_codes = await async_client.list_access_codes()
+    await async_client.delete_resource("r_asyncdelete")
+    await async_client.terminate_resource_session("r_asyncdelete", "s_async123")
+    await async_client.delete_webhook("wh_asyncabcdefghijkl")
+    await async_client.revoke_api_key("key_async123456")
+    webhook = await async_client.regenerate_webhook_secret(
+        "wh_asyncabcdefghijkl",
+        idempotency_key="idem-async-secret",
+    )
+
+    assert access_codes.access_codes[0].access_code_id == "acd_async123"
+    assert access_codes.next_cursor == "cur_async_codes"
+    assert webhook.secret == "whsec_async"
+    assert secret_route.calls[0].request.headers["idempotency-key"] == "idem-async-secret"
+    assert access_codes_route.called
+    assert resource_route.called
+    assert session_route.called
+    assert webhook_delete_route.called
+    assert api_key_route.called

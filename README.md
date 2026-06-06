@@ -90,7 +90,8 @@ asyncio.run(main())
 ```python
 # Iterate all active qURLs (auto-paginates)
 for qurl in client.list_all(status="active"):
-    print(f"{qurl.resource_id}: {qurl.target_url}")
+    target = qurl.target_url or "<redacted>"
+    print(f"{qurl.resource_id}: {target}")
 
 # Or fetch a single page
 page = client.list(status="active", limit=10)
