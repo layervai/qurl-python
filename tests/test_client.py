@@ -3755,6 +3755,21 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="url"):
         client.create_webhook(url="ftp://example.com/webhook", events=["qurl.created"])
 
+    with pytest.raises(ValueError, match="code"):
+        client.redeem_access_code("")
+
+    with pytest.raises(ValueError, match="name"):
+        client.create_api_key(name="", scopes=["qurl:read"])
+
+    with pytest.raises(ValueError, match="plan"):
+        client.create_billing_checkout(plan="")
+
+    with pytest.raises(ValueError, match="public_key"):
+        client.bootstrap_agent(public_key="")
+
+    with pytest.raises(ValueError, match="spending_cap_cents"):
+        client.update_customer(spending_cap_cents=-1)
+
 
 @respx.mock
 def test_resource_detail_tolerates_missing_resource_wrapper(client: QURLClient) -> None:

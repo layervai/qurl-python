@@ -70,6 +70,8 @@ from layerv_qurl._utils import (
     validate_domain_input,
     validate_id,
     validate_mint_input,
+    validate_nonnegative_int,
+    validate_required_string,
     validate_update_input,
     validate_webhook_url,
 )
@@ -1079,6 +1081,7 @@ class AsyncQURLClient:
         If provided, ``idempotency_key`` must be 32-256 characters for
         this security-sensitive endpoint.
         """
+        validate_required_string(name, "name")
         body = build_body(
             {
                 "name": name,
@@ -1096,7 +1099,6 @@ class AsyncQURLClient:
                 idempotency_key,
                 min_length=32,  # API-key issuance uses a higher entropy floor.
             ),
-            idempotency_min_length=32,
         )
         return parse_api_key(resp)
 
@@ -1158,6 +1160,7 @@ class AsyncQURLClient:
         idempotency_key: str | None = None,
     ) -> RedeemAccessCodeOutput:
         """Redeem a public access code and return its redirect URL."""
+        validate_required_string(code, "code")
         body = build_body({"code": code, "honeypot": honeypot, "elapsed_ms": elapsed_ms})
         resp = await self._request(
             "POST",
@@ -1232,6 +1235,7 @@ class AsyncQURLClient:
         self, *, spending_cap_cents: int, idempotency_key: str | None = None
     ) -> Customer:
         """Update customer billing settings. JWT auth is required by the API."""
+        validate_nonnegative_int(spending_cap_cents, "spending_cap_cents")
         resp = await self._request(
             "PATCH",
             "/v1/customer",
@@ -1244,6 +1248,7 @@ class AsyncQURLClient:
         self, *, plan: str, idempotency_key: str | None = None
     ) -> CheckoutSession:
         """Create a Stripe checkout session. JWT auth is required by the API."""
+        validate_required_string(plan, "plan")
         resp = await self._request(
             "POST",
             "/v1/billing/checkout",
@@ -1295,6 +1300,7 @@ class AsyncQURLClient:
         idempotency_key: str | None = None,
     ) -> AgentBootstrapOutput:
         """Bootstrap a LayerV qURL Connector agent."""
+        validate_required_string(public_key, "public_key")
         body = build_body(
             {
                 "public_key": public_key,
@@ -1323,7 +1329,6 @@ class AsyncQURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
-        idempotency_min_length: int = 1,
     ) -> Any:
         return (
             await self._raw_request(
@@ -1334,7 +1339,6 @@ class AsyncQURLClient:
                 allow_statuses=allow_statuses,
                 headers=headers,
                 include_auth=include_auth,
-                idempotency_min_length=idempotency_min_length,
             )
         )[0]
 
@@ -1348,7 +1352,6 @@ class AsyncQURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
-        idempotency_min_length: int = 1,
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
 
@@ -1393,9 +1396,7 @@ class AsyncQURLClient:
             request_headers.pop("Authorization", None)
         if headers:
             request_headers.update(headers)
-        ensure_post_idempotency(
-            method, request_headers, min_length=idempotency_min_length
-        )
+        ensure_post_idempotency(method, request_headers)
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:

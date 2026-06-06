@@ -239,15 +239,13 @@ def idempotency_headers(
     return {"Idempotency-Key": idempotency_key}
 
 
-def ensure_post_idempotency(
-    method: str, headers: dict[str, str], *, min_length: int = 1
-) -> None:
+def ensure_post_idempotency(method: str, headers: dict[str, str]) -> None:
     """Generate a per-call idempotency key for POST requests that need retries."""
     if method.upper() != "POST":
         return
     if any(key.lower() == "idempotency-key" for key in headers):
         return
-    generated = idempotency_headers(str(uuid4()), min_length=min_length)
+    generated = idempotency_headers(str(uuid4()))
     if generated:
         headers.update(generated)
 
@@ -311,6 +309,17 @@ def _require_max_length(value: str | None, field_name: str, maximum: int) -> Non
 def _require_nonempty_string(value: str, field_name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name}: must be a non-empty string")
+
+
+def validate_required_string(value: str, field_name: str) -> None:
+    """Validate required string request fields that have no richer local schema."""
+    _require_nonempty_string(value, field_name)
+
+
+def validate_nonnegative_int(value: int, field_name: str) -> None:
+    """Validate required non-negative integer request fields."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field_name}: must be a non-negative integer")
 
 
 def _require_http_url(value: str, field_name: str) -> None:
@@ -888,6 +897,8 @@ def parse_customer(data: dict[str, Any]) -> Customer:
     return Customer(
         tier=data.get("tier", "unknown"),
         spending_cap_cents=data.get("spending_cap_cents", 0),
+        # Wire name is `current_period_usage`; SDK suffixes `_count` to
+        # avoid confusion with the richer CurrentPeriodUsage response.
         current_period_usage_count=data.get("current_period_usage", 0),
         frozen=data.get("frozen", False),
         frozen_reason=data.get("frozen_reason"),
