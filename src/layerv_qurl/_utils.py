@@ -485,6 +485,16 @@ def parse_access_token(data: dict[str, Any]) -> AccessToken:
     )
 
 
+def _parse_access_token_preview_items(data: Any) -> list[AccessToken]:
+    if not isinstance(data, list):
+        return []
+    return [
+        parse_access_token(item)
+        for item in data
+        if isinstance(item, dict) and "qurl_id" in item and "status" in item
+    ]
+
+
 def parse_qurl(data: dict[str, Any]) -> QURL:
     """Parse a qURL resource from API response data."""
     tokens = None
@@ -644,7 +654,7 @@ def parse_resource_detail(data: dict[str, Any]) -> ResourceDetail:
         raw_resource if isinstance(raw_resource, dict) else {},
         strict_identity=False,
     )
-    qurls = _parse_list_items(data.get("qurls"), parse_access_token)
+    qurls = _parse_access_token_preview_items(data.get("qurls"))
     return ResourceDetail(resource=resource, qurls=qurls)
 
 

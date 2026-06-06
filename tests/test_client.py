@@ -3845,12 +3845,23 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
 @respx.mock
 def test_resource_detail_tolerates_missing_resource_wrapper(client: QURLClient) -> None:
     respx.get(f"{BASE_URL}/v1/resources/r_partial").mock(
-        return_value=httpx.Response(200, json={"data": {"qurls": []}})
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurls": [
+                        {"qurl_id": "q_valid", "status": "active"},
+                        {"qurl_id": "q_missing_status"},
+                        "ignored",
+                    ]
+                }
+            },
+        )
     )
     detail = client.get_resource("r_partial")
     assert detail.resource.resource_id == ""
     assert detail.resource.status == "unknown"
-    assert detail.qurls == []
+    assert [qurl.qurl_id for qurl in detail.qurls] == ["q_valid"]
 
 
 def test_parse_resource_requires_identity_fields() -> None:
