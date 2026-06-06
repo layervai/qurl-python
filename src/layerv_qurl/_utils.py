@@ -231,8 +231,6 @@ def idempotency_headers(
         raise ValueError(
             f"idempotency_key: must be 256 characters or fewer (got {len(idempotency_key)})"
         )
-    if "\r" in idempotency_key or "\n" in idempotency_key:
-        raise ValueError("idempotency_key: must not contain CR/LF characters")
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in idempotency_key):
         raise ValueError("idempotency_key: must not contain control characters")
     return {"Idempotency-Key": idempotency_key}
@@ -742,11 +740,12 @@ def parse_webhook_event_types_output(data: Any) -> WebhookEventTypesOutput:
     if isinstance(data, list):
         events = [
             WebhookEventTypeInfo(
-                type=item["type"],
+                type=item.get("type", ""),
                 category=item.get("category"),
                 description=item.get("description"),
             )
             for item in data
+            if isinstance(item, dict)
         ]
     return WebhookEventTypesOutput(events=events)
 
@@ -832,12 +831,16 @@ def parse_current_period_usage(data: dict[str, Any]) -> CurrentPeriodUsage:
 def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
     """Parse daily usage breakdown."""
     return DailyUsage(
-        tier=data["tier"],
+        tier=data.get("tier", "unknown"),
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
         daily=[
-            UsageDailyEntry(date=item["date"], qurls_created=item["qurls_created"])
+            UsageDailyEntry(
+                date=item.get("date", ""),
+                qurls_created=item.get("qurls_created", 0),
+            )
             for item in data.get("daily", [])
+            if isinstance(item, dict)
         ],
     )
 

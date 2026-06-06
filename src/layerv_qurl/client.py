@@ -1098,8 +1098,8 @@ class QURLClient:
         JWT auth is required for normal key management; API-key auth may
         only create restricted tunnel-bootstrap keys.
 
-        ``idempotency_key`` must be 32-256 characters for this
-        security-sensitive endpoint.
+        If provided, ``idempotency_key`` must be 32-256 characters for
+        this security-sensitive endpoint.
         """
         body = build_body(
             {
@@ -1171,7 +1171,7 @@ class QURLClient:
         self,
         code: str,
         *,
-        honeypot: str = "",
+        honeypot: str | None = None,
         elapsed_ms: int | None = None,
         idempotency_key: str | None = None,
     ) -> RedeemAccessCodeOutput:

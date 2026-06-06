@@ -3895,12 +3895,15 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
                         "type": "domain.verified",
                         "category": "resource",
                         "description": "Custom domain verified",
-                    }
+                    },
+                    {},
+                    "ignored",
                 ],
             },
         )
     )
-    assert client.list_webhook_event_types().events[0].type == "domain.verified"
+    event_types = client.list_webhook_event_types().events
+    assert [event.type for event in event_types] == ["domain.verified", ""]
 
     respx.get(f"{BASE_URL}/v1/qurls/r_conflict").mock(
         return_value=httpx.Response(
@@ -3993,6 +3996,15 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     assert redeem.redirect_url == "https://qurl.link/#at_code"
     assert "authorization" not in redeem_route.calls[0].request.headers
     assert redeem_route.calls[0].request.headers["idempotency-key"] == "idem-public-redeem"
+    redeem_body = json.loads(redeem_route.calls[0].request.content)
+    assert redeem_body == {
+        "code": "ac_k8xqp9h2sj9lx7r4abcdef",
+        "elapsed_ms": 5200,
+    }
+
+    no_auth_client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef", honeypot="bot")
+    explicit_honeypot_body = json.loads(redeem_route.calls[1].request.content)
+    assert explicit_honeypot_body["honeypot"] == "bot"
 
     respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
         return_value=httpx.Response(
@@ -4108,6 +4120,19 @@ def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> 
     assert usage.active_qurls == 0
     assert usage.cost_estimate is None
 
+    respx.get(f"{BASE_URL}/v1/usage/daily").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"daily": [{}, {"date": "2026-03-02"}]}},
+        )
+    )
+    daily = client.get_usage_daily()
+    assert daily.tier == "unknown"
+    assert daily.daily[0].date == ""
+    assert daily.daily[0].qurls_created == 0
+    assert daily.daily[1].date == "2026-03-02"
+    assert daily.daily[1].qurls_created == 0
+
     respx.get(f"{BASE_URL}/v1/customer").mock(
         return_value=httpx.Response(200, json={"data": {"frozen_reason": "manual"}})
     )
@@ -4176,7 +4201,7 @@ def test_billing_session_methods_send_idempotency(client: QURLClient) -> None:
 
 
 def test_idempotency_key_validation(client: QURLClient) -> None:
-    with pytest.raises(ValueError, match="CR/LF"):
+    with pytest.raises(ValueError, match="control characters"):
         client.create(target_url="https://example.com", idempotency_key="bad\nkey")
 
     with pytest.raises(ValueError, match="control characters"):
@@ -4241,6 +4266,7 @@ async def test_async_public_redeem_omits_auth_and_sends_idempotency() -> None:
     assert redeem.redirect_url == "https://qurl.link/#at_async_code"
     assert "authorization" not in route.calls[0].request.headers
     assert route.calls[0].request.headers["idempotency-key"] == "idem-async-redeem"
+    assert json.loads(route.calls[0].request.content) == {"code": "ac_async"}
 
 
 @respx.mock

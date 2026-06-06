@@ -1065,8 +1065,8 @@ class AsyncQURLClient:
     ) -> APIKey:
         """Create an API key.
 
-        ``idempotency_key`` must be 32-256 characters for this
-        security-sensitive endpoint.
+        If provided, ``idempotency_key`` must be 32-256 characters for
+        this security-sensitive endpoint.
         """
         body = build_body(
             {
@@ -1138,7 +1138,7 @@ class AsyncQURLClient:
         self,
         code: str,
         *,
-        honeypot: str = "",
+        honeypot: str | None = None,
         elapsed_ms: int | None = None,
         idempotency_key: str | None = None,
     ) -> RedeemAccessCodeOutput:
