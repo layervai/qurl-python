@@ -67,9 +67,11 @@ from layerv_qurl._utils import (
     require_resource_id_prefix,
     retry_delay,
     validate_create_input,
+    validate_domain_input,
     validate_id,
     validate_mint_input,
     validate_update_input,
+    validate_webhook_url,
 )
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
@@ -80,7 +82,7 @@ if TYPE_CHECKING:
     # import lives in a TYPE_CHECKING block because it's only needed
     # for type annotations.
     import builtins
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Iterable, Sequence
     from datetime import datetime
 
     from layerv_qurl.types import (
@@ -881,6 +883,7 @@ class AsyncQURLClient:
         self, domain: str, *, idempotency_key: str | None = None
     ) -> Domain:
         """Register a custom domain and return DNS setup records."""
+        validate_domain_input(domain)
         resp = await self._request(
             "POST",
             "/v1/domains",
@@ -902,17 +905,20 @@ class AsyncQURLClient:
 
     async def get_domain(self, domain: str) -> Domain:
         """Get custom-domain status and DNS configuration."""
+        validate_domain_input(domain)
         resp = await self._request("GET", f"/v1/domains/{domain_path_segment(domain)}")
         return parse_domain(resp)
 
     async def delete_domain(self, domain: str) -> None:
         """Remove a custom-domain registration."""
+        validate_domain_input(domain)
         await self._request("DELETE", f"/v1/domains/{domain_path_segment(domain)}")
 
     async def verify_domain(
         self, domain: str, *, idempotency_key: str | None = None
     ) -> DomainVerifyOutput:
         """Trigger DNS verification for a custom domain."""
+        validate_domain_input(domain)
         resp = await self._request(
             "POST",
             f"/v1/domains/{domain_path_segment(domain)}/verify",
@@ -924,6 +930,7 @@ class AsyncQURLClient:
         self, domain: str, *, idempotency_key: str | None = None
     ) -> Domain:
         """Regenerate a custom-domain verification token."""
+        validate_domain_input(domain)
         resp = await self._request(
             "POST",
             f"/v1/domains/{domain_path_segment(domain)}/regenerate-token",
@@ -955,11 +962,12 @@ class AsyncQURLClient:
         self,
         *,
         url: str,
-        events: Sequence[str],
+        events: Iterable[str],
         description: str | None = None,
         idempotency_key: str | None = None,
     ) -> Webhook:
         """Create a webhook subscription."""
+        validate_webhook_url(url)
         body = build_body(
             {
                 "url": url,
@@ -986,13 +994,15 @@ class AsyncQURLClient:
         webhook_id: str,
         *,
         url: str | None = None,
-        events: Sequence[str] | None = None,
+        events: Iterable[str] | None = None,
         description: str | None = None,
         status: str | None = None,
         idempotency_key: str | None = None,
     ) -> Webhook:
         """Update a webhook subscription."""
         validate_id(webhook_id, "webhook_id")
+        if url is not None:
+            validate_webhook_url(url)
         body = build_body(
             {
                 "url": url,
@@ -1058,7 +1068,7 @@ class AsyncQURLClient:
         self,
         *,
         name: str,
-        scopes: Sequence[str],
+        scopes: Iterable[str],
         expires_in: str | None = None,
         purpose: str | None = None,
         tunnel_slug: str | None = None,
@@ -1086,6 +1096,7 @@ class AsyncQURLClient:
                 idempotency_key,
                 min_length=32,  # API-key issuance uses a higher entropy floor.
             ),
+            idempotency_min_length=32,
         )
         return parse_api_key(resp)
 
@@ -1109,7 +1120,7 @@ class AsyncQURLClient:
         key_id: str,
         *,
         name: str | None = None,
-        scopes: Sequence[str] | None = None,
+        scopes: Iterable[str] | None = None,
         idempotency_key: str | None = None,
     ) -> APIKey:
         """Update API key name or scopes. JWT auth is required by the API."""
@@ -1312,6 +1323,7 @@ class AsyncQURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
+        idempotency_min_length: int = 1,
     ) -> Any:
         return (
             await self._raw_request(
@@ -1322,6 +1334,7 @@ class AsyncQURLClient:
                 allow_statuses=allow_statuses,
                 headers=headers,
                 include_auth=include_auth,
+                idempotency_min_length=idempotency_min_length,
             )
         )[0]
 
@@ -1335,6 +1348,7 @@ class AsyncQURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
+        idempotency_min_length: int = 1,
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
 
@@ -1379,7 +1393,9 @@ class AsyncQURLClient:
             request_headers.pop("Authorization", None)
         if headers:
             request_headers.update(headers)
-        ensure_post_idempotency(method, request_headers)
+        ensure_post_idempotency(
+            method, request_headers, min_length=idempotency_min_length
+        )
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:

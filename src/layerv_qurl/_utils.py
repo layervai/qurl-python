@@ -15,7 +15,7 @@ import functools
 import logging
 import random
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -189,11 +189,13 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_string_list(value: Any, field: str) -> list[str]:
-    """Build a non-empty list of strings without accepting a bare string."""
+    """Build a non-empty list of strings without accepting strings or mappings."""
     if isinstance(value, str):
-        raise ValueError(f"{field}: must be a sequence of strings, not a string")
-    if not isinstance(value, Sequence):
-        raise ValueError(f"{field}: must be a sequence of strings")
+        raise ValueError(f"{field}: must be an iterable of strings, not a string")
+    if isinstance(value, Mapping):
+        raise ValueError(f"{field}: must be an iterable of strings, not a mapping")
+    if not isinstance(value, Iterable):
+        raise ValueError(f"{field}: must be an iterable of strings")
     items = list(value)
     if not items:
         raise ValueError(f"{field}: must contain at least one value")
@@ -237,13 +239,17 @@ def idempotency_headers(
     return {"Idempotency-Key": idempotency_key}
 
 
-def ensure_post_idempotency(method: str, headers: dict[str, str]) -> None:
+def ensure_post_idempotency(
+    method: str, headers: dict[str, str], *, min_length: int = 1
+) -> None:
     """Generate a per-call idempotency key for POST requests that need retries."""
     if method.upper() != "POST":
         return
     if any(key.lower() == "idempotency-key" for key in headers):
         return
-    headers["Idempotency-Key"] = str(uuid4())
+    generated = idempotency_headers(str(uuid4()), min_length=min_length)
+    if generated:
+        headers.update(generated)
 
 
 def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
@@ -302,6 +308,19 @@ def _require_max_length(value: str | None, field_name: str, maximum: int) -> Non
         )
 
 
+def _require_nonempty_string(value: str, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name}: must be a non-empty string")
+
+
+def _require_http_url(value: str, field_name: str) -> None:
+    if not isinstance(value, str) or not value.startswith(_ALLOWED_URL_SCHEMES):
+        raise ValueError(
+            f"{field_name}: must start with http:// or https:// (got {repr(value)[:40]})"
+        )
+    _require_max_length(value, field_name, MAX_TARGET_URL)
+
+
 def _require_max_sessions_in_range(value: int | None) -> None:
     if value is None:
         return
@@ -348,16 +367,10 @@ def validate_create_input(
     Raises ``ValueError`` on constraint violations so obvious mistakes
     fail fast instead of round-tripping to the API.
     """
-    if not isinstance(target_url, str) or not target_url.startswith(_ALLOWED_URL_SCHEMES):
-        # `repr(...)[:40]` instead of `target_url[:32]!r` — the original
-        # subscript would raise `TypeError` on any non-subscriptable
-        # input (None, int, bool, …) *before* the ValueError could
-        # surface, masking the real validation failure with a cryptic
-        # slicing error. `repr()` works on any object.
-        raise ValueError(
-            f"target_url: must start with http:// or https:// (got {repr(target_url)[:40]})"
-        )
-    _require_max_length(target_url, "target_url", MAX_TARGET_URL)
+    # `repr(...)[:40]` inside `_require_http_url` avoids the old
+    # `target_url[:32]!r` trap for non-subscriptable inputs (None, int,
+    # bool, ...), surfacing a clean ValueError instead of TypeError.
+    _require_http_url(target_url, "target_url")
     _require_max_length(label, "label", MAX_LABEL)
     _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
     _require_max_sessions_in_range(max_sessions)
@@ -373,6 +386,17 @@ def validate_update_input(
     _require_max_length(description, "description", MAX_DESCRIPTION)
     _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
     _require_valid_tags(tags)
+
+
+def validate_domain_input(domain: str) -> None:
+    """Validate custom-domain strings before using them in URL path segments."""
+    _require_nonempty_string(domain, "domain")
+    _require_max_length(domain, "domain", MAX_CUSTOM_DOMAIN)
+
+
+def validate_webhook_url(url: str) -> None:
+    """Validate webhook callback URLs with the same basic HTTP(S) guard."""
+    _require_http_url(url, "url")
 
 
 def validate_mint_input(

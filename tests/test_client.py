@@ -21,7 +21,11 @@ from layerv_qurl import (
     QURLNetworkError,
     QURLTimeoutError,
 )
-from layerv_qurl._utils import build_query_params, domain_path_segment
+from layerv_qurl._utils import (
+    build_query_params,
+    build_string_list,
+    domain_path_segment,
+)
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -3745,6 +3749,12 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="custom_domain"):
         client.update_resource("r_tunnel12345", custom_domain="x" * 254)
 
+    with pytest.raises(ValueError, match="domain"):
+        client.get_domain("")
+
+    with pytest.raises(ValueError, match="url"):
+        client.create_webhook(url="ftp://example.com/webhook", events=["qurl.created"])
+
 
 @respx.mock
 def test_resource_detail_tolerates_missing_resource_wrapper(client: QURLClient) -> None:
@@ -3773,6 +3783,11 @@ def test_update_api_key_rejects_empty_update(client: QURLClient) -> None:
 def test_string_sequence_fields_reject_bare_string_and_empty_lists(
     client: QURLClient,
 ) -> None:
+    assert build_string_list({"qurl.created"}, "events") == ["qurl.created"]
+    assert build_string_list((item for item in ["qurl.created"]), "events") == [
+        "qurl.created"
+    ]
+
     with pytest.raises(ValueError, match="events"):
         client.create_webhook(
             url="https://example.com/webhook",
@@ -3781,6 +3796,9 @@ def test_string_sequence_fields_reject_bare_string_and_empty_lists(
 
     with pytest.raises(ValueError, match="events"):
         client.update_webhook("wh_abcdefghijklmnop", events=[])
+
+    with pytest.raises(ValueError, match="mapping"):
+        build_string_list({"event": "qurl.created"}, "events")
 
     with pytest.raises(ValueError, match="scopes"):
         client.create_api_key(
