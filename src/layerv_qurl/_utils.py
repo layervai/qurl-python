@@ -203,7 +203,7 @@ def build_string_list(value: Any, field: str) -> list[str]:
         raise ValueError(f"{field}: must be an iterable of strings")
     items = list(value)
     if not items:
-        raise ValueError(f"{field}: must contain at least one value")
+        raise ValueError(f"{field}: cannot be empty; pass at least one value")
     if any(not isinstance(item, str) for item in items):
         raise ValueError(f"{field}: all values must be strings")
     return items

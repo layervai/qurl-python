@@ -570,7 +570,7 @@ class Invoice:
     id: str
     amount_cents: int
     status: str
-    created_at: datetime | None
+    created_at: datetime | None = None
     pdf_url: str | None = None
 
 
@@ -614,7 +614,7 @@ class ConnectorInstallation:
     subject_kind: str
     subject_display_name: str
     status: str
-    installed_at: datetime | None
+    installed_at: datetime | None = None
     last_activity_at: datetime | None = None
     stats: ConnectorInstallationStats | None = None
     capabilities: ConnectorInstallationCapabilities | None = None

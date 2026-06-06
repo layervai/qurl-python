@@ -3991,7 +3991,7 @@ def test_string_sequence_fields_reject_bare_string_and_empty_lists(
             events="qurl.created",  # type: ignore[arg-type]
         )
 
-    with pytest.raises(ValueError, match="events"):
+    with pytest.raises(ValueError, match="cannot be empty"):
         client.update_webhook("wh_abcdefghijklmnop", events=[])
 
     with pytest.raises(ValueError, match="mapping"):
