@@ -102,7 +102,8 @@ DEFAULT_BASE_URL = "https://api.layerv.ai"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 3
 RETRYABLE_STATUS = {429, 502, 503, 504}
-RETRYABLE_STATUS_POST = {429}  # POST is not idempotent — only retry rate limits
+RETRYABLE_STATUS_POST = {429}  # Some POSTs consume tokens; only retry rate limits.
+IDEMPOTENCY_METHODS = {"POST", "PUT", "PATCH"}
 
 _RESOURCE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
@@ -239,9 +240,9 @@ def idempotency_headers(
     return {"Idempotency-Key": idempotency_key}
 
 
-def ensure_post_idempotency(method: str, headers: dict[str, str]) -> None:
-    """Generate a per-call idempotency key for POST requests that need retries."""
-    if method.upper() != "POST":
+def ensure_mutation_idempotency(method: str, headers: dict[str, str]) -> None:
+    """Generate a per-call idempotency key for supported mutating requests."""
+    if method.upper() not in IDEMPOTENCY_METHODS:
         return
     if any(key.lower() == "idempotency-key" for key in headers):
         return

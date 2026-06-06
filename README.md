@@ -68,10 +68,11 @@ Some resource-list responses intentionally omit `target_url` for redacted
 resource types. Treat `QURL.target_url` as `str | None` before formatting or
 parsing it.
 
-POST methods generate a per-call `Idempotency-Key` when you do not provide one
-and reuse it across the client's internal retries; qurl-service supports that
-header on mutating endpoints. Pass a stable `idempotency_key` when you need
-retry-safe behavior across your own retry loop, process restart, or job replay.
+Mutating methods generate a per-call `Idempotency-Key` when you do not provide
+one and reuse it across the client's internal retries; qurl-service supports
+that header on POST, PUT, and PATCH endpoints. Pass a stable `idempotency_key`
+when you need retry-safe behavior across your own retry loop, process restart,
+or job replay.
 
 Fields such as webhook `events` and API-key `scopes` accept any non-string
 iterable of strings. Values are serialized in iteration order, so pass a list or

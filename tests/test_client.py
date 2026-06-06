@@ -1000,11 +1000,11 @@ async def test_async_retry_after_http_date_falls_back_to_exponential_backoff() -
         await client.close()
 
 
-# --- POST retry safety ---
-# POSTs carry an idempotency key across internal retries, but the client still
-# deliberately restricts POST status-code retries to {429}. These tests lock
-# that decision in so a future refactor that naively unifies retry sets across
-# methods will trip the guard.
+# --- Mutation retry safety ---
+# Mutating requests carry an idempotency key across internal retries, but the
+# client still deliberately restricts POST status-code retries to {429}. These
+# tests lock that split in so a future refactor that naively unifies retry sets
+# across methods will trip the guard.
 
 
 @respx.mock
@@ -1053,7 +1053,7 @@ def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
 
 
 @respx.mock
-def test_auto_idempotency_only_applies_to_post(client: QURLClient) -> None:
+def test_auto_idempotency_applies_to_supported_mutations(client: QURLClient) -> None:
     quota_route = respx.get(f"{BASE_URL}/v1/quota").mock(
         return_value=httpx.Response(200, json=_QUOTA_OK)
     )
@@ -1078,8 +1078,40 @@ def test_auto_idempotency_only_applies_to_post(client: QURLClient) -> None:
     client.delete_webhook("wh_abcdefghijklmnop")
 
     assert "idempotency-key" not in quota_route.calls[0].request.headers
-    assert "idempotency-key" not in customer_route.calls[0].request.headers
+    assert len(customer_route.calls[0].request.headers["idempotency-key"]) == 36
     assert "idempotency-key" not in webhook_route.calls[0].request.headers
+
+
+@respx.mock
+def test_patch_retry_reuses_auto_idempotency_key(retry_client: QURLClient) -> None:
+    route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc123def45")
+    route.side_effect = [
+        httpx.Response(503, json=_ERR_503),
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-03-10T10:00:00Z",
+                    "expires_at": "2026-03-20T10:00:00Z",
+                    "tags": [],
+                },
+            },
+        ),
+    ]
+
+    with patch("layerv_qurl.client.time.sleep"):
+        result = retry_client.update("r_abc123def45", extend_by="7d")
+
+    assert isinstance(result.expires_at, datetime)
+    assert route.call_count == 2
+    first_key = route.calls[0].request.headers["idempotency-key"]
+    assert first_key == route.calls[1].request.headers["idempotency-key"]
+    assert len(first_key) == 36
+    assert json.loads(route.calls[0].request.content) == {"extend_by": "7d"}
+    assert json.loads(route.calls[1].request.content) == {"extend_by": "7d"}
 
 
 @respx.mock
@@ -1101,6 +1133,43 @@ async def test_async_post_does_not_retry_on_503() -> None:
         assert exc_info.value.status == 503
         assert route.call_count == 1
         assert len(route.calls[0].request.headers["idempotency-key"]) == 36
+    finally:
+        await client.close()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_patch_retry_reuses_auto_idempotency_key() -> None:
+    client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=2)
+    try:
+        route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc")
+        route.side_effect = [
+            httpx.Response(503, json=_ERR_503),
+            httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "resource_id": "r_abc",
+                        "target_url": "https://example.com",
+                        "status": "active",
+                        "created_at": "2026-03-10T10:00:00Z",
+                        "expires_at": "2026-03-20T10:00:00Z",
+                        "tags": [],
+                    },
+                },
+            ),
+        ]
+
+        with patch("layerv_qurl.async_client.asyncio.sleep"):
+            result = await client.update("r_abc", extend_by="7d")
+
+        assert isinstance(result.expires_at, datetime)
+        assert route.call_count == 2
+        first_key = route.calls[0].request.headers["idempotency-key"]
+        assert first_key == route.calls[1].request.headers["idempotency-key"]
+        assert len(first_key) == 36
+        assert json.loads(route.calls[0].request.content) == {"extend_by": "7d"}
+        assert json.loads(route.calls[1].request.content) == {"extend_by": "7d"}
     finally:
         await client.close()
 

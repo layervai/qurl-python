@@ -26,7 +26,7 @@ from layerv_qurl._utils import (
     build_string_list,
     default_user_agent,
     domain_path_segment,
-    ensure_post_idempotency,
+    ensure_mutation_idempotency,
     idempotency_headers,
     logger,
     mask_key,
@@ -1427,7 +1427,7 @@ class QURLClient:
             request_headers.pop("Authorization", None)
         if headers:
             request_headers.update(headers)
-        ensure_post_idempotency(method, request_headers)
+        ensure_mutation_idempotency(method, request_headers)
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
