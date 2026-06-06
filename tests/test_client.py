@@ -4950,3 +4950,372 @@ async def test_async_resource_connector_domain_bootstrap_contracts(
     assert bootstrap_route.calls[0].request.headers["idempotency-key"] == (
         "idem-async-bootstrap"
     )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_webhook_crud_and_delivery_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    list_route = respx.get(f"{BASE_URL}/v1/webhooks").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "webhook_id": "wh_asynccrud12345",
+                        "url": "https://example.com/async-hook",
+                        "events": ["qurl.created"],
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_hooks", "has_more": True},
+            },
+        )
+    )
+    create_route = respx.post(f"{BASE_URL}/v1/webhooks").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "webhook_id": "wh_asynccrud12345",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                    "secret": "whsec_async_create",
+                },
+            },
+        )
+    )
+    get_route = respx.get(f"{BASE_URL}/v1/webhooks/wh_asynccrud12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_asynccrud12345",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    update_route = respx.patch(f"{BASE_URL}/v1/webhooks/wh_asynccrud12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_asynccrud12345",
+                    "url": "https://example.com/async-hook",
+                    "events": ["qurl.created", "qurl.accessed"],
+                    "status": "paused",
+                },
+            },
+        )
+    )
+    deliveries_route = respx.get(
+        f"{BASE_URL}/v1/webhooks/wh_asynccrud12345/deliveries"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "delivery_id": "wd_async123",
+                        "webhook_id": "wh_asynccrud12345",
+                        "event_type": "qurl.created",
+                        "status": "delivered",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_delivery", "has_more": False},
+            },
+        )
+    )
+
+    webhooks = await async_client.list_webhooks(
+        limit=2,
+        cursor="cur_async_hooks_prev",
+        event="qurl.created",
+    )
+    created = await async_client.create_webhook(
+        url="https://example.com/async-hook",
+        events=["qurl.created"],
+        idempotency_key="idem-async-webhook-create",
+    )
+    fetched = await async_client.get_webhook("wh_asynccrud12345")
+    updated = await async_client.update_webhook(
+        "wh_asynccrud12345",
+        events=["qurl.created", "qurl.accessed"],
+        status="paused",
+        idempotency_key="idem-async-webhook-update",
+    )
+    deliveries = await async_client.list_webhook_deliveries(
+        "wh_asynccrud12345",
+        limit=1,
+        cursor="cur_async_delivery_prev",
+    )
+
+    assert webhooks.webhooks[0].webhook_id == "wh_asynccrud12345"
+    assert webhooks.next_cursor == "cur_async_hooks"
+    assert list_route.calls[0].request.url.params["limit"] == "2"
+    assert list_route.calls[0].request.url.params["cursor"] == "cur_async_hooks_prev"
+    assert list_route.calls[0].request.url.params["event"] == "qurl.created"
+    assert created.secret == "whsec_async_create"
+    assert create_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-webhook-create"
+    )
+    assert json.loads(create_route.calls[0].request.content)["events"] == [
+        "qurl.created"
+    ]
+    assert fetched.status == "active"
+    assert get_route.called
+    assert updated.status == "paused"
+    assert update_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-webhook-update"
+    )
+    assert json.loads(update_route.calls[0].request.content) == {
+        "events": ["qurl.created", "qurl.accessed"],
+        "status": "paused",
+    }
+    assert deliveries.deliveries[0].delivery_id == "wd_async123"
+    assert deliveries.next_cursor == "cur_async_delivery"
+    assert deliveries_route.calls[0].request.url.params["limit"] == "1"
+    assert (
+        deliveries_route.calls[0].request.url.params["cursor"]
+        == "cur_async_delivery_prev"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_api_key_and_access_code_create_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    key_route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "key_id": "key_asynccreate",
+                    "key_prefix": "lv_live_async",
+                    "api_key": "lv_live_async_secret",
+                    "name": "Async Production",
+                    "scopes": ["qurl:read", "qurl:write"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    list_keys_route = respx.get(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "key_id": "key_asynccreate",
+                        "key_prefix": "lv_live_async",
+                        "name": "Async Production",
+                        "scopes": ["qurl:read"],
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_async_keys", "has_more": True},
+            },
+        )
+    )
+    update_key_route = respx.patch(f"{BASE_URL}/v1/api-keys/key_asynccreate").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "key_id": "key_asynccreate",
+                    "key_prefix": "lv_live_async",
+                    "name": "Async CI",
+                    "scopes": ["qurl:read"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    code_route = respx.post(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "access_code_id": "acd_asynccreate",
+                    "resource_id": "r_asyncaccess",
+                    "name": "Async access",
+                    "status": "active",
+                    "code": "ac_async_code",
+                },
+            },
+        )
+    )
+
+    key = await async_client.create_api_key(
+        name="Async Production",
+        scopes=["qurl:read", "qurl:write"],
+        idempotency_key="0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2",
+    )
+    listed = await async_client.list_api_keys(
+        limit=3,
+        cursor="cur_async_keys_prev",
+        status="active",
+    )
+    updated = await async_client.update_api_key(
+        "key_asynccreate",
+        name="Async CI",
+        scopes=["qurl:read"],
+        idempotency_key="idem-async-api-key-update",
+    )
+    code = await async_client.create_access_code(
+        resource_id="r_asyncaccess",
+        name="Async access",
+        idempotency_key="idem-async-access-code-create",
+    )
+
+    assert key.api_key == "lv_live_async_secret"
+    assert key_route.calls[0].request.headers["idempotency-key"] == (
+        "0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2"
+    )
+    assert json.loads(key_route.calls[0].request.content)["scopes"] == [
+        "qurl:read",
+        "qurl:write",
+    ]
+    assert listed.api_keys[0].key_id == "key_asynccreate"
+    assert listed.next_cursor == "cur_async_keys"
+    assert list_keys_route.calls[0].request.url.params["limit"] == "3"
+    assert list_keys_route.calls[0].request.url.params["cursor"] == (
+        "cur_async_keys_prev"
+    )
+    assert list_keys_route.calls[0].request.url.params["status"] == "active"
+    assert updated.name == "Async CI"
+    assert update_key_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-api-key-update"
+    )
+    assert code.code == "ac_async_code"
+    assert code_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-access-code-create"
+    )
+    assert json.loads(code_route.calls[0].request.content) == {
+        "resource_id": "r_asyncaccess",
+        "name": "Async access",
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_usage_billing_and_resource_qurl_validation_contracts(
+    async_client: AsyncQURLClient,
+) -> None:
+    respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-03-31T23:59:59Z",
+                    "qurls_created": 12,
+                    "active_qurls": 4,
+                },
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/v1/usage/daily").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-03-31T23:59:59Z",
+                    "daily": [{"date": "2026-03-01", "qurls_created": 2}],
+                },
+            },
+        )
+    )
+    respx.get(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "spending_cap_cents": 10000,
+                    "current_period_usage": {"count": 9},
+                    "frozen": False,
+                },
+            },
+        )
+    )
+    checkout_route = respx.post(f"{BASE_URL}/v1/billing/checkout").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://billing.example.com/checkout"}},
+        )
+    )
+    portal_route = respx.post(f"{BASE_URL}/v1/billing/portal").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://billing.example.com/portal"}},
+        )
+    )
+    invoices_route = respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "invoices": [
+                        {
+                            "id": "in_async",
+                            "amount_cents": 1500,
+                            "status": "paid",
+                            "created_at": "2026-02-01T00:00:00Z",
+                        }
+                    ]
+                },
+                "meta": {"next_cursor": "cur_async_invoice", "has_more": True},
+            },
+        )
+    )
+
+    usage = await async_client.get_usage_current_period()
+    daily = await async_client.get_usage_daily()
+    customer = await async_client.get_customer()
+    checkout = await async_client.create_billing_checkout(
+        plan="growth",
+        idempotency_key="idem-async-checkout",
+    )
+    portal = await async_client.create_billing_portal(
+        idempotency_key="idem-async-portal"
+    )
+    invoices = await async_client.list_billing_invoices(
+        limit=1,
+        cursor="cur_async_invoice_prev",
+    )
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await async_client.update_resource_qurl(
+            "r_asyncresource",
+            "q_async12345",
+            extend_by="7d",
+            expires_at="2026-04-01T00:00:00Z",
+        )
+
+    assert usage.qurls_created == 12
+    assert daily.daily[0].qurls_created == 2
+    assert customer.current_period_usage_count == 9
+    assert checkout.url == "https://billing.example.com/checkout"
+    assert checkout_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-checkout"
+    )
+    assert portal.url == "https://billing.example.com/portal"
+    assert portal_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-async-portal"
+    )
+    assert invoices.invoices[0].id == "in_async"
+    assert invoices.next_cursor == "cur_async_invoice"
+    assert invoices_route.calls[0].request.url.params["limit"] == "1"
+    assert invoices_route.calls[0].request.url.params["cursor"] == (
+        "cur_async_invoice_prev"
+    )
