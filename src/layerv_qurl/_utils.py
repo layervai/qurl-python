@@ -989,6 +989,8 @@ def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
 
 def parse_customer(data: dict[str, Any]) -> Customer:
     """Parse customer profile data."""
+    # The current OpenAPI schema is an integer; tolerate older/future object
+    # wrappers without letting bool sneak through Python's int hierarchy.
     current_period_usage = data.get("current_period_usage", 0)
     if isinstance(current_period_usage, bool):
         current_period_usage_count = 0

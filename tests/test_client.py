@@ -4664,6 +4664,12 @@ def test_idempotency_key_validation(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="control characters"):
         client.create(target_url="https://example.com", idempotency_key="bad\tkey")
 
+    with pytest.raises(ValueError, match="256 characters"):
+        client.create(
+            target_url="https://example.com",
+            idempotency_key="x" * 257,
+        )
+
     with pytest.raises(ValueError, match="at least 32 characters"):
         client.create_api_key(
             name="too short",
