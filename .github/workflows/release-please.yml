@@ -59,4 +59,4 @@ jobs:
       - name: Build
         run: python -m build
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b54a752585ace28ca25210fc # v1.12.4
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
