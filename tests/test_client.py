@@ -3735,12 +3735,36 @@ def test_update_api_key_rejects_empty_update(client: QURLClient) -> None:
         client.update_api_key("key_abc123def456")
 
 
+def test_string_sequence_fields_reject_bare_string_and_empty_lists(
+    client: QURLClient,
+) -> None:
+    with pytest.raises(ValueError, match="events"):
+        client.create_webhook(
+            url="https://example.com/webhook",
+            events="qurl.created",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="events"):
+        client.update_webhook("wh_abcdefghijklmnop", events=[])
+
+    with pytest.raises(ValueError, match="scopes"):
+        client.create_api_key(
+            name="bad scopes",
+            scopes="qurl:read",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="scopes"):
+        client.update_api_key("key_abc123def456", scopes=[])
+
+
 @respx.mock
 def test_domain_path_segments_are_url_encoded(client: QURLClient) -> None:
     domain = "../evil%2Fhost.example.com"
-    route = respx.delete(
-        f"{BASE_URL}/v1/domains/{domain_path_segment(domain)}"
-    ).mock(return_value=httpx.Response(204))
+    encoded_domain = "..%2Fevil%252Fhost.example.com"
+    assert domain_path_segment(domain) == encoded_domain
+    route = respx.delete(f"{BASE_URL}/v1/domains/{encoded_domain}").mock(
+        return_value=httpx.Response(204)
+    )
 
     client.delete_domain(domain)
 

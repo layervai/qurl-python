@@ -15,6 +15,7 @@ import functools
 import logging
 import random
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -184,6 +185,20 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
             continue
         body[k] = _serialize_value(v)
     return body
+
+
+def build_string_list(value: Any, field: str) -> list[str]:
+    """Build a non-empty list of strings without accepting a bare string."""
+    if isinstance(value, str):
+        raise ValueError(f"{field}: must be a sequence of strings, not a string")
+    if not isinstance(value, Sequence):
+        raise ValueError(f"{field}: must be a sequence of strings")
+    items = list(value)
+    if not items:
+        raise ValueError(f"{field}: must contain at least one value")
+    if any(not isinstance(item, str) for item in items):
+        raise ValueError(f"{field}: all values must be strings")
+    return items
 
 
 def build_query_params(pairs: dict[str, Any]) -> dict[str, str]:
@@ -548,12 +563,9 @@ def _parse_usage_block(data: dict[str, Any] | None) -> Usage | None:
 
 def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
     """Parse a ListOutput from API response data."""
+    next_cursor, has_more = _meta_page(meta)
     qurls = _parse_list_items(data, parse_qurl)
-    return ListOutput(
-        qurls=qurls,
-        next_cursor=meta.get("next_cursor") if meta else None,
-        has_more=meta.get("has_more", False) if meta else False,
-    )
+    return ListOutput(qurls=qurls, next_cursor=next_cursor, has_more=has_more)
 
 
 def parse_resource(data: dict[str, Any]) -> Resource:

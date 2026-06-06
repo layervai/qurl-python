@@ -22,6 +22,7 @@ from layerv_qurl._utils import (
     build_body,
     build_list_params,
     build_query_params,
+    build_string_list,
     default_user_agent,
     domain_path_segment,
     idempotency_headers,
@@ -961,7 +962,7 @@ class AsyncQURLClient:
         body = build_body(
             {
                 "url": url,
-                "events": list(events),
+                "events": build_string_list(events, "events"),
                 "description": description,
             }
         )
@@ -994,7 +995,7 @@ class AsyncQURLClient:
         body = build_body(
             {
                 "url": url,
-                "events": list(events) if events is not None else None,
+                "events": build_string_list(events, "events") if events is not None else None,
                 "description": description,
                 "status": status,
             }
@@ -1070,7 +1071,7 @@ class AsyncQURLClient:
         body = build_body(
             {
                 "name": name,
-                "scopes": list(scopes),
+                "scopes": build_string_list(scopes, "scopes"),
                 "expires_in": expires_in,
                 "purpose": purpose,
                 "tunnel_slug": tunnel_slug,
@@ -1109,7 +1110,14 @@ class AsyncQURLClient:
     ) -> APIKey:
         """Update API key name or scopes. JWT auth is required by the API."""
         validate_id(key_id, "key_id")
-        body = build_body({"name": name, "scopes": list(scopes) if scopes is not None else None})
+        body = build_body(
+            {
+                "name": name,
+                "scopes": build_string_list(scopes, "scopes")
+                if scopes is not None
+                else None,
+            }
+        )
         require_nonempty_update(body, "update_api_key", "name, scopes")
         resp = await self._request(
             "PATCH",

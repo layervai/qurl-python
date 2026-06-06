@@ -68,6 +68,10 @@ Some resource-list responses intentionally omit `target_url` for redacted
 resource types. Treat `QURL.target_url` as `str | None` before formatting or
 parsing it.
 
+Mutating methods that expose `idempotency_key` only send the header when you
+provide one. Pass a stable key for create/mint/bootstrap/billing calls when you
+need retry-safe behavior across server-processed timeouts.
+
 ## Async Usage
 
 ```python
