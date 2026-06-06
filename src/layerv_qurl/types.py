@@ -303,6 +303,8 @@ class SessionListOutput:
     """Response from listing active sessions."""
 
     sessions: list[Session] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 @dataclass
@@ -328,6 +330,7 @@ class Domain:
 
     domain: str
     status: str
+    # Verification tokens are public DNS values, so repr keeps them visible.
     verification_token: str | None = None
     token_expires_at: datetime | None = None
     acme_cname_target: str | None = None
@@ -494,6 +497,8 @@ class AccessCodeListOutput:
     """Response from listing access codes."""
 
     access_codes: list[AccessCode] = field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 @dataclass

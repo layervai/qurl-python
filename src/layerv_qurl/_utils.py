@@ -19,6 +19,7 @@ from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
 
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -187,19 +188,17 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
 
 def build_query_params(pairs: dict[str, Any]) -> dict[str, str]:
     """Build query params from optional values, dropping ``None`` values."""
-    return {
-        k: (
-            v.isoformat()
-            if isinstance(v, datetime)
-            else "true"
-            if v is True
-            else "false"
-            if v is False
-            else str(v)
-        )
-        for k, v in pairs.items()
-        if v is not None
-    }
+    return {k: _query_value(v) for k, v in pairs.items() if v is not None}
+
+
+def _query_value(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
 
 
 def idempotency_headers(
@@ -232,6 +231,17 @@ def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
 
 def _parse_list_items(data: Any, parser: Callable[[dict[str, Any]], _T]) -> list[_T]:
     return [parser(item) for item in data] if isinstance(data, list) else []
+
+
+def domain_path_segment(domain: str) -> str:
+    """Encode a custom domain for use as one URL path segment."""
+    return quote(domain, safe="")
+
+
+def require_nonempty_update(body: dict[str, Any], method: str, fields: str) -> None:
+    """Raise a consistent error when an update method has no fields."""
+    if not body:
+        raise ValueError(f"{method}: at least one field ({fields}) must be provided")
 
 
 # ---- Spec-derived input validation --------------------------------------
@@ -493,29 +503,6 @@ def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
 
 def parse_quota(data: dict[str, Any]) -> Quota:
     """Parse a Quota from API response data."""
-    rate_limits = None
-    if data.get("rate_limits") is not None:
-        limits_data = data["rate_limits"]
-        rate_limits = RateLimits(
-            create_per_minute=limits_data.get("create_per_minute", 0),
-            create_per_hour=limits_data.get("create_per_hour", 0),
-            list_per_minute=limits_data.get("list_per_minute", 0),
-            resolve_per_minute=limits_data.get("resolve_per_minute", 0),
-            max_active_qurls=limits_data.get("max_active_qurls", 0),
-            max_tokens_per_qurl=limits_data.get("max_tokens_per_qurl", 0),
-            max_expiry_seconds=limits_data.get("max_expiry_seconds", 0),
-        )
-    usage = None
-    if data.get("usage") is not None:
-        usage_data = data["usage"]
-        usage = Usage(
-            qurls_created=usage_data.get("qurls_created", 0),
-            active_qurls=usage_data.get("active_qurls", 0),
-            # Nullable per the API spec — the field is null when
-            # max_active_qurls is unlimited.
-            active_qurls_percent=usage_data.get("active_qurls_percent"),
-            total_accesses=usage_data.get("total_accesses", 0),
-        )
     return Quota(
         # Fall back to the same sentinel the dataclass default uses
         # (see ``Quota.plan`` in types.py) so a malformed API response
@@ -527,8 +514,35 @@ def parse_quota(data: dict[str, Any]) -> Quota:
         plan=data.get("plan", "unknown"),
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
-        rate_limits=rate_limits,
-        usage=usage,
+        rate_limits=_parse_rate_limits(data.get("rate_limits")),
+        usage=_parse_usage_block(data.get("usage")),
+    )
+
+
+def _parse_rate_limits(data: dict[str, Any] | None) -> RateLimits | None:
+    if data is None:
+        return None
+    return RateLimits(
+        create_per_minute=data.get("create_per_minute", 0),
+        create_per_hour=data.get("create_per_hour", 0),
+        list_per_minute=data.get("list_per_minute", 0),
+        resolve_per_minute=data.get("resolve_per_minute", 0),
+        max_active_qurls=data.get("max_active_qurls", 0),
+        max_tokens_per_qurl=data.get("max_tokens_per_qurl", 0),
+        max_expiry_seconds=data.get("max_expiry_seconds", 0),
+    )
+
+
+def _parse_usage_block(data: dict[str, Any] | None) -> Usage | None:
+    if data is None:
+        return None
+    return Usage(
+        qurls_created=data.get("qurls_created", 0),
+        active_qurls=data.get("active_qurls", 0),
+        # Nullable per the API spec — the field is null when
+        # max_active_qurls is unlimited.
+        active_qurls_percent=data.get("active_qurls_percent"),
+        total_accesses=data.get("total_accesses", 0),
     )
 
 
@@ -592,10 +606,15 @@ def parse_session(data: dict[str, Any]) -> Session:
     )
 
 
-def parse_session_list_output(data: Any) -> SessionListOutput:
+def parse_session_list_output(
+    data: Any, meta: dict[str, Any] | None = None
+) -> SessionListOutput:
     """Parse an active session list response."""
+    next_cursor, has_more = _meta_page(meta)
     sessions = _parse_list_items(data, parse_session)
-    return SessionListOutput(sessions=sessions)
+    return SessionListOutput(
+        sessions=sessions, next_cursor=next_cursor, has_more=has_more
+    )
 
 
 def parse_session_terminate_output(data: dict[str, Any] | None) -> SessionTerminateOutput:
@@ -770,10 +789,15 @@ def parse_access_code(data: dict[str, Any]) -> AccessCode:
     )
 
 
-def parse_access_code_list_output(data: Any) -> AccessCodeListOutput:
+def parse_access_code_list_output(
+    data: Any, meta: dict[str, Any] | None = None
+) -> AccessCodeListOutput:
     """Parse an access-code list response."""
+    next_cursor, has_more = _meta_page(meta)
     access_codes = _parse_list_items(data, parse_access_code)
-    return AccessCodeListOutput(access_codes=access_codes)
+    return AccessCodeListOutput(
+        access_codes=access_codes, next_cursor=next_cursor, has_more=has_more
+    )
 
 
 def _parse_usage_cost(data: dict[str, Any] | None) -> UsageCostEstimate | None:
@@ -1136,9 +1160,10 @@ def retry_delay(attempt: int, last_error: Exception | None) -> float:
 def build_list_params(
     limit: int | None,
     cursor: str | None,
-    status: str | None,
-    q: str | None,
-    sort: str | None,
+    *,
+    status: str | None = None,
+    q: str | None = None,
+    sort: str | None = None,
     created_after: datetime | str | None = None,
     created_before: datetime | str | None = None,
     expires_before: datetime | str | None = None,

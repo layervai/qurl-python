@@ -21,7 +21,7 @@ from layerv_qurl import (
     QURLNetworkError,
     QURLTimeoutError,
 )
-from layerv_qurl._utils import build_query_params
+from layerv_qurl._utils import build_query_params, domain_path_segment
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -3688,10 +3688,14 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
                         "src_ip": "203.0.113.42",
                     }
                 ],
+                "meta": {"next_cursor": "cur_sessions", "has_more": True},
             },
         )
     )
-    assert client.list_resource_sessions("r_tunnel12345").sessions[0].src_ip == "203.0.113.42"
+    sessions = client.list_resource_sessions("r_tunnel12345")
+    assert sessions.sessions[0].src_ip == "203.0.113.42"
+    assert sessions.next_cursor == "cur_sessions"
+    assert sessions.has_more is True
 
     respx.delete(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
         return_value=httpx.Response(200, json={"data": {"terminated": 3}})
@@ -3732,6 +3736,39 @@ def test_update_resource_methods_reject_empty_updates(client: QURLClient) -> Non
 def test_update_api_key_rejects_empty_update(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="at least one field"):
         client.update_api_key("key_abc123def456")
+
+
+@respx.mock
+def test_domain_path_segments_are_url_encoded(client: QURLClient) -> None:
+    domain = "../evil%2Fhost.example.com"
+    route = respx.delete(
+        f"{BASE_URL}/v1/domains/{domain_path_segment(domain)}"
+    ).mock(return_value=httpx.Response(204))
+
+    client.delete_domain(domain)
+
+    assert route.called
+
+
+@respx.mock
+def test_delete_contract_wrappers(client: QURLClient) -> None:
+    resource_route = respx.delete(f"{BASE_URL}/v1/resources/r_delete123").mock(
+        return_value=httpx.Response(204)
+    )
+    webhook_route = respx.delete(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop"
+    ).mock(return_value=httpx.Response(204))
+    api_key_route = respx.delete(f"{BASE_URL}/v1/api-keys/key_abc123def456").mock(
+        return_value=httpx.Response(204)
+    )
+
+    client.delete_resource("r_delete123")
+    client.delete_webhook("wh_abcdefghijklmnop")
+    client.revoke_api_key("key_abc123def456")
+
+    assert resource_route.called
+    assert webhook_route.called
+    assert api_key_route.called
 
 
 @respx.mock
@@ -3898,6 +3935,26 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
         key_route.calls[0].request.headers["idempotency-key"]
         == "0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2"
     )
+
+    respx.get(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "access_code_id": "acd_list123",
+                        "resource_id": "r_code12345",
+                        "status": "active",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_codes", "has_more": True},
+            },
+        )
+    )
+    access_codes = client.list_access_codes()
+    assert access_codes.access_codes[0].access_code_id == "acd_list123"
+    assert access_codes.next_cursor == "cur_codes"
+    assert access_codes.has_more is True
 
     redeem_route = respx.post(f"{BASE_URL}/v1/access-codes/redeem").mock(
         return_value=httpx.Response(

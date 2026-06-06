@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import time
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import quote
 
 import httpx
 
@@ -25,6 +24,7 @@ from layerv_qurl._utils import (
     build_list_params,
     build_query_params,
     default_user_agent,
+    domain_path_segment,
     idempotency_headers,
     logger,
     mask_key,
@@ -62,6 +62,7 @@ from layerv_qurl._utils import (
     parse_webhook_delivery_list_output,
     parse_webhook_event_types_output,
     parse_webhook_list_output,
+    require_nonempty_update,
     require_resource_id_prefix,
     retry_delay,
     validate_create_input,
@@ -321,9 +322,9 @@ class QURLClient:
         params = build_list_params(
             limit,
             cursor,
-            status,
-            q,
-            sort,
+            status=status,
+            q=q,
+            sort=sort,
             created_after=created_after,
             created_before=created_before,
             expires_before=expires_before,
@@ -470,16 +471,6 @@ class QURLClient:
                 "update: `extend_by` and `expires_at` are mutually exclusive "
                 "— provide at most one"
             )
-        if (
-            extend_by is None
-            and expires_at is None
-            and description is None
-            and tags is None
-        ):
-            raise ValueError(
-                "update: at least one field (extend_by, expires_at, description, "
-                "tags) must be provided"
-            )
         validate_update_input(description=description, tags=tags)
         # `build_body` strips top-level ``None`` only — falsy values like
         # ``tags=[]`` and ``description=""`` are preserved. This is
@@ -494,6 +485,9 @@ class QURLClient:
                 "description": description,
                 "tags": tags,
             }
+        )
+        require_nonempty_update(
+            body, "update", "extend_by, expires_at, description, tags"
         )
         resp = self._request(
             "PATCH",
@@ -691,7 +685,7 @@ class QURLClient:
         ``resource_type`` serializes to the API's ``type`` query parameter.
         Supported public filter values are ``"url"`` and ``"tunnel"``.
         """
-        params = build_list_params(limit, cursor, status, None, None)
+        params = build_list_params(limit, cursor, status=status)
         params.update(
             build_query_params({"alias": alias, "slug": slug, "type": resource_type})
         )
@@ -718,6 +712,7 @@ class QURLClient:
         """
         if target_url is not None:
             validate_create_input(target_url=target_url, custom_domain=custom_domain)
+        # `validate_create_input` already checks custom_domain with target_url.
         validate_update_input(
             description=description,
             tags=tags,
@@ -779,11 +774,11 @@ class QURLClient:
         )
         if alias is not UNSET:
             body["alias"] = alias
-        if not body:
-            raise ValueError(
-                "update_resource: at least one field (description, tags, "
-                "custom_domain, preserve_host, alias) must be provided"
-            )
+        require_nonempty_update(
+            body,
+            "update_resource",
+            "description, tags, custom_domain, preserve_host, alias",
+        )
         resp = self._request(
             "PATCH",
             f"/v1/resources/{resource_id}",
@@ -862,11 +857,11 @@ class QURLClient:
                 "session_duration": session_duration,
             }
         )
-        if not body:
-            raise ValueError(
-                "update_resource_qurl: at least one field (extend_by, expires_at, "
-                "label, access_policy, max_sessions, session_duration) must be provided"
-            )
+        require_nonempty_update(
+            body,
+            "update_resource_qurl",
+            "extend_by, expires_at, label, access_policy, max_sessions, session_duration",
+        )
         resp = self._request(
             "PATCH",
             f"/v1/resources/{resource_id}/qurls/{qurl_id}",
@@ -884,8 +879,8 @@ class QURLClient:
     def list_resource_sessions(self, resource_id: str) -> SessionListOutput:
         """List active sessions for a resource."""
         validate_id(resource_id)
-        resp = self._request("GET", f"/v1/resources/{resource_id}/sessions")
-        return parse_session_list_output(resp)
+        data, meta = self._raw_request("GET", f"/v1/resources/{resource_id}/sessions")
+        return parse_session_list_output(data, meta)
 
     def terminate_all_resource_sessions(
         self, resource_id: str
@@ -925,18 +920,18 @@ class QURLClient:
         data, meta = self._raw_request(
             "GET",
             "/v1/domains",
-            params=build_list_params(limit, cursor, None, None, None),
+            params=build_list_params(limit, cursor),
         )
         return parse_domain_list_output(data, meta)
 
     def get_domain(self, domain: str) -> Domain:
         """Get custom-domain status and DNS configuration."""
-        resp = self._request("GET", f"/v1/domains/{quote(domain, safe='')}")
+        resp = self._request("GET", f"/v1/domains/{domain_path_segment(domain)}")
         return parse_domain(resp)
 
     def delete_domain(self, domain: str) -> None:
         """Remove a custom-domain registration."""
-        self._request("DELETE", f"/v1/domains/{quote(domain, safe='')}")
+        self._request("DELETE", f"/v1/domains/{domain_path_segment(domain)}")
 
     def verify_domain(
         self, domain: str, *, idempotency_key: str | None = None
@@ -944,7 +939,7 @@ class QURLClient:
         """Trigger DNS verification for a custom domain."""
         resp = self._request(
             "POST",
-            f"/v1/domains/{quote(domain, safe='')}/verify",
+            f"/v1/domains/{domain_path_segment(domain)}/verify",
             headers=idempotency_headers(idempotency_key),
         )
         return parse_domain_verify_output(resp)
@@ -955,7 +950,7 @@ class QURLClient:
         """Regenerate a custom-domain verification token."""
         resp = self._request(
             "POST",
-            f"/v1/domains/{quote(domain, safe='')}/regenerate-token",
+            f"/v1/domains/{domain_path_segment(domain)}/regenerate-token",
             headers=idempotency_headers(idempotency_key),
         )
         return parse_domain(resp)
@@ -974,7 +969,7 @@ class QURLClient:
             "GET",
             "/v1/webhooks",
             params={
-                **build_list_params(limit, cursor, None, None, None),
+                **build_list_params(limit, cursor),
                 **build_query_params({"event": event}),
             },
         )
@@ -1034,11 +1029,11 @@ class QURLClient:
                 "status": status,
             }
         )
-        if not body:
-            raise ValueError(
-                "update_webhook: at least one field (url, events, description, "
-                "status) must be provided"
-            )
+        require_nonempty_update(
+            body,
+            "update_webhook",
+            "url, events, description, status",
+        )
         resp = self._request(
             "PATCH",
             f"/v1/webhooks/{webhook_id}",
@@ -1076,7 +1071,7 @@ class QURLClient:
         data, meta = self._raw_request(
             "GET",
             f"/v1/webhooks/{webhook_id}/deliveries",
-            params=build_list_params(limit, cursor, None, None, None),
+            params=build_list_params(limit, cursor),
         )
         return parse_webhook_delivery_list_output(data, meta)
 
@@ -1133,7 +1128,7 @@ class QURLClient:
         data, meta = self._raw_request(
             "GET",
             "/v1/api-keys",
-            params=build_list_params(limit, cursor, status, None, None),
+            params=build_list_params(limit, cursor, status=status),
         )
         return parse_api_key_list_output(data, meta)
 
@@ -1148,8 +1143,7 @@ class QURLClient:
         """Update API key name or scopes. JWT auth is required by the API."""
         validate_id(key_id, "key_id")
         body = build_body({"name": name, "scopes": list(scopes) if scopes is not None else None})
-        if not body:
-            raise ValueError("update_api_key: at least one field (name, scopes) must be provided")
+        require_nonempty_update(body, "update_api_key", "name, scopes")
         resp = self._request(
             "PATCH",
             f"/v1/api-keys/{key_id}",
@@ -1212,8 +1206,8 @@ class QURLClient:
 
     def list_access_codes(self) -> AccessCodeListOutput:
         """List access codes."""
-        resp = self._request("GET", "/v1/access-codes")
-        return parse_access_code_list_output(resp)
+        data, meta = self._raw_request("GET", "/v1/access-codes")
+        return parse_access_code_list_output(data, meta)
 
     def revoke_access_code(self, access_code_id: str) -> None:
         """Revoke an access code."""
@@ -1279,7 +1273,7 @@ class QURLClient:
         data, meta = self._raw_request(
             "GET",
             "/v1/billing/invoices",
-            params=build_list_params(limit, cursor, None, None, None),
+            params=build_list_params(limit, cursor),
         )
         return parse_invoice_list_output(data, meta)
 
@@ -1290,7 +1284,7 @@ class QURLClient:
         data, meta = self._raw_request(
             "GET",
             "/v1/connectors/installations",
-            params=build_list_params(limit, cursor, None, None, None),
+            params=build_list_params(limit, cursor),
         )
         return parse_connector_installation_list_output(data, meta)
 
