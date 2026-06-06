@@ -714,6 +714,11 @@ class AsyncQURLClient:
                 "find_or_create": find_or_create,
             }
         )
+        require_nonempty_update(
+            body,
+            "create_resource",
+            "type, target_url, description, tags, custom_domain, alias, slug, find_or_create",
+        )
         resp = await self._request(
             "POST",
             "/v1/resources",

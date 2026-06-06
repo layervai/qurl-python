@@ -3713,6 +3713,9 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
     update_body = json.loads(update_resource.calls[0].request.content)
     assert update_body == {"tags": [], "preserve_host": False, "alias": None}
     assert update_resource.calls[0].request.headers["idempotency-key"] == "idem-resource-update"
+    client.update_resource("r_tunnel12345", alias="prod-dashboard")
+    set_alias_body = json.loads(update_resource.calls[1].request.content)
+    assert set_alias_body == {"alias": "prod-dashboard"}
 
     respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345").mock(
         return_value=httpx.Response(
@@ -3811,6 +3814,9 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
 
 
 def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="create_resource"):
+        client.create_resource()
+
     with pytest.raises(ValueError, match="target_url"):
         client.create_resource(target_url="ftp://example.com")
 
@@ -4216,6 +4222,7 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
             200,
             json={
                 "data": [
+                    {"installation_id": "inst_missing_identity"},
                     {
                         "installation_id": "inst_1",
                         "plugin_id": "slack",
@@ -4243,6 +4250,7 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
         )
     )
     connector = client.list_connector_installations().installations[0]
+    assert connector.installation_id == "inst_1"
     assert connector.stats is not None
     assert connector.stats.qurls == 4
 
@@ -4589,6 +4597,7 @@ async def test_async_resource_connector_domain_bootstrap_contracts(
             200,
             json={
                 "data": [
+                    {"installation_id": "inst_async_missing_identity"},
                     {
                         "installation_id": "inst_async",
                         "plugin_id": "slack",
@@ -4672,6 +4681,7 @@ async def test_async_resource_connector_domain_bootstrap_contracts(
     assert resources_route.calls[0].request.url.params["limit"] == "2"
     assert resources_route.calls[0].request.url.params["status"] == "active"
     assert connectors.installations[0].installation_id == "inst_async"
+    assert len(connectors.installations) == 1
     assert connector_route.calls[0].request.url.params["limit"] == "1"
     assert domain.status == "verified"
     assert verify.checks["txt"].verified is True

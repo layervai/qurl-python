@@ -260,7 +260,15 @@ def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
 def _parse_list_items(data: Any, parser: Callable[[dict[str, Any]], _T]) -> list[_T]:
     if not isinstance(data, list):
         return []
-    return [parser(item) for item in data if isinstance(item, dict)]
+    items: list[_T] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            items.append(parser(item))
+        except KeyError:
+            continue
+    return items
 
 
 def domain_path_segment(domain: str) -> str:
@@ -509,7 +517,7 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
         description=data.get("description"),
-        tags=data.get("tags", []),
+        tags=data.get("tags") or [],
         qurl_site=data.get("qurl_site"),
         custom_domain=data.get("custom_domain"),
         slug=data.get("slug"),
@@ -629,7 +637,7 @@ def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
         target_url=data.get("target_url"),
         knock_resource_id=data.get("knock_resource_id"),
         description=data.get("description"),
-        tags=data.get("tags", []),
+        tags=data.get("tags") or [],
         custom_domain=data.get("custom_domain"),
         alias=data.get("alias"),
         slug=data.get("slug"),
@@ -713,7 +721,11 @@ def parse_domain(data: dict[str, Any]) -> Domain:
         verified_at=_parse_dt(data.get("verified_at")),
         activated_at=_parse_dt(data.get("activated_at")),
         ready_for_qurls=data.get("ready_for_qurls", False),
-        dns_records=[_parse_dns_record(r) for r in data.get("dns_records", [])],
+        dns_records=[
+            _parse_dns_record(r)
+            for r in data.get("dns_records") or []
+            if isinstance(r, dict)
+        ],
     )
 
 
@@ -752,7 +764,7 @@ def parse_webhook(data: dict[str, Any]) -> Webhook:
         webhook_id=data["webhook_id"],
         owner_id=data.get("owner_id"),
         url=data.get("url", ""),
-        events=data.get("events", []),
+        events=data.get("events") or [],
         status=data.get("status"),
         description=data.get("description"),
         created_at=_parse_dt(data.get("created_at")),
@@ -823,7 +835,7 @@ def parse_api_key(data: dict[str, Any]) -> APIKey:
         key_id=data["key_id"],
         key_prefix=data["key_prefix"],
         name=data.get("name", ""),
-        scopes=data.get("scopes", []),
+        scopes=data.get("scopes") or [],
         status=data.get("status"),
         created_at=_parse_dt(data.get("created_at")),
         updated_at=_parse_dt(data.get("updated_at")),
@@ -906,7 +918,7 @@ def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
                 date=item.get("date", ""),
                 qurls_created=item.get("qurls_created", 0),
             )
-            for item in data.get("daily", [])
+            for item in data.get("daily") or []
             if isinstance(item, dict)
         ],
     )
@@ -1124,7 +1136,7 @@ def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
     """
     _validate_batch_create_shape(data)
     results: list[BatchItemResult] = []
-    for item in data.get("results", []):
+    for item in data.get("results") or []:
         err = None
         if item.get("error"):
             e = item["error"]
