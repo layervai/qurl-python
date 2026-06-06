@@ -310,6 +310,7 @@ MAX_TAG_LENGTH = 50
 # reject strings the API would otherwise accept.
 _TAG_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _-]*$")
 _ALIAS_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
+_JWT_LIKE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
 _RESERVED_ALIASES = frozenset(
     {
         "setalias",
@@ -985,12 +986,22 @@ def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
 
 def parse_customer(data: dict[str, Any]) -> Customer:
     """Parse customer profile data."""
+    current_period_usage = data.get("current_period_usage", 0)
+    if isinstance(current_period_usage, bool):
+        current_period_usage_count = 0
+    elif isinstance(current_period_usage, int):
+        current_period_usage_count = current_period_usage
+    elif isinstance(current_period_usage, dict):
+        count = current_period_usage.get("count", 0)
+        current_period_usage_count = count if isinstance(count, int) else 0
+    else:
+        current_period_usage_count = 0
     return Customer(
         tier=data.get("tier", "unknown"),
         spending_cap_cents=data.get("spending_cap_cents", 0),
         # Wire name is `current_period_usage`; SDK suffixes `_count` to
         # avoid confusion with the richer CurrentPeriodUsage response.
-        current_period_usage_count=data.get("current_period_usage", 0),
+        current_period_usage_count=current_period_usage_count,
         frozen=data.get("frozen", False),
         frozen_reason=data.get("frozen_reason"),
     )
@@ -1353,7 +1364,7 @@ def build_list_params(
 
 def mask_key(api_key: str) -> str:
     """Mask an API key for display, hiding JWT suffix fragments."""
-    if api_key.count(".") == 2:
+    if api_key.startswith("eyJ") and _JWT_LIKE_PATTERN.match(api_key):
         return api_key[:4] + "***" if len(api_key) > 4 else "***"
     if len(api_key) > 8:
         return api_key[:4] + "***" + api_key[-4:]

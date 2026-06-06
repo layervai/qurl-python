@@ -155,6 +155,15 @@ def test_repr_masks_jwt_without_suffix_fragment() -> None:
     c.close()
 
 
+def test_repr_masks_non_jwt_two_dot_secret_normally() -> None:
+    c = QURLClient(api_key="lv_live.segment.tail1234", base_url=BASE_URL)
+    r = repr(c)
+    assert "lv_l" in r
+    assert "1234" in r
+    assert "segment" not in r
+    c.close()
+
+
 def test_repr_no_auth_api_key_is_unquoted_none() -> None:
     c = QURLClient(base_url=BASE_URL)
     assert "api_key=None" in repr(c)
@@ -4092,6 +4101,21 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
     )
     assert webhook.secret == "whsec_test"
 
+    respx.get(f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.accessed"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    assert client.get_webhook("wh_abcdefghijklmnop").status == "active"
+
     update_webhook_route = respx.patch(
         f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop"
     ).mock(
@@ -4491,6 +4515,23 @@ def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> 
     assert customer.current_period_usage_count == 0
     assert customer.frozen is False
     assert customer.frozen_reason == "manual"
+
+
+@respx.mock
+def test_customer_parser_tolerates_future_usage_object(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "current_period_usage": {"count": 9, "period": "current"},
+                }
+            },
+        )
+    )
+    customer = client.get_customer()
+    assert customer.current_period_usage_count == 9
 
 
 def test_sync_contract_lists_validate_limit_bounds(client: QURLClient) -> None:

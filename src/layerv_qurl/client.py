@@ -691,6 +691,8 @@ class QURLClient:
 
         ``resource_type`` serializes to the API's ``type`` query parameter.
         Supported public filter values are ``"url"`` and ``"tunnel"``.
+        ``alias`` filters use the same format and reserved-word validation
+        as resource alias writes.
         """
         validate_alias(alias)
         params = build_list_params(limit, cursor, status=status)
@@ -717,6 +719,8 @@ class QURLClient:
 
         ``resource_type`` serializes to the API's ``type`` request field.
         Tunnel resources use ``slug`` and may set ``find_or_create=True``.
+        ``find_or_create=False`` is treated the same as omitting it because
+        the API default is false.
         """
         validate_alias(alias)
         if target_url is not None:

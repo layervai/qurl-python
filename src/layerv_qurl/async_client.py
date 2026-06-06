@@ -673,7 +673,11 @@ class AsyncQURLClient:
         status: str | None = None,
         resource_type: str | None = None,
     ) -> ResourceListOutput:
-        """List resources."""
+        """List resources.
+
+        ``alias`` filters use the same format and reserved-word validation
+        as resource alias writes.
+        """
         validate_alias(alias)
         params = build_list_params(limit, cursor, status=status)
         params.update(
@@ -695,7 +699,11 @@ class AsyncQURLClient:
         find_or_create: bool | None = None,
         idempotency_key: str | None = None,
     ) -> Resource:
-        """Create or find a resource."""
+        """Create or find a resource.
+
+        ``find_or_create=False`` is treated the same as omitting it because
+        the API default is false.
+        """
         validate_alias(alias)
         if target_url is not None:
             validate_create_input(target_url=target_url, custom_domain=custom_domain)
