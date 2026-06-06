@@ -245,9 +245,7 @@ def ensure_post_idempotency(method: str, headers: dict[str, str]) -> None:
         return
     if any(key.lower() == "idempotency-key" for key in headers):
         return
-    generated = idempotency_headers(str(uuid4()))
-    if generated:
-        headers.update(generated)
+    headers["Idempotency-Key"] = str(uuid4())
 
 
 def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
@@ -306,14 +304,10 @@ def _require_max_length(value: str | None, field_name: str, maximum: int) -> Non
         )
 
 
-def _require_nonempty_string(value: str, field_name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name}: must be a non-empty string")
-
-
 def validate_required_string(value: str, field_name: str) -> None:
     """Validate required string request fields that have no richer local schema."""
-    _require_nonempty_string(value, field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name}: must be a non-empty string")
 
 
 def validate_nonnegative_int(value: int, field_name: str) -> None:
@@ -399,7 +393,7 @@ def validate_update_input(
 
 def validate_domain_input(domain: str) -> None:
     """Validate custom-domain strings before using them in URL path segments."""
-    _require_nonempty_string(domain, "domain")
+    validate_required_string(domain, "domain")
     _require_max_length(domain, "domain", MAX_CUSTOM_DOMAIN)
 
 

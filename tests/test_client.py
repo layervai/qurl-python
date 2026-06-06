@@ -1310,7 +1310,7 @@ async def test_async_create(async_client: AsyncQURLClient) -> None:
 @respx.mock
 @pytest.mark.asyncio
 async def test_async_resolve(async_client: AsyncQURLClient) -> None:
-    respx.post(f"{BASE_URL}/v1/resolve").mock(
+    route = respx.post(f"{BASE_URL}/v1/resolve").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -1329,6 +1329,7 @@ async def test_async_resolve(async_client: AsyncQURLClient) -> None:
 
     result = await async_client.resolve("at_test_token")
     assert result.target_url == "https://api.example.com/data"
+    assert len(route.calls[0].request.headers["idempotency-key"]) == 36
     assert result.access_grant is not None
     assert result.access_grant.expires_in == 305
 
@@ -4071,11 +4072,13 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     }
 
     no_auth_client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef", honeypot="bot")
+    assert len(redeem_route.calls[1].request.headers["idempotency-key"]) == 36
     explicit_honeypot_body = json.loads(redeem_route.calls[1].request.content)
     assert explicit_honeypot_body["honeypot"] == "bot"
 
     client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef")
     assert "authorization" not in redeem_route.calls[2].request.headers
+    assert len(redeem_route.calls[2].request.headers["idempotency-key"]) == 36
 
     respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
         return_value=httpx.Response(
