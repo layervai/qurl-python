@@ -307,6 +307,43 @@ MAX_TAG_LENGTH = 50
 # (e.g. allowing colons) the SDK must widen this regex or it will
 # reject strings the API would otherwise accept.
 _TAG_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _-]*$")
+_ALIAS_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
+_RESERVED_ALIASES = frozenset(
+    {
+        "setalias",
+        "unsetalias",
+        "get",
+        "aliases",
+        "admin",
+        "claim",
+        "register",
+        "agent",
+        "knock",
+        "token",
+        "bootstrap",
+        "status",
+        "info",
+        "whoami",
+        "revoke",
+        "delete",
+        "enable",
+        "disable",
+        "audit",
+        "version",
+        "health",
+        "create",
+        "new",
+        "list",
+        "help",
+        "all",
+        "frpc",
+        "frps",
+        "tunnel",
+        "qurl",
+        "me",
+        "*",
+    }
+)
 RESOURCE_ID_PREFIX = "r_"
 # target_url must use an http(s) scheme per the API's SSRF protection.
 # This is a cheap client-side sanity check — the server is still the
@@ -326,6 +363,19 @@ def validate_required_string(value: str, field_name: str) -> None:
     """Validate required string request fields that have no richer local schema."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name}: must be a non-empty string")
+
+
+def validate_alias(value: str | None, field_name: str = "alias") -> None:
+    """Validate resource alias strings against the qurl-service contract."""
+    if value is None:
+        return
+    if not isinstance(value, str) or not _ALIAS_PATTERN.match(value):
+        raise ValueError(
+            f"{field_name}: must be 3-64 lowercase alphanumeric characters or "
+            "hyphens, start with a letter, and end alphanumeric"
+        )
+    if value in _RESERVED_ALIASES:
+        raise ValueError(f"{field_name}: reserved alias")
 
 
 def validate_nonnegative_int(value: int, field_name: str) -> None:
@@ -1300,7 +1350,9 @@ def build_list_params(
 
 
 def mask_key(api_key: str) -> str:
-    """Mask an API key for display, showing first 4 + last 4 chars."""
+    """Mask an API key for display, hiding JWT suffix fragments."""
+    if api_key.count(".") == 2:
+        return api_key[:4] + "***" if len(api_key) > 4 else "***"
     if len(api_key) > 8:
         return api_key[:4] + "***" + api_key[-4:]
     return "***"

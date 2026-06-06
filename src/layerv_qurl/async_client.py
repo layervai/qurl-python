@@ -66,6 +66,7 @@ from layerv_qurl._utils import (
     require_nonempty_update,
     require_resource_id_prefix,
     retry_delay,
+    validate_alias,
     validate_create_input,
     validate_domain_input,
     validate_id,
@@ -673,6 +674,7 @@ class AsyncQURLClient:
         resource_type: str | None = None,
     ) -> ResourceListOutput:
         """List resources."""
+        validate_alias(alias)
         params = build_list_params(limit, cursor, status=status)
         params.update(
             build_query_params({"alias": alias, "slug": slug, "type": resource_type})
@@ -694,6 +696,7 @@ class AsyncQURLClient:
         idempotency_key: str | None = None,
     ) -> Resource:
         """Create or find a resource."""
+        validate_alias(alias)
         if target_url is not None:
             validate_create_input(target_url=target_url, custom_domain=custom_domain)
         # `validate_create_input` already checks custom_domain with target_url.
@@ -749,6 +752,8 @@ class AsyncQURLClient:
         validate_update_input(
             description=description, tags=tags, custom_domain=custom_domain
         )
+        if alias is not UNSET:
+            validate_alias(cast("str | None", alias))
         body = build_body(
             {
                 "description": description,
@@ -1084,7 +1089,8 @@ class AsyncQURLClient:
         """Create an API key.
 
         If provided, ``idempotency_key`` must be 32-256 characters for
-        this security-sensitive endpoint.
+        this security-sensitive endpoint so replay keys have enough
+        caller-controlled entropy.
         """
         validate_required_string(name, "name")
         body = build_body(

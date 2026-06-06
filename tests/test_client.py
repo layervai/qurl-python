@@ -145,6 +145,16 @@ def test_repr_short_api_key() -> None:
     c.close()
 
 
+def test_repr_masks_jwt_without_suffix_fragment() -> None:
+    token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturetail"
+    c = QURLClient(api_key=token, base_url=BASE_URL)
+    r = repr(c)
+    assert "eyJh***" in r
+    assert "signaturetail" not in r
+    assert token not in r
+    c.close()
+
+
 def test_repr_no_auth_api_key_is_unquoted_none() -> None:
     c = QURLClient(base_url=BASE_URL)
     assert "api_key=None" in repr(c)
@@ -3820,6 +3830,12 @@ def test_resource_session_contract_methods(client: QURLClient) -> None:
     )
     assert client.terminate_all_resource_sessions("r_tunnel12345").terminated == 3
 
+    session_route = respx.delete(
+        f"{BASE_URL}/v1/resources/r_tunnel12345/sessions/s_active123"
+    ).mock(return_value=httpx.Response(204))
+    client.terminate_resource_session("r_tunnel12345", "s_active123")
+    assert session_route.called
+
 
 def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="create_resource"):
@@ -3854,6 +3870,15 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
 
     with pytest.raises(ValueError, match="spending_cap_cents"):
         client.update_customer(spending_cap_cents=-1)
+
+    with pytest.raises(ValueError, match="alias"):
+        client.create_resource(alias="ab")
+
+    with pytest.raises(ValueError, match="alias"):
+        client.update_resource("r_tunnel12345", alias="Bad_Alias")
+
+    with pytest.raises(ValueError, match="reserved"):
+        client.list_resources(alias="qurl")
 
 
 @respx.mock
@@ -3892,6 +3917,14 @@ def test_update_resource_methods_reject_empty_updates(client: QURLClient) -> Non
 
     with pytest.raises(ValueError, match="at least one field"):
         client.update_resource_qurl("r_tunnel12345", "q_newtoken12")
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        client.update_resource_qurl(
+            "r_tunnel12345",
+            "q_newtoken12",
+            extend_by="1h",
+            expires_at="2026-04-01T00:00:00Z",
+        )
 
 
 def test_update_api_key_rejects_empty_update(client: QURLClient) -> None:
@@ -4010,6 +4043,30 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
     assert verify.checks["cname"].verified is False
     assert verify_domain_route.calls[0].request.headers["idempotency-key"] == "idem-domain-verify"
 
+    regenerate_domain_route = respx.post(
+        f"{BASE_URL}/v1/domains/secure.example.com/regenerate-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "secure.example.com",
+                    "status": "pending_verification",
+                    "verification_token": "tok_regenerated",
+                },
+            },
+        )
+    )
+    regenerated = client.regenerate_domain_token(
+        "secure.example.com",
+        idempotency_key="idem-domain-regenerate",
+    )
+    assert regenerated.verification_token == "tok_regenerated"
+    assert (
+        regenerate_domain_route.calls[0].request.headers["idempotency-key"]
+        == "idem-domain-regenerate"
+    )
+
     respx.post(f"{BASE_URL}/v1/webhooks").mock(
         return_value=httpx.Response(
             201,
@@ -4057,6 +4114,37 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
 
     with pytest.raises(ValueError, match="at least one field"):
         client.update_webhook("wh_abcdefghijklmnop")
+
+    deliveries_route = respx.get(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop/deliveries"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "delivery_id": "wd_123",
+                        "webhook_id": "wh_abcdefghijklmnop",
+                        "event_type": "qurl.created",
+                        "status": "delivered",
+                    }
+                ],
+                "meta": {"next_cursor": "cur_delivery", "has_more": True},
+            },
+        )
+    )
+    deliveries = client.list_webhook_deliveries(
+        "wh_abcdefghijklmnop",
+        limit=5,
+        cursor="cur_previous_delivery",
+    )
+    assert deliveries.deliveries[0].delivery_id == "wd_123"
+    assert deliveries.next_cursor == "cur_delivery"
+    assert deliveries_route.calls[0].request.url.params["limit"] == "5"
+    assert (
+        deliveries_route.calls[0].request.url.params["cursor"]
+        == "cur_previous_delivery"
+    )
 
     respx.get(f"{BASE_URL}/v1/webhooks/events").mock(
         return_value=httpx.Response(
@@ -4127,6 +4215,41 @@ def test_api_key_and_access_code_contracts(client: QURLClient) -> None:
     assert (
         key_route.calls[0].request.headers["idempotency-key"]
         == "0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2"
+    )
+
+    create_access_code_route = respx.post(f"{BASE_URL}/v1/access-codes").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "access_code_id": "acd_create123",
+                    "resource_id": "r_code12345",
+                    "name": "Partner access",
+                    "status": "active",
+                    "max_uses": 5,
+                    "code": "ac_k8xqp9h2sj9lx7r4abcdef",
+                },
+            },
+        )
+    )
+    access_code = client.create_access_code(
+        resource_id="r_code12345",
+        name="Partner access",
+        max_uses=5,
+        idempotency_key="idem-access-code-create",
+    )
+    create_access_code_body = json.loads(
+        create_access_code_route.calls[0].request.content
+    )
+    assert access_code.code == "ac_k8xqp9h2sj9lx7r4abcdef"
+    assert create_access_code_body == {
+        "resource_id": "r_code12345",
+        "name": "Partner access",
+        "max_uses": 5,
+    }
+    assert (
+        create_access_code_route.calls[0].request.headers["idempotency-key"]
+        == "idem-access-code-create"
     )
 
     access_codes_route = respx.get(f"{BASE_URL}/v1/access-codes").mock(
