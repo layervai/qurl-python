@@ -736,7 +736,7 @@ class QURLClient:
                 "custom_domain": custom_domain,
                 "alias": alias,
                 "slug": slug,
-                "find_or_create": find_or_create,
+                "find_or_create": True if find_or_create is True else None,
             }
         )
         require_nonempty_update(
@@ -1197,8 +1197,8 @@ class QURLClient:
 
     def redeem_access_code(
         self,
-        code: str,
         *,
+        code: str,
         honeypot: str | None = None,
         elapsed_ms: int | None = None,
         idempotency_key: str | None = None,

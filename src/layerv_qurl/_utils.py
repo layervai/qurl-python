@@ -15,7 +15,7 @@ import functools
 import logging
 import random
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Set
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -197,6 +197,8 @@ def build_string_list(value: Any, field: str) -> list[str]:
         raise ValueError(f"{field}: must be an iterable of strings, not a string")
     if isinstance(value, Mapping):
         raise ValueError(f"{field}: must be an iterable of strings, not a mapping")
+    if isinstance(value, Set):
+        raise ValueError(f"{field}: must be an ordered iterable of strings, not a set")
     if not isinstance(value, Iterable):
         raise ValueError(f"{field}: must be an iterable of strings")
     items = list(value)

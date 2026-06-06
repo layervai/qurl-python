@@ -3857,7 +3857,7 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
         client.create_webhook(url="ftp://example.com/webhook", events=["qurl.created"])
 
     with pytest.raises(ValueError, match="code"):
-        client.redeem_access_code("")
+        client.redeem_access_code(code="")
 
     with pytest.raises(ValueError, match="name"):
         client.create_api_key(name="", scopes=["qurl:read"])
@@ -3873,6 +3873,9 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
 
     with pytest.raises(ValueError, match="alias"):
         client.create_resource(alias="ab")
+
+    with pytest.raises(ValueError, match="create_resource"):
+        client.create_resource(find_or_create=False)
 
     with pytest.raises(ValueError, match="alias"):
         client.update_resource("r_tunnel12345", alias="Bad_Alias")
@@ -3935,7 +3938,6 @@ def test_update_api_key_rejects_empty_update(client: QURLClient) -> None:
 def test_string_sequence_fields_reject_bare_string_and_empty_lists(
     client: QURLClient,
 ) -> None:
-    assert build_string_list({"qurl.created"}, "events") == ["qurl.created"]
     assert build_string_list((item for item in ["qurl.created"]), "events") == [
         "qurl.created"
     ]
@@ -3951,6 +3953,9 @@ def test_string_sequence_fields_reject_bare_string_and_empty_lists(
 
     with pytest.raises(ValueError, match="mapping"):
         build_string_list({"event": "qurl.created"}, "events")
+
+    with pytest.raises(ValueError, match="set"):
+        build_string_list({"qurl.created"}, "events")
 
     with pytest.raises(ValueError, match="scopes"):
         client.create_api_key(
@@ -4114,6 +4119,29 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
 
     with pytest.raises(ValueError, match="at least one field"):
         client.update_webhook("wh_abcdefghijklmnop")
+
+    secret_route = respx.post(f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop/secret").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                    "secret": "whsec_rotated",
+                },
+            },
+        )
+    )
+    rotated = client.regenerate_webhook_secret(
+        "wh_abcdefghijklmnop",
+        idempotency_key="idem-webhook-secret",
+    )
+    assert rotated.secret == "whsec_rotated"
+    assert secret_route.calls[0].request.headers["idempotency-key"] == (
+        "idem-webhook-secret"
+    )
 
     deliveries_route = respx.get(
         f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop/deliveries"
@@ -4287,7 +4315,7 @@ def test_public_access_code_redeem_contracts() -> None:
         )
     )
     redeem = no_auth_client.redeem_access_code(
-        "ac_k8xqp9h2sj9lx7r4abcdef",
+        code="ac_k8xqp9h2sj9lx7r4abcdef",
         elapsed_ms=5200,
         idempotency_key="idem-public-redeem",
     )
@@ -4300,12 +4328,15 @@ def test_public_access_code_redeem_contracts() -> None:
         "elapsed_ms": 5200,
     }
 
-    no_auth_client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef", honeypot="bot")
+    no_auth_client.redeem_access_code(
+        code="ac_k8xqp9h2sj9lx7r4abcdef",
+        honeypot="bot",
+    )
     assert len(redeem_route.calls[1].request.headers["idempotency-key"]) == 36
     explicit_honeypot_body = json.loads(redeem_route.calls[1].request.content)
     assert explicit_honeypot_body["honeypot"] == "bot"
 
-    client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef")
+    client.redeem_access_code(code="ac_k8xqp9h2sj9lx7r4abcdef")
     assert "authorization" not in redeem_route.calls[2].request.headers
     assert len(redeem_route.calls[2].request.headers["idempotency-key"]) == 36
 
@@ -4576,7 +4607,7 @@ async def test_async_public_redeem_omits_auth_and_sends_idempotency() -> None:
 
     try:
         redeem = await client.redeem_access_code(
-            "ac_async",
+            code="ac_async",
             idempotency_key="idem-async-redeem",
         )
     finally:

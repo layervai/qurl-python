@@ -77,9 +77,9 @@ stable `idempotency_key` when you need retry-safe behavior across your own retry
 loop, process restart, or job replay. Caller-supplied keys should be globally
 unique for each logical operation; UUID or ULID values are recommended.
 
-Fields such as webhook `events` and API-key `scopes` accept any non-string
-iterable of strings. Values are serialized in iteration order, so pass a list or
-tuple when ordering matters.
+Fields such as webhook `events` and API-key `scopes` accept ordered non-string
+iterables of strings. Lists, tuples, and generators preserve the caller's
+iteration order; sets are rejected because their iteration order is not stable.
 
 ## Async Usage
 
