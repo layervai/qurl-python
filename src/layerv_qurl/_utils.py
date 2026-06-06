@@ -102,8 +102,10 @@ DEFAULT_BASE_URL = "https://api.layerv.ai"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 3
 RETRYABLE_STATUS = {429, 502, 503, 504}
-RETRYABLE_STATUS_POST = {429}  # Some POSTs consume tokens; only retry rate limits.
-IDEMPOTENCY_METHODS = {"POST", "PUT", "PATCH"}
+# POST requests still only retry rate limits: resolve can consume one-time
+# tokens after an NHP knock failure, and service errors are not cached.
+RETRYABLE_STATUS_POST = {429}
+IDEMPOTENCY_METHODS = {"POST", "PATCH"}
 
 _RESOURCE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
@@ -787,9 +789,12 @@ def _parse_event_type_info(data: dict[str, Any]) -> WebhookEventTypeInfo:
 
 def parse_webhook_event_types_output(data: Any) -> WebhookEventTypesOutput:
     """Parse supported webhook event types."""
-    return WebhookEventTypesOutput(
-        events=_parse_list_items(data, _parse_event_type_info)
-    )
+    events = [
+        event
+        for event in _parse_list_items(data, _parse_event_type_info)
+        if event.type
+    ]
+    return WebhookEventTypesOutput(events=events)
 
 
 def parse_api_key(data: dict[str, Any]) -> APIKey:
@@ -838,7 +843,7 @@ def parse_access_code(data: dict[str, Any]) -> AccessCode:
 
 
 def parse_access_code_list_output(
-    data: Any, meta: dict[str, Any] | None = None
+    data: Any, meta: dict[str, Any] | None
 ) -> AccessCodeListOutput:
     """Parse an access-code list response."""
     next_cursor, has_more = _meta_page(meta)

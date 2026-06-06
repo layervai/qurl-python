@@ -4041,7 +4041,7 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
         )
     )
     event_types = client.list_webhook_event_types().events
-    assert [event.type for event in event_types] == ["domain.verified", ""]
+    assert [event.type for event in event_types] == ["domain.verified"]
 
     respx.get(f"{BASE_URL}/v1/qurls/r_conflict").mock(
         return_value=httpx.Response(
