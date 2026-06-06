@@ -769,20 +769,20 @@ def _parse_usage_cost(data: dict[str, Any] | None) -> UsageCostEstimate | None:
     if data is None:
         return None
     return UsageCostEstimate(
-        currency=data["currency"],
-        amount_cents=data["amount_cents"],
-        description=data["description"],
+        currency=data.get("currency", ""),
+        amount_cents=data.get("amount_cents", 0),
+        description=data.get("description", ""),
     )
 
 
 def parse_current_period_usage(data: dict[str, Any]) -> CurrentPeriodUsage:
     """Parse current-period usage."""
     return CurrentPeriodUsage(
-        tier=data["tier"],
+        tier=data.get("tier", "unknown"),
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
-        qurls_created=data["qurls_created"],
-        active_qurls=data["active_qurls"],
+        qurls_created=data.get("qurls_created", 0),
+        active_qurls=data.get("active_qurls", 0),
         cost_estimate=_parse_usage_cost(data.get("cost_estimate")),
     )
 
@@ -803,10 +803,10 @@ def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
 def parse_customer(data: dict[str, Any]) -> Customer:
     """Parse customer profile data."""
     return Customer(
-        tier=data["tier"],
-        spending_cap_cents=data["spending_cap_cents"],
-        current_period_usage=data["current_period_usage"],
-        frozen=data["frozen"],
+        tier=data.get("tier", "unknown"),
+        spending_cap_cents=data.get("spending_cap_cents", 0),
+        current_period_usage=data.get("current_period_usage", 0),
+        frozen=data.get("frozen", False),
         frozen_reason=data.get("frozen_reason"),
     )
 

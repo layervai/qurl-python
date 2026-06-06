@@ -19,6 +19,7 @@ from layerv_qurl._utils import (
     RETRYABLE_STATUS,
     RETRYABLE_STATUS_POST,
     UNSET,
+    _UnsetType,
     build_body,
     build_list_params,
     build_query_params,
@@ -716,7 +717,7 @@ class AsyncQURLClient:
         tags: builtins.list[str] | None = None,
         custom_domain: str | None = None,
         preserve_host: bool | None = None,
-        alias: str | None | object = UNSET,
+        alias: str | None | _UnsetType = UNSET,
     ) -> Resource:
         """Update resource metadata."""
         validate_id(resource_id)

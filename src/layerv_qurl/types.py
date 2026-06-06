@@ -545,6 +545,11 @@ class Customer:
     frozen: bool
     frozen_reason: str | None = None
 
+    @property
+    def current_period_usage_count(self) -> int:
+        """Usage count in the current billing period."""
+        return self.current_period_usage
+
 
 @dataclass
 class CheckoutSession:

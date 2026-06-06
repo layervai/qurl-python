@@ -3873,6 +3873,28 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     assert bootstrap.nhp_server_peer.port == 62206
 
 
+@respx.mock
+def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
+        return_value=httpx.Response(200, json={"data": {}})
+    )
+    usage = client.get_usage_current_period()
+    assert usage.tier == "unknown"
+    assert usage.qurls_created == 0
+    assert usage.active_qurls == 0
+    assert usage.cost_estimate is None
+
+    respx.get(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(200, json={"data": {"frozen_reason": "manual"}})
+    )
+    customer = client.get_customer()
+    assert customer.tier == "unknown"
+    assert customer.current_period_usage == 0
+    assert customer.current_period_usage_count == 0
+    assert customer.frozen is False
+    assert customer.frozen_reason == "manual"
+
+
 def test_idempotency_key_validation(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="CR/LF"):
         client.create(target_url="https://example.com", idempotency_key="bad\nkey")
