@@ -41,7 +41,7 @@ client = QURLClient(api_key="lv_live_xxx")
 result = client.create(
     target_url="https://api.example.com/data",
     expires_in="24h",
-    description="API access for agent",
+    label="API access for agent",
 )
 print(result.qurl_link)  # Share this link
 
@@ -52,7 +52,7 @@ print(f"Access granted to {access.target_url} for {access.access_grant.expires_i
 # Extend a qURL's expiration
 qurl = client.extend("r_xxx", "7d")
 
-# Update metadata and policy
+# Update resource metadata
 qurl = client.update("r_xxx", description="extended", extend_by="7d")
 ```
 
@@ -84,6 +84,42 @@ for qurl in client.list_all(status="active"):
 page = client.list(status="active", limit=10)
 for qurl in page.qurls:
     print(qurl.resource_id)
+```
+
+## Resources
+
+```python
+# Create a resource explicitly, then mint scoped qURLs against it
+resource = client.create_resource(
+    resource_type="url",
+    target_url="https://api.example.com/data",
+    alias="reports-api",
+)
+
+link = client.create_qurl_for_resource(
+    resource.resource_id,
+    expires_in="1h",
+    label="Alice from Acme",
+    idempotency_key="invite-alice-2026-03-10",
+)
+
+# Revoke one token without closing the whole resource
+assert link.qurl_id is not None
+client.revoke_resource_qurl(resource.resource_id, link.qurl_id)
+```
+
+## Custom Domains And Webhooks
+
+```python
+domain = client.register_domain("secure.example.com")
+for record in domain.dns_records:
+    print(record.type, record.name, record.value)
+
+webhook = client.create_webhook(
+    url="https://example.com/qurl-webhooks",
+    events=["qurl.accessed", "domain.verified"],
+)
+print(webhook.secret)  # Returned only on create/regenerate
 ```
 
 ## Error Handling
@@ -141,6 +177,11 @@ print(f"Plan: {quota.plan}")
 print(f"Active qURLs: {quota.usage.active_qurls}")
 print(f"Rate limit: {quota.rate_limits.create_per_minute}/min")
 ```
+
+JWT-authenticated dashboard endpoints are also available for usage, customer
+settings, billing sessions, invoices, and API-key management. API-key auth
+continues to work for normal qURL, resource, domain, webhook, connector, and
+access-code operations according to the API scopes on the key.
 
 ## Debug Logging
 

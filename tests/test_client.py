@@ -24,6 +24,8 @@ from layerv_qurl import (
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
+    ConflictError,
+    GoneError,
     NotFoundError,
     RateLimitError,
     ServerError,
@@ -3422,3 +3424,491 @@ def test_batch_create_accepts_access_policy_dataclass(
     # dropped by _serialize_value's dataclass rule, not preserved.
     assert "block_all" not in body["items"][0]["access_policy"]["ai_agent_policy"]
     assert "deny_categories" not in body["items"][0]["access_policy"]["ai_agent_policy"]
+
+
+@respx.mock
+def test_latest_create_contract_fields_and_idempotency_header(client: QURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "qurl_id": "q_abc123def45",
+                    "resource_id": "r_abc123def45",
+                    "qurl_link": "https://qurl.link/#at_test",
+                    "branded_domain": "secure.example.com",
+                    "qurl_site": "https://q_abc123def45.qurl.site",
+                    "expires_at": "2026-03-15T10:00:00Z",
+                    "label": "contract",
+                    "type": "url",
+                },
+            },
+        )
+    )
+
+    result = client.create(
+        target_url="https://example.com",
+        resource_type="url",
+        idempotency_key="idem-create-1",
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["type"] == "url"
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-create-1"
+    assert result.qurl_id == "q_abc123def45"
+    assert result.branded_domain == "secure.example.com"
+    assert result.resource_type == "url"
+
+
+@respx.mock
+def test_batch_create_serializes_type_and_parses_branded_domain(client: QURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "succeeded": 1,
+                    "failed": 0,
+                    "results": [
+                        {
+                            "index": 0,
+                            "success": True,
+                            "resource_id": "r_batch",
+                            "qurl_link": "https://qurl.link/#at_batch",
+                            "branded_domain": "files.example.com",
+                            "qurl_site": "https://r_batch.qurl.site",
+                        }
+                    ],
+                },
+            },
+        )
+    )
+
+    item: BatchCreateItem = {
+        "type": "url",
+        "target_url": "https://example.com",
+        "custom_domain": "files.example.com",
+    }
+    result = client.batch_create([item], idempotency_key="idem-batch-1")
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["items"][0]["type"] == "url"
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-batch-1"
+    assert result.results[0].branded_domain == "files.example.com"
+
+
+@respx.mock
+def test_resource_token_and_session_contract_methods(client: QURLClient) -> None:
+    create_resource = respx.post(f"{BASE_URL}/v1/resources").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_tunnel12345",
+                    "type": "tunnel",
+                    "status": "active",
+                    "slug": "prod-dashboard",
+                    "knock_resource_id": "qurl-tunnel-server",
+                    "preserve_host": False,
+                    "created_at": "2026-03-10T10:00:00Z",
+                },
+            },
+        )
+    )
+    resource = client.create_resource(
+        resource_type="tunnel",
+        slug="prod-dashboard",
+        find_or_create=True,
+    )
+    create_body = json.loads(create_resource.calls[0].request.content)
+    assert create_body == {"type": "tunnel", "slug": "prod-dashboard", "find_or_create": True}
+    assert resource.resource_type == "tunnel"
+    assert resource.knock_resource_id == "qurl-tunnel-server"
+
+    update_resource = respx.patch(f"{BASE_URL}/v1/resources/r_tunnel12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_tunnel12345",
+                    "type": "tunnel",
+                    "status": "active",
+                    "alias": None,
+                    "tags": [],
+                },
+            },
+        )
+    )
+    client.update_resource("r_tunnel12345", alias=None, tags=[], preserve_host=False)
+    update_body = json.loads(update_resource.calls[0].request.content)
+    assert update_body == {"tags": [], "preserve_host": False, "alias": None}
+
+    respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource": {
+                        "resource_id": "r_tunnel12345",
+                        "type": "tunnel",
+                        "status": "active",
+                        "qurl_count": 1,
+                    },
+                    "qurls": [
+                        {
+                            "qurl_id": "q_token12345",
+                            "status": "active",
+                            "session_duration": 3600,
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    detail = client.get_resource("r_tunnel12345")
+    assert detail.resource.qurl_count == 1
+    assert detail.qurls[0].session_duration == 3600
+
+    mint_route = respx.post(f"{BASE_URL}/v1/resources/r_tunnel12345/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "qurl_id": "q_newtoken12",
+                    "resource_id": "r_tunnel12345",
+                    "qurl_link": "https://qurl.link/#at_new",
+                    "qurl_site": "https://q_newtoken12.qurl.site",
+                    "type": "tunnel",
+                },
+            },
+        )
+    )
+    minted = client.create_qurl_for_resource(
+        "r_tunnel12345",
+        session_duration="1h",
+        idempotency_key="idem-resource-mint",
+    )
+    assert minted.qurl_id == "q_newtoken12"
+    assert mint_route.calls[0].request.headers["idempotency-key"] == "idem-resource-mint"
+
+    respx.patch(f"{BASE_URL}/v1/resources/r_tunnel12345/qurls/q_newtoken12").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "qurl_id": "q_newtoken12",
+                    "status": "active",
+                    "label": "updated",
+                    "max_sessions": 2,
+                },
+            },
+        )
+    )
+    token = client.update_resource_qurl("r_tunnel12345", "q_newtoken12", label="updated")
+    assert token.label == "updated"
+    assert token.max_sessions == 2
+
+    respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "session_id": "s_active123",
+                        "qurl_id": "q_newtoken12",
+                        "src_ip": "203.0.113.42",
+                    }
+                ],
+            },
+        )
+    )
+    assert client.list_resource_sessions("r_tunnel12345").sessions[0].src_ip == "203.0.113.42"
+
+    respx.delete(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
+        return_value=httpx.Response(200, json={"data": {"terminated": 3}})
+    )
+    assert client.terminate_all_resource_sessions("r_tunnel12345").terminated == 3
+
+
+@respx.mock
+def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
+    respx.post(f"{BASE_URL}/v1/domains").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "domain": "secure.example.com",
+                    "status": "pending_verification",
+                    "verification_token": "tok_123",
+                    "ready_for_qurls": False,
+                    "dns_records": [
+                        {
+                            "type": "TXT",
+                            "name": "_qurl.secure.example.com",
+                            "value": "tok_123",
+                            "verified": False,
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    domain = client.register_domain("secure.example.com")
+    assert domain.dns_records[0].type == "TXT"
+
+    respx.post(f"{BASE_URL}/v1/domains/secure.example.com/verify").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "domain": "secure.example.com",
+                    "status": "verified",
+                    "checks": {"txt": {"verified": True}},
+                },
+            },
+        )
+    )
+    verify = client.verify_domain("secure.example.com")
+    assert verify.checks["txt"].verified is True
+
+    respx.post(f"{BASE_URL}/v1/webhooks").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.accessed"],
+                    "status": "active",
+                    "secret": "whsec_test",
+                },
+            },
+        )
+    )
+    webhook = client.create_webhook(
+        url="https://example.com/webhook",
+        events=["qurl.accessed"],
+    )
+    assert webhook.secret == "whsec_test"
+
+    respx.get(f"{BASE_URL}/v1/webhooks/events").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "type": "domain.verified",
+                        "category": "resource",
+                        "description": "Custom domain verified",
+                    }
+                ],
+            },
+        )
+    )
+    assert client.list_webhook_event_types().events[0].type == "domain.verified"
+
+    respx.get(f"{BASE_URL}/v1/qurls/r_conflict").mock(
+        return_value=httpx.Response(
+            409,
+            json={"error": {"status": 409, "code": "conflict", "title": "Conflict"}},
+        )
+    )
+    with pytest.raises(ConflictError):
+        client.get("r_conflict")
+
+    respx.get(f"{BASE_URL}/v1/qurls/r_gone").mock(
+        return_value=httpx.Response(
+            410,
+            json={
+                "error": {"status": 410, "code": "gone", "title": "Gone"},
+                "meta": {"tombstone": {"tombstoned_at": "2026-01-01T00:00:00Z"}},
+            },
+        )
+    )
+    with pytest.raises(GoneError) as exc_info:
+        client.get("r_gone")
+    assert exc_info.value.meta is not None
+    assert "tombstone" in exc_info.value.meta
+
+
+@respx.mock
+def test_account_billing_connector_agent_and_public_access_code_contracts() -> None:
+    client = QURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=0)
+    no_auth_client = QURLClient(base_url=BASE_URL, max_retries=0)
+
+    key_route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "key_id": "key_abc123def456",
+                    "key_prefix": "lv_live_a3x9",
+                    "api_key": "lv_live_secret",
+                    "name": "Production",
+                    "scopes": ["qurl:read", "qurl:write"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    key = client.create_api_key(
+        name="Production",
+        scopes=["qurl:read", "qurl:write"],
+        idempotency_key="0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2",
+    )
+    assert key.api_key == "lv_live_secret"
+    assert (
+        key_route.calls[0].request.headers["idempotency-key"]
+        == "0192f7c4-3b8a-7e2f-9d01-4cf8a1b6e3d2"
+    )
+
+    redeem_route = respx.post(f"{BASE_URL}/v1/access-codes/redeem").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"redirect_url": "https://qurl.link/#at_code"}},
+        )
+    )
+    redeem = no_auth_client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef", elapsed_ms=5200)
+    assert redeem.redirect_url == "https://qurl.link/#at_code"
+    assert "authorization" not in redeem_route.calls[0].request.headers
+
+    respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "period_start": "2026-03-01T00:00:00Z",
+                    "period_end": "2026-03-31T23:59:59Z",
+                    "qurls_created": 12,
+                    "active_qurls": 3,
+                    "cost_estimate": {
+                        "currency": "usd",
+                        "amount_cents": 120,
+                        "description": "12 qURLs",
+                    },
+                },
+            },
+        )
+    )
+    assert client.get_usage_current_period().cost_estimate is not None
+
+    respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "invoices": [
+                        {
+                            "id": "in_123",
+                            "amount_cents": 1500,
+                            "status": "paid",
+                            "created_at": "2026-02-01T00:00:00Z",
+                            "pdf_url": None,
+                        }
+                    ]
+                },
+                "meta": {"has_more": False},
+            },
+        )
+    )
+    assert client.list_billing_invoices().invoices[0].id == "in_123"
+
+    respx.get(f"{BASE_URL}/v1/connectors/installations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "installation_id": "inst_1",
+                        "plugin_id": "slack",
+                        "label": "Engineering Slack",
+                        "subject_kind": "slack_workspace",
+                        "subject_display_name": "LayerV Engineering",
+                        "status": "active",
+                        "installed_at": "2026-03-01T00:00:00Z",
+                        "stats": {
+                            "resources": 2,
+                            "qurls": 4,
+                            "accesses_24h": 1,
+                            "accesses_7d": 5,
+                            "errors_24h": 0,
+                        },
+                        "capabilities": {
+                            "configure": True,
+                            "disconnect": True,
+                            "reauth": False,
+                            "view_activity": True,
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    connector = client.list_connector_installations().installations[0]
+    assert connector.stats is not None
+    assert connector.stats.qurls == 4
+
+    respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "agent_id": "prod-us-east-1",
+                    "registered_at": "2026-05-10T15:30:00Z",
+                    "nhp_server_peer": {
+                        "public_key_b64": "EqHTVFh6t5DUK1aA2nkq82x5HLRqrO6FPqxcwSfKCl8=",
+                        "host": "nhp.layerv.ai",
+                        "port": 62206,
+                        "expire_time": 0,
+                    },
+                },
+            },
+        )
+    )
+    bootstrap = client.bootstrap_agent(
+        public_key="62cFrVBeF1Tl7lUAJ9MNa9lFykVf6D7mNqLaEYggFN0=",
+        agent_id="prod-us-east-1",
+    )
+    assert bootstrap.nhp_server_peer.port == 62206
+
+
+def test_idempotency_key_validation(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="CR/LF"):
+        client.create(target_url="https://example.com", idempotency_key="bad\nkey")
+
+    with pytest.raises(ValueError, match="at least 32 characters"):
+        client.create_api_key(
+            name="too short",
+            scopes=["qurl:read"],
+            idempotency_key="short",
+        )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_resource_scoped_mint_parity(async_client: AsyncQURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/resources/r_async/qurls").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "qurl_id": "q_async12345",
+                    "resource_id": "r_async",
+                    "qurl_link": "https://qurl.link/#at_async",
+                    "qurl_site": "https://q_async12345.qurl.site",
+                    "branded_domain": "async.example.com",
+                    "type": "url",
+                },
+            },
+        )
+    )
+
+    result = await async_client.create_qurl_for_resource(
+        "r_async",
+        label="async",
+        idempotency_key="idem-async-resource",
+    )
+
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-async-resource"
+    assert result.branded_domain == "async.example.com"

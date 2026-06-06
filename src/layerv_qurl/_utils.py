@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
+    ConflictError,
+    GoneError,
     NotFoundError,
     QURLError,
     RateLimitError,
@@ -31,20 +33,57 @@ from layerv_qurl.errors import (
 )
 from layerv_qurl.types import (
     QURL,
+    AccessCode,
+    AccessCodeListOutput,
     AccessGrant,
     AccessPolicy,
     AccessToken,
+    AgentBootstrapOutput,
     AIAgentPolicy,
+    APIKey,
+    APIKeyListOutput,
     BatchCreateOutput,
     BatchItemError,
     BatchItemResult,
+    CheckDetail,
+    CheckoutSession,
+    ConnectorInstallation,
+    ConnectorInstallationCapabilities,
+    ConnectorInstallationListOutput,
+    ConnectorInstallationStats,
     CreateOutput,
+    CurrentPeriodUsage,
+    Customer,
+    DailyUsage,
+    DNSRecord,
+    Domain,
+    DomainListOutput,
+    DomainVerifyOutput,
+    Invoice,
+    InvoiceListOutput,
     ListOutput,
     MintOutput,
+    NHPServerPeerInfo,
+    PortalSession,
     Quota,
     RateLimits,
+    RedeemAccessCodeOutput,
     ResolveOutput,
+    Resource,
+    ResourceDetail,
+    ResourceListOutput,
+    Session,
+    SessionListOutput,
+    SessionTerminateOutput,
     Usage,
+    UsageCostEstimate,
+    UsageDailyEntry,
+    Webhook,
+    WebhookDelivery,
+    WebhookDeliveryListOutput,
+    WebhookEventTypeInfo,
+    WebhookEventTypesOutput,
+    WebhookListOutput,
     _parse_dt,
 )
 
@@ -66,9 +105,18 @@ _ERROR_CLASS_MAP: dict[int, type[QURLError]] = {
     401: AuthenticationError,
     403: AuthorizationError,
     404: NotFoundError,
+    409: ConflictError,
+    410: GoneError,
     422: ValidationError,
     429: RateLimitError,
 }
+
+
+class _UnsetType:
+    """Sentinel for fields where omitted and explicit null differ."""
+
+
+UNSET = _UnsetType()
 
 
 @functools.lru_cache(maxsize=1)
@@ -132,6 +180,41 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
             continue
         body[k] = _serialize_value(v)
     return body
+
+
+def build_query_params(pairs: dict[str, Any]) -> dict[str, str]:
+    """Build query params from optional values, dropping ``None`` values."""
+    return {
+        k: v.isoformat() if isinstance(v, datetime) else str(v)
+        for k, v in pairs.items()
+        if v is not None
+    }
+
+
+def idempotency_headers(
+    idempotency_key: str | None, *, min_length: int = 1
+) -> dict[str, str] | None:
+    """Build the optional Idempotency-Key header."""
+    if idempotency_key is None:
+        return None
+    if len(idempotency_key) < min_length:
+        raise ValueError(
+            f"idempotency_key: must be at least {min_length} characters "
+            f"(got {len(idempotency_key)})"
+        )
+    if len(idempotency_key) > 256:
+        raise ValueError(
+            f"idempotency_key: must be 256 characters or fewer (got {len(idempotency_key)})"
+        )
+    if "\r" in idempotency_key or "\n" in idempotency_key:
+        raise ValueError("idempotency_key: must not contain CR/LF characters")
+    return {"Idempotency-Key": idempotency_key}
+
+
+def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
+    if not meta:
+        return None, False
+    return meta.get("next_cursor"), meta.get("has_more", False)
 
 
 # ---- Spec-derived input validation --------------------------------------
@@ -319,6 +402,11 @@ def _parse_access_token(data: dict[str, Any]) -> AccessToken:
     )
 
 
+def parse_access_token(data: dict[str, Any]) -> AccessToken:
+    """Parse a qURL token summary."""
+    return _parse_access_token(data)
+
+
 def parse_qurl(data: dict[str, Any]) -> QURL:
     """Parse a qURL resource from API response data."""
     tokens = None
@@ -328,7 +416,7 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
         tokens = [_parse_access_token(t) for t in raw_tokens]
     return QURL(
         resource_id=data["resource_id"],
-        target_url=data["target_url"],
+        target_url=data.get("target_url"),
         status=data["status"],
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
@@ -336,6 +424,7 @@ def parse_qurl(data: dict[str, Any]) -> QURL:
         tags=data.get("tags", []),
         qurl_site=data.get("qurl_site"),
         custom_domain=data.get("custom_domain"),
+        slug=data.get("slug"),
         qurl_count=data.get("qurl_count"),
         access_tokens=tokens,
     )
@@ -356,6 +445,8 @@ def parse_create_output(data: dict[str, Any]) -> CreateOutput:
         expires_at=_parse_dt(data.get("expires_at")),
         qurl_id=qurl_id,
         label=data.get("label"),
+        branded_domain=data.get("branded_domain"),
+        resource_type=data.get("type"),
     )
 
 
@@ -363,7 +454,10 @@ def parse_mint_output(data: dict[str, Any]) -> MintOutput:
     """Parse a MintOutput from API response data."""
     return MintOutput(
         qurl_link=data["qurl_link"],
+        qurl_id=data.get("qurl_id"),
         expires_at=_parse_dt(data.get("expires_at")),
+        branded_domain=data.get("branded_domain"),
+        resource_type=data.get("type"),
     )
 
 
@@ -432,6 +526,385 @@ def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
         qurls=qurls,
         next_cursor=meta.get("next_cursor") if meta else None,
         has_more=meta.get("has_more", False) if meta else False,
+    )
+
+
+def parse_resource(data: dict[str, Any]) -> Resource:
+    """Parse a resource-management API resource."""
+    return Resource(
+        resource_id=data["resource_id"],
+        status=data["status"],
+        resource_type=data.get("type"),
+        target_url=data.get("target_url"),
+        knock_resource_id=data.get("knock_resource_id"),
+        description=data.get("description"),
+        tags=data.get("tags", []),
+        custom_domain=data.get("custom_domain"),
+        alias=data.get("alias"),
+        slug=data.get("slug"),
+        preserve_host=data.get("preserve_host", False),
+        session_duration_cap=data.get("session_duration_cap"),
+        qurl_count=data.get("qurl_count"),
+        created_at=_parse_dt(data.get("created_at")),
+        expires_at=_parse_dt(data.get("expires_at")),
+        tombstoned_at=_parse_dt(data.get("tombstoned_at")),
+    )
+
+
+def parse_resource_detail(data: dict[str, Any]) -> ResourceDetail:
+    """Parse a resource detail response."""
+    resource = parse_resource(data.get("resource", {}))
+    qurls = [_parse_access_token(q) for q in data.get("qurls", [])]
+    return ResourceDetail(resource=resource, qurls=qurls)
+
+
+def parse_resource_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> ResourceListOutput:
+    """Parse a resource list response."""
+    next_cursor, has_more = _meta_page(meta)
+    resources = [parse_resource(item) for item in data] if isinstance(data, list) else []
+    return ResourceListOutput(resources=resources, next_cursor=next_cursor, has_more=has_more)
+
+
+def parse_session(data: dict[str, Any]) -> Session:
+    """Parse an active resource session."""
+    return Session(
+        session_id=data["session_id"],
+        qurl_id=data.get("qurl_id"),
+        src_ip=data.get("src_ip"),
+        user_agent=data.get("user_agent"),
+        created_at=_parse_dt(data.get("created_at")),
+        last_seen_at=_parse_dt(data.get("last_seen_at")),
+    )
+
+
+def parse_session_list_output(data: Any) -> SessionListOutput:
+    """Parse an active session list response."""
+    sessions = [parse_session(item) for item in data] if isinstance(data, list) else []
+    return SessionListOutput(sessions=sessions)
+
+
+def parse_session_terminate_output(data: dict[str, Any] | None) -> SessionTerminateOutput:
+    """Parse a session termination response."""
+    return SessionTerminateOutput(terminated=(data or {}).get("terminated", 0))
+
+
+def _parse_dns_record(data: dict[str, Any]) -> DNSRecord:
+    return DNSRecord(
+        type=data.get("type", ""),
+        name=data.get("name", ""),
+        value=data.get("value", ""),
+        verified=data.get("verified", False),
+    )
+
+
+def parse_domain(data: dict[str, Any]) -> Domain:
+    """Parse a custom domain response."""
+    return Domain(
+        domain=data["domain"],
+        status=data["status"],
+        verification_token=data.get("verification_token"),
+        token_expires_at=_parse_dt(data.get("token_expires_at")),
+        acme_cname_target=data.get("acme_cname_target"),
+        created_at=_parse_dt(data.get("created_at")),
+        verified_at=_parse_dt(data.get("verified_at")),
+        activated_at=_parse_dt(data.get("activated_at")),
+        ready_for_qurls=data.get("ready_for_qurls", False),
+        dns_records=[_parse_dns_record(r) for r in data.get("dns_records", [])],
+    )
+
+
+def parse_domain_list_output(data: Any, meta: dict[str, Any] | None) -> DomainListOutput:
+    """Parse a custom-domain list response."""
+    next_cursor, has_more = _meta_page(meta)
+    domains = [parse_domain(item) for item in data] if isinstance(data, list) else []
+    return DomainListOutput(domains=domains, next_cursor=next_cursor, has_more=has_more)
+
+
+def _parse_check_detail(data: dict[str, Any]) -> CheckDetail:
+    return CheckDetail(
+        verified=data["verified"],
+        error=data.get("error"),
+        found=data.get("found"),
+    )
+
+
+def parse_domain_verify_output(data: dict[str, Any]) -> DomainVerifyOutput:
+    """Parse custom-domain verification output."""
+    checks = {
+        name: _parse_check_detail(check)
+        for name, check in data.get("checks", {}).items()
+        if isinstance(check, dict)
+    }
+    return DomainVerifyOutput(
+        domain=data["domain"],
+        status=data["status"],
+        checks=checks,
+    )
+
+
+def parse_webhook(data: dict[str, Any]) -> Webhook:
+    """Parse webhook subscription data."""
+    return Webhook(
+        webhook_id=data["webhook_id"],
+        owner_id=data.get("owner_id"),
+        url=data.get("url", ""),
+        events=data.get("events", []),
+        status=data.get("status"),
+        description=data.get("description"),
+        created_at=_parse_dt(data.get("created_at")),
+        updated_at=_parse_dt(data.get("updated_at")),
+        failure_count=data.get("failure_count", 0),
+        last_delivery_success=data.get("last_delivery_success"),
+        last_delivery_time=data.get("last_delivery_time"),
+        secret=data.get("secret"),
+    )
+
+
+def parse_webhook_list_output(data: Any, meta: dict[str, Any] | None) -> WebhookListOutput:
+    """Parse a webhook list response."""
+    next_cursor, has_more = _meta_page(meta)
+    webhooks = [parse_webhook(item) for item in data] if isinstance(data, list) else []
+    return WebhookListOutput(webhooks=webhooks, next_cursor=next_cursor, has_more=has_more)
+
+
+def parse_webhook_delivery(data: dict[str, Any]) -> WebhookDelivery:
+    """Parse webhook delivery data."""
+    return WebhookDelivery(
+        delivery_id=data["delivery_id"],
+        webhook_id=data.get("webhook_id"),
+        event_type=data.get("event_type"),
+        status=data.get("status"),
+        response_code=data.get("response_code"),
+        response_body=data.get("response_body"),
+        error_message=data.get("error_message"),
+        duration_ms=data.get("duration_ms"),
+        retry_count=data.get("retry_count", 0),
+        created_at=_parse_dt(data.get("created_at")),
+        completed_at=_parse_dt(data.get("completed_at")),
+    )
+
+
+def parse_webhook_delivery_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> WebhookDeliveryListOutput:
+    """Parse a webhook delivery list response."""
+    next_cursor, has_more = _meta_page(meta)
+    deliveries = (
+        [parse_webhook_delivery(item) for item in data] if isinstance(data, list) else []
+    )
+    return WebhookDeliveryListOutput(
+        deliveries=deliveries, next_cursor=next_cursor, has_more=has_more
+    )
+
+
+def parse_webhook_event_types_output(data: Any) -> WebhookEventTypesOutput:
+    """Parse supported webhook event types."""
+    events = []
+    if isinstance(data, list):
+        events = [
+            WebhookEventTypeInfo(
+                type=item["type"],
+                category=item.get("category"),
+                description=item.get("description"),
+            )
+            for item in data
+        ]
+    return WebhookEventTypesOutput(events=events)
+
+
+def parse_api_key(data: dict[str, Any]) -> APIKey:
+    """Parse API key metadata."""
+    return APIKey(
+        key_id=data["key_id"],
+        key_prefix=data["key_prefix"],
+        name=data.get("name", ""),
+        scopes=data.get("scopes", []),
+        status=data.get("status"),
+        created_at=_parse_dt(data.get("created_at")),
+        updated_at=_parse_dt(data.get("updated_at")),
+        last_used_at=_parse_dt(data.get("last_used_at")),
+        expires_at=_parse_dt(data.get("expires_at")),
+        purpose=data.get("purpose"),
+        tunnel_slug=data.get("tunnel_slug"),
+        api_key=data.get("api_key"),
+    )
+
+
+def parse_api_key_list_output(data: Any, meta: dict[str, Any] | None) -> APIKeyListOutput:
+    """Parse an API key list response."""
+    next_cursor, has_more = _meta_page(meta)
+    api_keys = [parse_api_key(item) for item in data] if isinstance(data, list) else []
+    return APIKeyListOutput(api_keys=api_keys, next_cursor=next_cursor, has_more=has_more)
+
+
+def parse_redeem_access_code_output(data: dict[str, Any]) -> RedeemAccessCodeOutput:
+    """Parse public access-code redemption output."""
+    return RedeemAccessCodeOutput(redirect_url=data["redirect_url"])
+
+
+def parse_access_code(data: dict[str, Any]) -> AccessCode:
+    """Parse access-code metadata."""
+    return AccessCode(
+        access_code_id=data["access_code_id"],
+        resource_id=data["resource_id"],
+        name=data.get("name"),
+        status=data.get("status"),
+        max_uses=data.get("max_uses", 0),
+        use_count=data.get("use_count", 0),
+        created_at=_parse_dt(data.get("created_at")),
+        expires_at=_parse_dt(data.get("expires_at")),
+        code=data.get("code"),
+    )
+
+
+def parse_access_code_list_output(data: Any) -> AccessCodeListOutput:
+    """Parse an access-code list response."""
+    access_codes = [parse_access_code(item) for item in data] if isinstance(data, list) else []
+    return AccessCodeListOutput(access_codes=access_codes)
+
+
+def _parse_usage_cost(data: dict[str, Any] | None) -> UsageCostEstimate | None:
+    if data is None:
+        return None
+    return UsageCostEstimate(
+        currency=data["currency"],
+        amount_cents=data["amount_cents"],
+        description=data["description"],
+    )
+
+
+def parse_current_period_usage(data: dict[str, Any]) -> CurrentPeriodUsage:
+    """Parse current-period usage."""
+    return CurrentPeriodUsage(
+        tier=data["tier"],
+        period_start=_parse_dt(data.get("period_start")),
+        period_end=_parse_dt(data.get("period_end")),
+        qurls_created=data["qurls_created"],
+        active_qurls=data["active_qurls"],
+        cost_estimate=_parse_usage_cost(data.get("cost_estimate")),
+    )
+
+
+def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
+    """Parse daily usage breakdown."""
+    return DailyUsage(
+        tier=data["tier"],
+        period_start=_parse_dt(data.get("period_start")),
+        period_end=_parse_dt(data.get("period_end")),
+        daily=[
+            UsageDailyEntry(date=item["date"], qurls_created=item["qurls_created"])
+            for item in data.get("daily", [])
+        ],
+    )
+
+
+def parse_customer(data: dict[str, Any]) -> Customer:
+    """Parse customer profile data."""
+    return Customer(
+        tier=data["tier"],
+        spending_cap_cents=data["spending_cap_cents"],
+        current_period_usage=data["current_period_usage"],
+        frozen=data["frozen"],
+        frozen_reason=data.get("frozen_reason"),
+    )
+
+
+def parse_checkout_session(data: dict[str, Any]) -> CheckoutSession:
+    """Parse a Stripe checkout session response."""
+    return CheckoutSession(url=data["url"])
+
+
+def parse_portal_session(data: dict[str, Any]) -> PortalSession:
+    """Parse a Stripe billing portal session response."""
+    return PortalSession(url=data["url"])
+
+
+def parse_invoice_list_output(
+    data: dict[str, Any], meta: dict[str, Any] | None
+) -> InvoiceListOutput:
+    """Parse billing invoice list output."""
+    next_cursor, has_more = _meta_page(meta)
+    invoices = [
+        Invoice(
+            id=item["id"],
+            amount_cents=item["amount_cents"],
+            status=item["status"],
+            created_at=_parse_dt(item.get("created_at")),
+            pdf_url=item.get("pdf_url"),
+        )
+        for item in data.get("invoices", [])
+    ]
+    return InvoiceListOutput(invoices=invoices, next_cursor=next_cursor, has_more=has_more)
+
+
+def _parse_connector_stats(data: dict[str, Any] | None) -> ConnectorInstallationStats | None:
+    if data is None:
+        return None
+    return ConnectorInstallationStats(
+        resources=data.get("resources", 0),
+        qurls=data.get("qurls", 0),
+        accesses_24h=data.get("accesses_24h", 0),
+        accesses_7d=data.get("accesses_7d", 0),
+        errors_24h=data.get("errors_24h", 0),
+    )
+
+
+def _parse_connector_capabilities(
+    data: dict[str, Any] | None,
+) -> ConnectorInstallationCapabilities | None:
+    if data is None:
+        return None
+    return ConnectorInstallationCapabilities(
+        configure=data.get("configure", False),
+        disconnect=data.get("disconnect", False),
+        reauth=data.get("reauth", False),
+        view_activity=data.get("view_activity", False),
+    )
+
+
+def parse_connector_installation(data: dict[str, Any]) -> ConnectorInstallation:
+    """Parse a connector installation summary."""
+    return ConnectorInstallation(
+        installation_id=data["installation_id"],
+        plugin_id=data["plugin_id"],
+        label=data["label"],
+        subject_kind=data["subject_kind"],
+        subject_display_name=data["subject_display_name"],
+        status=data["status"],
+        installed_at=_parse_dt(data.get("installed_at")),
+        last_activity_at=_parse_dt(data.get("last_activity_at")),
+        stats=_parse_connector_stats(data.get("stats")),
+        capabilities=_parse_connector_capabilities(data.get("capabilities")),
+    )
+
+
+def parse_connector_installation_list_output(
+    data: Any, meta: dict[str, Any] | None
+) -> ConnectorInstallationListOutput:
+    """Parse connector installation list output."""
+    next_cursor, has_more = _meta_page(meta)
+    installations = (
+        [parse_connector_installation(item) for item in data] if isinstance(data, list) else []
+    )
+    return ConnectorInstallationListOutput(
+        installations=installations, next_cursor=next_cursor, has_more=has_more
+    )
+
+
+def parse_agent_bootstrap_output(data: dict[str, Any]) -> AgentBootstrapOutput:
+    """Parse connector agent bootstrap output."""
+    peer = data["nhp_server_peer"]
+    return AgentBootstrapOutput(
+        agent_id=data["agent_id"],
+        registered_at=_parse_dt(data.get("registered_at")),
+        nhp_server_peer=NHPServerPeerInfo(
+            public_key_b64=peer["public_key_b64"],
+            host=peer["host"],
+            port=peer["port"],
+            expire_time=peer["expire_time"],
+        ),
     )
 
 
@@ -550,6 +1023,7 @@ def parse_batch_create_output(data: dict[str, Any]) -> BatchCreateOutput:
                 resource_id=item.get("resource_id"),
                 qurl_link=item.get("qurl_link"),
                 qurl_site=item.get("qurl_site"),
+                branded_domain=item.get("branded_domain"),
                 expires_at=_parse_dt(item.get("expires_at")),
                 error=err,
             )
@@ -624,6 +1098,7 @@ def parse_error(response: httpx.Response) -> QURLError:
             instance=err.get("instance"),
             invalid_fields=err.get("invalid_fields"),
             request_id=(envelope.get("meta") or {}).get("request_id"),
+            meta=envelope.get("meta"),
             retry_after=retry_after,
         )
     except (ValueError, KeyError, TypeError):
@@ -685,11 +1160,7 @@ def build_list_params(
         "expires_before": expires_before,
         "expires_after": expires_after,
     }
-    return {
-        k: v.isoformat() if isinstance(v, datetime) else str(v)
-        for k, v in pairs.items()
-        if v is not None
-    }
+    return build_query_params(pairs)
 
 
 def mask_key(api_key: str) -> str:

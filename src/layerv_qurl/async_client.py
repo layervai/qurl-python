@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -17,19 +18,48 @@ from layerv_qurl._utils import (
     DEFAULT_TIMEOUT,
     RETRYABLE_STATUS,
     RETRYABLE_STATUS_POST,
+    UNSET,
     build_body,
     build_list_params,
+    build_query_params,
     default_user_agent,
+    idempotency_headers,
     logger,
     mask_key,
+    parse_access_code,
+    parse_access_code_list_output,
+    parse_access_token,
+    parse_agent_bootstrap_output,
+    parse_api_key,
+    parse_api_key_list_output,
     parse_batch_create_output,
+    parse_checkout_session,
+    parse_connector_installation_list_output,
     parse_create_output,
+    parse_current_period_usage,
+    parse_customer,
+    parse_daily_usage,
+    parse_domain,
+    parse_domain_list_output,
+    parse_domain_verify_output,
     parse_error,
+    parse_invoice_list_output,
     parse_list_output,
     parse_mint_output,
+    parse_portal_session,
     parse_quota,
     parse_qurl,
+    parse_redeem_access_code_output,
     parse_resolve_output,
+    parse_resource,
+    parse_resource_detail,
+    parse_resource_list_output,
+    parse_session_list_output,
+    parse_session_terminate_output,
+    parse_webhook,
+    parse_webhook_delivery_list_output,
+    parse_webhook_event_types_output,
+    parse_webhook_list_output,
     require_resource_id_prefix,
     retry_delay,
     validate_create_input,
@@ -51,15 +81,41 @@ if TYPE_CHECKING:
 
     from layerv_qurl.types import (
         QURL,
+        AccessCode,
+        AccessCodeListOutput,
         AccessPolicy,
+        AccessToken,
+        AgentBootstrapOutput,
+        APIKey,
+        APIKeyListOutput,
         BatchCreateItem,
         BatchCreateOutput,
+        CheckoutSession,
+        ConnectorInstallationListOutput,
         CreateOutput,
+        CurrentPeriodUsage,
+        Customer,
+        DailyUsage,
+        Domain,
+        DomainListOutput,
+        DomainVerifyOutput,
+        InvoiceListOutput,
         ListOutput,
         MintOutput,
+        PortalSession,
         Quota,
         QURLStatus,
+        RedeemAccessCodeOutput,
         ResolveOutput,
+        Resource,
+        ResourceDetail,
+        ResourceListOutput,
+        SessionListOutput,
+        SessionTerminateOutput,
+        Webhook,
+        WebhookDeliveryListOutput,
+        WebhookEventTypesOutput,
+        WebhookListOutput,
     )
 
 
@@ -81,7 +137,7 @@ class AsyncQURLClient:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | None = None,
         *,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
@@ -89,7 +145,7 @@ class AsyncQURLClient:
         user_agent: str | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not api_key or not api_key.strip():
+        if api_key is not None and not api_key.strip():
             raise ValueError("api_key must not be empty")
 
         self._base_url = base_url.rstrip("/")
@@ -99,13 +155,15 @@ class AsyncQURLClient:
         self._client = http_client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = http_client is None
         self._base_headers: dict[str, str] = {
-            "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
             "User-Agent": self._user_agent,
         }
+        if api_key is not None:
+            self._base_headers["Authorization"] = f"Bearer {api_key}"
 
     def __repr__(self) -> str:
-        return f"AsyncQURLClient(api_key='{mask_key(self._api_key)}', base_url='{self._base_url}')"
+        api_key = mask_key(self._api_key) if self._api_key is not None else None
+        return f"AsyncQURLClient(api_key='{api_key}', base_url='{self._base_url}')"
 
     async def close(self) -> None:
         """Close the underlying HTTP client (only if owned by this instance)."""
@@ -124,6 +182,7 @@ class AsyncQURLClient:
         self,
         target_url: str,
         *,
+        resource_type: str | None = None,
         expires_in: str | None = None,
         label: str | None = None,
         one_time_use: bool | None = None,
@@ -131,6 +190,7 @@ class AsyncQURLClient:
         session_duration: str | None = None,
         access_policy: AccessPolicy | None = None,
         custom_domain: str | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateOutput:
         """Create a new qURL.
 
@@ -146,6 +206,8 @@ class AsyncQURLClient:
 
         Args:
             target_url: The URL to protect. Max length 2048.
+            resource_type: Resource type to create. Defaults to ``"url"``
+                server-side. Public callers usually omit this.
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``). The API
                 uses ``expires_in`` on create; use :meth:`update` with
                 ``expires_at`` if you need an absolute expiry afterwards.
@@ -156,6 +218,7 @@ class AsyncQURLClient:
             session_duration: Duration string for sessions (e.g. ``"1h"``).
             access_policy: IP/geo/user-agent access restrictions.
             custom_domain: Custom domain for the qURL link. Max length 253.
+            idempotency_key: Optional idempotency key for safe retries.
 
         Raises:
             ValueError: If any field violates the documented API constraints.
@@ -168,6 +231,7 @@ class AsyncQURLClient:
         )
         body = build_body(
             {
+                "type": resource_type,
                 "target_url": target_url,
                 "expires_in": expires_in,
                 "label": label,
@@ -178,7 +242,12 @@ class AsyncQURLClient:
                 "custom_domain": custom_domain,
             }
         )
-        resp = await self._request("POST", "/v1/qurls", body=body)
+        resp = await self._request(
+            "POST",
+            "/v1/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_create_output(resp)
 
     async def get(self, resource_id: str) -> QURL:
@@ -340,6 +409,7 @@ class AsyncQURLClient:
         expires_at: datetime | str | None = None,
         description: str | None = None,
         tags: builtins.list[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> QURL:
         """Update a qURL — extend expiration, change description, set tags.
 
@@ -368,6 +438,7 @@ class AsyncQURLClient:
                 ``None`` (the default) to leave the existing tags
                 unchanged. Max 10 items, each 1-50 chars matching
                 ``^[a-zA-Z0-9][a-zA-Z0-9 _-]*$``.
+            idempotency_key: Optional idempotency key for safe retries.
 
         Raises:
             ValueError: If ``extend_by`` and ``expires_at`` are both set, if
@@ -405,7 +476,12 @@ class AsyncQURLClient:
                 "tags": tags,
             }
         )
-        resp = await self._request("PATCH", f"/v1/qurls/{resource_id}", body=body)
+        resp = await self._request(
+            "PATCH",
+            f"/v1/qurls/{resource_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_qurl(resp)
 
     async def mint_link(
@@ -419,6 +495,7 @@ class AsyncQURLClient:
         max_sessions: int | None = None,
         session_duration: str | None = None,
         access_policy: AccessPolicy | None = None,
+        idempotency_key: str | None = None,
     ) -> MintOutput:
         """Mint a new access link for a qURL.
 
@@ -438,6 +515,7 @@ class AsyncQURLClient:
                 Must be between 0 and 1000 inclusive.
             session_duration: Duration string for sessions (e.g. ``"1h"``).
             access_policy: IP/geo/user-agent access restrictions.
+            idempotency_key: Optional idempotency key for safe retries.
 
         Raises:
             ValueError: If ``expires_in`` and ``expires_at`` are both set
@@ -461,12 +539,19 @@ class AsyncQURLClient:
                 "access_policy": access_policy,
             }
         )
-        resp = await self._request("POST", f"/v1/qurls/{resource_id}/mint_link", body=body)
+        resp = await self._request(
+            "POST",
+            f"/v1/qurls/{resource_id}/mint_link",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_mint_output(resp)
 
     async def batch_create(
         self,
         items: Sequence[BatchCreateItem],
+        *,
+        idempotency_key: str | None = None,
     ) -> BatchCreateOutput:
         """Create multiple qURLs at once (1-100 items).
 
@@ -535,6 +620,7 @@ class AsyncQURLClient:
             "/v1/qurls/batch",
             body={"items": serialized},
             allow_statuses=(400,),
+            headers=idempotency_headers(idempotency_key),
         )
         # `parse_batch_create_output` runs the shape guard internally
         # (see its docstring) — so if the API returns 400 with an
@@ -562,6 +648,556 @@ class AsyncQURLClient:
         resp = await self._request("GET", "/v1/quota")
         return parse_quota(resp)
 
+    # --- Resources ---
+
+    async def list_resources(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        alias: str | None = None,
+        slug: str | None = None,
+        status: str | None = None,
+        resource_type: str | None = None,
+    ) -> ResourceListOutput:
+        """List resources."""
+        params = build_query_params(
+            {
+                "cursor": cursor,
+                "limit": limit,
+                "alias": alias,
+                "slug": slug,
+                "status": status,
+                "type": resource_type,
+            }
+        )
+        data, meta = await self._raw_request("GET", "/v1/resources", params=params)
+        return parse_resource_list_output(data, meta)
+
+    async def create_resource(
+        self,
+        *,
+        resource_type: str | None = None,
+        target_url: str | None = None,
+        description: str | None = None,
+        tags: builtins.list[str] | None = None,
+        custom_domain: str | None = None,
+        alias: str | None = None,
+        slug: str | None = None,
+        find_or_create: bool | None = None,
+    ) -> Resource:
+        """Create or find a resource."""
+        body = build_body(
+            {
+                "type": resource_type,
+                "target_url": target_url,
+                "description": description,
+                "tags": tags,
+                "custom_domain": custom_domain,
+                "alias": alias,
+                "slug": slug,
+                "find_or_create": find_or_create,
+            }
+        )
+        resp = await self._request("POST", "/v1/resources", body=body)
+        return parse_resource(resp)
+
+    async def get_resource(self, resource_id: str) -> ResourceDetail:
+        """Get resource details and a bounded qURL token preview."""
+        validate_id(resource_id)
+        resp = await self._request("GET", f"/v1/resources/{resource_id}")
+        return parse_resource_detail(resp)
+
+    async def update_resource(
+        self,
+        resource_id: str,
+        *,
+        description: str | None = None,
+        tags: builtins.list[str] | None = None,
+        custom_domain: str | None = None,
+        preserve_host: bool | None = None,
+        alias: str | None | object = UNSET,
+    ) -> Resource:
+        """Update resource metadata."""
+        validate_id(resource_id)
+        body = build_body(
+            {
+                "description": description,
+                "tags": tags,
+                "custom_domain": custom_domain,
+                "preserve_host": preserve_host,
+            }
+        )
+        if alias is not UNSET:
+            body["alias"] = alias
+        if not body:
+            raise ValueError(
+                "update_resource: at least one field (description, tags, "
+                "custom_domain, preserve_host, alias) must be provided"
+            )
+        resp = await self._request("PATCH", f"/v1/resources/{resource_id}", body=body)
+        return parse_resource(resp)
+
+    async def delete_resource(self, resource_id: str) -> None:
+        """Revoke a resource and all qURLs associated with it."""
+        validate_id(resource_id)
+        await self._request("DELETE", f"/v1/resources/{resource_id}")
+
+    async def create_qurl_for_resource(
+        self,
+        resource_id: str,
+        *,
+        expires_in: str | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | None = None,
+        access_policy: AccessPolicy | None = None,
+        idempotency_key: str | None = None,
+    ) -> CreateOutput:
+        """Mint a qURL against an existing resource."""
+        validate_id(resource_id)
+        validate_mint_input(label=label, max_sessions=max_sessions)
+        body = build_body(
+            {
+                "expires_in": expires_in,
+                "label": label,
+                "one_time_use": one_time_use,
+                "max_sessions": max_sessions,
+                "session_duration": session_duration,
+                "access_policy": access_policy,
+            }
+        )
+        resp = await self._request(
+            "POST",
+            f"/v1/resources/{resource_id}/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_create_output(resp)
+
+    async def mint_resource_qurl(self, resource_id: str, **kwargs: Any) -> CreateOutput:
+        """Alias for :meth:`create_qurl_for_resource`."""
+        return await self.create_qurl_for_resource(resource_id, **kwargs)
+
+    async def update_resource_qurl(
+        self,
+        resource_id: str,
+        qurl_id: str,
+        *,
+        extend_by: str | None = None,
+        expires_at: datetime | str | None = None,
+        label: str | None = None,
+        access_policy: AccessPolicy | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | None = None,
+    ) -> AccessToken:
+        """Update a specific qURL token on a resource."""
+        validate_id(resource_id)
+        validate_id(qurl_id, "qurl_id")
+        if extend_by is not None and expires_at is not None:
+            raise ValueError(
+                "update_resource_qurl: `extend_by` and `expires_at` are mutually "
+                "exclusive — provide at most one"
+            )
+        validate_mint_input(label=label, max_sessions=max_sessions)
+        body = build_body(
+            {
+                "extend_by": extend_by,
+                "expires_at": expires_at,
+                "label": label,
+                "access_policy": access_policy,
+                "max_sessions": max_sessions,
+                "session_duration": session_duration,
+            }
+        )
+        if not body:
+            raise ValueError(
+                "update_resource_qurl: at least one field (extend_by, expires_at, "
+                "label, access_policy, max_sessions, session_duration) must be provided"
+            )
+        resp = await self._request(
+            "PATCH",
+            f"/v1/resources/{resource_id}/qurls/{qurl_id}",
+            body=body,
+        )
+        return parse_access_token(resp)
+
+    async def revoke_resource_qurl(self, resource_id: str, qurl_id: str) -> None:
+        """Revoke one qURL token without revoking the parent resource."""
+        validate_id(resource_id)
+        validate_id(qurl_id, "qurl_id")
+        await self._request("DELETE", f"/v1/resources/{resource_id}/qurls/{qurl_id}")
+
+    async def list_resource_sessions(self, resource_id: str) -> SessionListOutput:
+        """List active sessions for a resource."""
+        validate_id(resource_id)
+        resp = await self._request("GET", f"/v1/resources/{resource_id}/sessions")
+        return parse_session_list_output(resp)
+
+    async def terminate_all_resource_sessions(
+        self, resource_id: str
+    ) -> SessionTerminateOutput:
+        """Terminate all active sessions for a resource."""
+        validate_id(resource_id)
+        resp = await self._request("DELETE", f"/v1/resources/{resource_id}/sessions")
+        return parse_session_terminate_output(resp)
+
+    async def terminate_resource_session(self, resource_id: str, session_id: str) -> None:
+        """Terminate a specific active session."""
+        validate_id(resource_id)
+        validate_id(session_id, "session_id")
+        await self._request(
+            "DELETE",
+            f"/v1/resources/{resource_id}/sessions/{session_id}",
+        )
+
+    # --- Custom Domains ---
+
+    async def register_domain(
+        self, domain: str, *, idempotency_key: str | None = None
+    ) -> Domain:
+        """Register a custom domain and return DNS setup records."""
+        resp = await self._request(
+            "POST",
+            "/v1/domains",
+            body={"domain": domain},
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_domain(resp)
+
+    async def list_domains(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> DomainListOutput:
+        """List custom domains."""
+        data, meta = await self._raw_request(
+            "GET",
+            "/v1/domains",
+            params=build_query_params({"limit": limit, "cursor": cursor}),
+        )
+        return parse_domain_list_output(data, meta)
+
+    async def get_domain(self, domain: str) -> Domain:
+        """Get custom-domain status and DNS configuration."""
+        resp = await self._request("GET", f"/v1/domains/{quote(domain, safe='')}")
+        return parse_domain(resp)
+
+    async def delete_domain(self, domain: str) -> None:
+        """Remove a custom-domain registration."""
+        await self._request("DELETE", f"/v1/domains/{quote(domain, safe='')}")
+
+    async def verify_domain(self, domain: str) -> DomainVerifyOutput:
+        """Trigger DNS verification for a custom domain."""
+        resp = await self._request(
+            "POST", f"/v1/domains/{quote(domain, safe='')}/verify"
+        )
+        return parse_domain_verify_output(resp)
+
+    async def regenerate_domain_token(self, domain: str) -> Domain:
+        """Regenerate a custom-domain verification token."""
+        resp = await self._request(
+            "POST", f"/v1/domains/{quote(domain, safe='')}/regenerate-token"
+        )
+        return parse_domain(resp)
+
+    # --- Webhooks ---
+
+    async def list_webhooks(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        event: str | None = None,
+    ) -> WebhookListOutput:
+        """List webhook subscriptions."""
+        data, meta = await self._raw_request(
+            "GET",
+            "/v1/webhooks",
+            params=build_query_params({"limit": limit, "cursor": cursor, "event": event}),
+        )
+        return parse_webhook_list_output(data, meta)
+
+    async def create_webhook(
+        self,
+        *,
+        url: str,
+        events: Sequence[str],
+        description: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Webhook:
+        """Create a webhook subscription."""
+        body = build_body(
+            {
+                "url": url,
+                "events": list(events),
+                "description": description,
+            }
+        )
+        resp = await self._request(
+            "POST",
+            "/v1/webhooks",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_webhook(resp)
+
+    async def get_webhook(self, webhook_id: str) -> Webhook:
+        """Get webhook subscription details."""
+        validate_id(webhook_id, "webhook_id")
+        resp = await self._request("GET", f"/v1/webhooks/{webhook_id}")
+        return parse_webhook(resp)
+
+    async def update_webhook(
+        self,
+        webhook_id: str,
+        *,
+        url: str | None = None,
+        events: Sequence[str] | None = None,
+        description: str | None = None,
+        status: str | None = None,
+    ) -> Webhook:
+        """Update a webhook subscription."""
+        validate_id(webhook_id, "webhook_id")
+        body = build_body(
+            {
+                "url": url,
+                "events": list(events) if events is not None else None,
+                "description": description,
+                "status": status,
+            }
+        )
+        if not body:
+            raise ValueError(
+                "update_webhook: at least one field (url, events, description, "
+                "status) must be provided"
+            )
+        resp = await self._request("PATCH", f"/v1/webhooks/{webhook_id}", body=body)
+        return parse_webhook(resp)
+
+    async def delete_webhook(self, webhook_id: str) -> None:
+        """Delete a webhook subscription."""
+        validate_id(webhook_id, "webhook_id")
+        await self._request("DELETE", f"/v1/webhooks/{webhook_id}")
+
+    async def regenerate_webhook_secret(self, webhook_id: str) -> Webhook:
+        """Regenerate a webhook signing secret."""
+        validate_id(webhook_id, "webhook_id")
+        resp = await self._request("POST", f"/v1/webhooks/{webhook_id}/secret")
+        return parse_webhook(resp)
+
+    async def list_webhook_deliveries(
+        self,
+        webhook_id: str,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> WebhookDeliveryListOutput:
+        """List delivery attempts for a webhook."""
+        validate_id(webhook_id, "webhook_id")
+        data, meta = await self._raw_request(
+            "GET",
+            f"/v1/webhooks/{webhook_id}/deliveries",
+            params=build_query_params({"limit": limit, "cursor": cursor}),
+        )
+        return parse_webhook_delivery_list_output(data, meta)
+
+    async def list_webhook_event_types(self) -> WebhookEventTypesOutput:
+        """List supported webhook event types."""
+        resp = await self._request("GET", "/v1/webhooks/events")
+        return parse_webhook_event_types_output(resp)
+
+    # --- API Keys ---
+
+    async def create_api_key(
+        self,
+        *,
+        name: str,
+        scopes: Sequence[str],
+        expires_in: str | None = None,
+        purpose: str | None = None,
+        tunnel_slug: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> APIKey:
+        """Create an API key."""
+        body = build_body(
+            {
+                "name": name,
+                "scopes": list(scopes),
+                "expires_in": expires_in,
+                "purpose": purpose,
+                "tunnel_slug": tunnel_slug,
+            }
+        )
+        resp = await self._request(
+            "POST",
+            "/v1/api-keys",
+            body=body,
+            headers=idempotency_headers(idempotency_key, min_length=32),
+        )
+        return parse_api_key(resp)
+
+    async def list_api_keys(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        status: str | None = None,
+    ) -> APIKeyListOutput:
+        """List API keys. JWT auth is required by the API."""
+        data, meta = await self._raw_request(
+            "GET",
+            "/v1/api-keys",
+            params=build_query_params({"limit": limit, "cursor": cursor, "status": status}),
+        )
+        return parse_api_key_list_output(data, meta)
+
+    async def update_api_key(
+        self,
+        key_id: str,
+        *,
+        name: str | None = None,
+        scopes: Sequence[str] | None = None,
+    ) -> APIKey:
+        """Update API key name or scopes. JWT auth is required by the API."""
+        validate_id(key_id, "key_id")
+        body = build_body({"name": name, "scopes": list(scopes) if scopes is not None else None})
+        resp = await self._request("PATCH", f"/v1/api-keys/{key_id}", body=body)
+        return parse_api_key(resp)
+
+    async def revoke_api_key(self, key_id: str) -> None:
+        """Revoke an API key. JWT auth is required by the API."""
+        validate_id(key_id, "key_id")
+        await self._request("DELETE", f"/v1/api-keys/{key_id}")
+
+    # --- Access Codes ---
+
+    async def redeem_access_code(
+        self,
+        code: str,
+        *,
+        honeypot: str = "",
+        elapsed_ms: int | None = None,
+    ) -> RedeemAccessCodeOutput:
+        """Redeem a public access code and return its redirect URL."""
+        body = build_body({"code": code, "honeypot": honeypot, "elapsed_ms": elapsed_ms})
+        resp = await self._request("POST", "/v1/access-codes/redeem", body=body)
+        return parse_redeem_access_code_output(resp)
+
+    async def create_access_code(
+        self,
+        *,
+        resource_id: str,
+        name: str | None = None,
+        max_uses: int | None = None,
+        expires_at: datetime | str | None = None,
+        idempotency_key: str | None = None,
+    ) -> AccessCode:
+        """Create an access code for a resource."""
+        validate_id(resource_id)
+        body = build_body(
+            {
+                "resource_id": resource_id,
+                "name": name,
+                "max_uses": max_uses,
+                "expires_at": expires_at,
+            }
+        )
+        resp = await self._request(
+            "POST",
+            "/v1/access-codes",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_access_code(resp)
+
+    async def list_access_codes(self) -> AccessCodeListOutput:
+        """List access codes."""
+        resp = await self._request("GET", "/v1/access-codes")
+        return parse_access_code_list_output(resp)
+
+    async def revoke_access_code(self, access_code_id: str) -> None:
+        """Revoke an access code."""
+        validate_id(access_code_id, "access_code_id")
+        await self._request("DELETE", f"/v1/access-codes/{access_code_id}")
+
+    # --- Usage, Customer, Billing, Connectors, Agent ---
+
+    async def get_usage_current_period(self) -> CurrentPeriodUsage:
+        """Get current billing-period usage. JWT auth is required by the API."""
+        resp = await self._request("GET", "/v1/usage/current-period")
+        return parse_current_period_usage(resp)
+
+    async def get_usage_daily(self) -> DailyUsage:
+        """Get daily qURL creation counts for the current billing period."""
+        resp = await self._request("GET", "/v1/usage/daily")
+        return parse_daily_usage(resp)
+
+    async def get_customer(self) -> Customer:
+        """Get the authenticated customer profile. JWT auth is required by the API."""
+        resp = await self._request("GET", "/v1/customer")
+        return parse_customer(resp)
+
+    async def update_customer(self, *, spending_cap_cents: int) -> Customer:
+        """Update customer billing settings. JWT auth is required by the API."""
+        resp = await self._request(
+            "PATCH",
+            "/v1/customer",
+            body={"spending_cap_cents": spending_cap_cents},
+        )
+        return parse_customer(resp)
+
+    async def create_billing_checkout(self, *, plan: str) -> CheckoutSession:
+        """Create a Stripe checkout session. JWT auth is required by the API."""
+        resp = await self._request("POST", "/v1/billing/checkout", body={"plan": plan})
+        return parse_checkout_session(resp)
+
+    async def create_billing_portal(self) -> PortalSession:
+        """Create a Stripe billing portal session. JWT auth is required by the API."""
+        resp = await self._request("POST", "/v1/billing/portal")
+        return parse_portal_session(resp)
+
+    async def list_billing_invoices(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> InvoiceListOutput:
+        """List billing invoices. JWT auth is required by the API."""
+        data, meta = await self._raw_request(
+            "GET",
+            "/v1/billing/invoices",
+            params=build_query_params({"limit": limit, "cursor": cursor}),
+        )
+        return parse_invoice_list_output(data, meta)
+
+    async def list_connector_installations(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> ConnectorInstallationListOutput:
+        """List normalized connector installations."""
+        data, meta = await self._raw_request(
+            "GET",
+            "/v1/connectors/installations",
+            params=build_query_params({"limit": limit, "cursor": cursor}),
+        )
+        return parse_connector_installation_list_output(data, meta)
+
+    async def bootstrap_agent(
+        self,
+        *,
+        public_key: str,
+        agent_id: str | None = None,
+        hostname: str | None = None,
+        version: str | None = None,
+    ) -> AgentBootstrapOutput:
+        """Bootstrap a LayerV qURL Connector agent."""
+        body = build_body(
+            {
+                "public_key": public_key,
+                "agent_id": agent_id,
+                "hostname": hostname,
+                "version": version,
+            }
+        )
+        resp = await self._request("POST", "/v1/agent/bootstrap", body=body)
+        return parse_agent_bootstrap_output(resp)
+
     # --- Internal HTTP plumbing ---
 
     async def _request(
@@ -572,9 +1208,15 @@ class AsyncQURLClient:
         body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
         allow_statuses: tuple[int, ...] = (),
+        headers: dict[str, str] | None = None,
     ) -> Any:
         data, _ = await self._raw_request(
-            method, path, body=body, params=params, allow_statuses=allow_statuses
+            method,
+            path,
+            body=body,
+            params=params,
+            allow_statuses=allow_statuses,
+            headers=headers,
         )
         return data
 
@@ -586,6 +1228,7 @@ class AsyncQURLClient:
         body: dict[str, Any] | None = None,
         params: dict[str, str] | None = None,
         allow_statuses: tuple[int, ...] = (),
+        headers: dict[str, str] | None = None,
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
 
@@ -621,6 +1264,9 @@ class AsyncQURLClient:
         """
         url = f"{self._base_url}{path}"
         last_error: Exception | None = None
+        request_headers = dict(self._base_headers)
+        if headers:
+            request_headers.update(headers)
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
@@ -636,7 +1282,7 @@ class AsyncQURLClient:
                     url,
                     json=body,
                     params=params,
-                    headers=self._base_headers,
+                    headers=request_headers,
                 )
             except httpx.TimeoutException as exc:
                 logger.debug("%s %s timed out", method, url)
