@@ -25,6 +25,7 @@ from layerv_qurl._utils import (
     build_query_params,
     build_string_list,
     domain_path_segment,
+    parse_resource,
 )
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -3850,6 +3851,14 @@ def test_resource_detail_tolerates_missing_resource_wrapper(client: QURLClient) 
     assert detail.resource.resource_id == ""
     assert detail.resource.status == "unknown"
     assert detail.qurls == []
+
+
+def test_parse_resource_requires_identity_fields() -> None:
+    with pytest.raises(KeyError):
+        parse_resource({"status": "active"})
+
+    with pytest.raises(KeyError):
+        parse_resource({"resource_id": "r_tunnel12345"})
 
 
 def test_update_resource_methods_reject_empty_updates(client: QURLClient) -> None:

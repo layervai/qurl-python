@@ -609,11 +609,12 @@ def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
     return ListOutput(qurls=qurls, next_cursor=next_cursor, has_more=has_more)
 
 
-def parse_resource(data: dict[str, Any]) -> Resource:
-    """Parse a resource-management API resource."""
+def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
+    resource_id = data["resource_id"] if strict_identity else data.get("resource_id", "")
+    status = data["status"] if strict_identity else data.get("status", "unknown")
     return Resource(
-        resource_id=data.get("resource_id", ""),
-        status=data.get("status", "unknown"),
+        resource_id=resource_id,
+        status=status,
         resource_type=data.get("type"),
         target_url=data.get("target_url"),
         knock_resource_id=data.get("knock_resource_id"),
@@ -631,9 +632,18 @@ def parse_resource(data: dict[str, Any]) -> Resource:
     )
 
 
+def parse_resource(data: dict[str, Any]) -> Resource:
+    """Parse a resource-management API resource."""
+    return _parse_resource(data, strict_identity=True)
+
+
 def parse_resource_detail(data: dict[str, Any]) -> ResourceDetail:
     """Parse a resource detail response."""
-    resource = parse_resource(data.get("resource", {}))
+    raw_resource = data.get("resource")
+    resource = _parse_resource(
+        raw_resource if isinstance(raw_resource, dict) else {},
+        strict_identity=False,
+    )
     qurls = _parse_list_items(data.get("qurls"), parse_access_token)
     return ResourceDetail(resource=resource, qurls=qurls)
 
