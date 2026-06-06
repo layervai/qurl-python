@@ -145,6 +145,10 @@ class QURLClient:
         for qurl in client.list_all(status="active"):
             print(qurl.resource_id)
 
+    ``api_key`` may be omitted for public endpoints such as
+    :meth:`redeem_access_code`; authenticated endpoints will return 401
+    without credentials.
+
     Enable debug logging to see requests::
 
         import logging
@@ -1122,6 +1126,9 @@ class QURLClient:
 
         JWT auth is required for normal key management; API-key auth may
         only create restricted tunnel-bootstrap keys.
+
+        ``idempotency_key`` must be 32-256 characters for this
+        security-sensitive endpoint.
         """
         body = build_body(
             {

@@ -21,6 +21,7 @@ from layerv_qurl import (
     QURLNetworkError,
     QURLTimeoutError,
 )
+from layerv_qurl._utils import build_query_params
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -3043,6 +3044,11 @@ def test_create_normalizes_empty_qurl_id_to_none(client: QURLClient) -> None:
     assert result.qurl_id is None
 
 
+def test_build_query_params_serializes_booleans_lowercase() -> None:
+    params = build_query_params({"enabled": True, "archived": False, "skip": None})
+    assert params == {"enabled": "true", "archived": "false"}
+
+
 # ---- Target URL scheme validation (create) --------------------------------
 
 
@@ -3704,6 +3710,14 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
         client.update_resource("r_tunnel12345", custom_domain="x" * 254)
 
 
+def test_update_resource_methods_reject_empty_updates(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_resource("r_tunnel12345")
+
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_resource_qurl("r_tunnel12345", "q_newtoken12")
+
+
 @respx.mock
 def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
     respx.post(f"{BASE_URL}/v1/domains").mock(
@@ -3790,6 +3804,9 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
         update_webhook_route.calls[0].request.headers["idempotency-key"]
         == "idem-webhook-update"
     )
+
+    with pytest.raises(ValueError, match="at least one field"):
+        client.update_webhook("wh_abcdefghijklmnop")
 
     respx.get(f"{BASE_URL}/v1/webhooks/events").mock(
         return_value=httpx.Response(
@@ -3996,7 +4013,6 @@ def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> 
     )
     customer = client.get_customer()
     assert customer.tier == "unknown"
-    assert customer.current_period_usage == 0
     assert customer.current_period_usage_count == 0
     assert customer.frozen is False
     assert customer.frozen_reason == "manual"
@@ -4009,6 +4025,17 @@ def test_invoice_list_tolerates_non_dict_payload(client: QURLClient) -> None:
     )
     invoices = client.list_billing_invoices()
     assert invoices.invoices == []
+
+
+@respx.mock
+def test_agent_bootstrap_tolerates_partial_peer_payload(client: QURLClient) -> None:
+    respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
+        return_value=httpx.Response(200, json={"data": {"nhp_server_peer": None}})
+    )
+    bootstrap = client.bootstrap_agent(public_key="pk_test")
+    assert bootstrap.agent_id == ""
+    assert bootstrap.nhp_server_peer.public_key_b64 == ""
+    assert bootstrap.nhp_server_peer.port == 0
 
 
 @respx.mock

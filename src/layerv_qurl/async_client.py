@@ -134,6 +134,10 @@ class AsyncQURLClient:
                 access = await client.resolve("at_k8xqp9h2sj9lx7r4a")
 
         asyncio.run(main())
+
+    ``api_key`` may be omitted for public endpoints such as
+    :meth:`redeem_access_code`; authenticated endpoints will return 401
+    without credentials.
     """
 
     def __init__(
@@ -1088,7 +1092,11 @@ class AsyncQURLClient:
         tunnel_slug: str | None = None,
         idempotency_key: str | None = None,
     ) -> APIKey:
-        """Create an API key."""
+        """Create an API key.
+
+        ``idempotency_key`` must be 32-256 characters for this
+        security-sensitive endpoint.
+        """
         body = build_body(
             {
                 "name": name,

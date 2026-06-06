@@ -188,7 +188,15 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
 def build_query_params(pairs: dict[str, Any]) -> dict[str, str]:
     """Build query params from optional values, dropping ``None`` values."""
     return {
-        k: v.isoformat() if isinstance(v, datetime) else str(v)
+        k: (
+            v.isoformat()
+            if isinstance(v, datetime)
+            else "true"
+            if v is True
+            else "false"
+            if v is False
+            else str(v)
+        )
         for k, v in pairs.items()
         if v is not None
     }
@@ -822,23 +830,24 @@ def parse_portal_session(data: dict[str, Any]) -> PortalSession:
     return PortalSession(url=data["url"])
 
 
+def parse_invoice(data: dict[str, Any]) -> Invoice:
+    """Parse a billing invoice summary."""
+    return Invoice(
+        id=data.get("id", ""),
+        amount_cents=data.get("amount_cents", 0),
+        status=data.get("status", ""),
+        created_at=_parse_dt(data.get("created_at")),
+        pdf_url=data.get("pdf_url"),
+    )
+
+
 def parse_invoice_list_output(
     data: Any, meta: dict[str, Any] | None
 ) -> InvoiceListOutput:
     """Parse billing invoice list output."""
     next_cursor, has_more = _meta_page(meta)
     raw_invoices = data.get("invoices") if isinstance(data, dict) else None
-    invoice_items = raw_invoices if isinstance(raw_invoices, list) else []
-    invoices = [
-        Invoice(
-            id=item["id"],
-            amount_cents=item["amount_cents"],
-            status=item["status"],
-            created_at=_parse_dt(item.get("created_at")),
-            pdf_url=item.get("pdf_url"),
-        )
-        for item in invoice_items
-    ]
+    invoices = _parse_list_items(raw_invoices, parse_invoice)
     return InvoiceListOutput(invoices=invoices, next_cursor=next_cursor, has_more=has_more)
 
 
@@ -896,15 +905,16 @@ def parse_connector_installation_list_output(
 
 def parse_agent_bootstrap_output(data: dict[str, Any]) -> AgentBootstrapOutput:
     """Parse connector agent bootstrap output."""
-    peer = data["nhp_server_peer"]
+    raw_peer = data.get("nhp_server_peer")
+    peer = raw_peer if isinstance(raw_peer, dict) else {}
     return AgentBootstrapOutput(
-        agent_id=data["agent_id"],
+        agent_id=data.get("agent_id", ""),
         registered_at=_parse_dt(data.get("registered_at")),
         nhp_server_peer=NHPServerPeerInfo(
-            public_key_b64=peer["public_key_b64"],
-            host=peer["host"],
-            port=peer["port"],
-            expire_time=peer["expire_time"],
+            public_key_b64=peer.get("public_key_b64", ""),
+            host=peer.get("host", ""),
+            port=peer.get("port", 0),
+            expire_time=peer.get("expire_time", 0),
         ),
     )
 

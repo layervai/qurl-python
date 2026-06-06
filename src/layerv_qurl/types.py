@@ -545,11 +545,6 @@ class Customer:
     frozen: bool
     frozen_reason: str | None = None
 
-    @property
-    def current_period_usage(self) -> int:
-        """Compatibility alias for the current-period usage count."""
-        return self.current_period_usage_count
-
 
 @dataclass
 class CheckoutSession:
