@@ -1045,6 +1045,37 @@ def test_post_does_not_retry_on_503(retry_client: QURLClient) -> None:
 
 
 @respx.mock
+def test_resolve_stable_idempotency_key_can_cross_caller_retries(
+    client: QURLClient,
+) -> None:
+    route = respx.post(f"{BASE_URL}/v1/resolve")
+    route.side_effect = [
+        httpx.Response(503, json=_ERR_503),
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "target_url": "https://api.example.com/data",
+                    "resource_id": "r_abc123def45",
+                }
+            },
+        ),
+    ]
+
+    with pytest.raises(ServerError):
+        client.resolve("at_k8xqp9h2sj9lx7r4a", idempotency_key="idem-resolve-stable")
+    result = client.resolve(
+        "at_k8xqp9h2sj9lx7r4a",
+        idempotency_key="idem-resolve-stable",
+    )
+
+    assert result.target_url == "https://api.example.com/data"
+    assert route.call_count == 2
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-resolve-stable"
+    assert route.calls[1].request.headers["idempotency-key"] == "idem-resolve-stable"
+
+
+@respx.mock
 def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
     """POST retries on 429 specifically (rate limits are safe to retry)."""
     route = respx.post(f"{BASE_URL}/v1/qurls")
@@ -3867,6 +3898,9 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
 
     with pytest.raises(ValueError, match="code"):
         client.redeem_access_code(code="")
+
+    with pytest.raises(ValueError, match="elapsed_ms"):
+        client.redeem_access_code(code="ac_k8xqp9h2sj9lx7r4abcdef", elapsed_ms=-1)
 
     with pytest.raises(ValueError, match="name"):
         client.create_api_key(name="", scopes=["qurl:read"])

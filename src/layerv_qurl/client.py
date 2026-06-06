@@ -1225,6 +1225,8 @@ class QURLClient:
     ) -> RedeemAccessCodeOutput:
         """Redeem a public access code and return its redirect URL."""
         validate_required_string(code, "code")
+        if elapsed_ms is not None:
+            validate_nonnegative_int(elapsed_ms, "elapsed_ms")
         body = build_body({"code": code, "honeypot": honeypot, "elapsed_ms": elapsed_ms})
         resp = self._request(
             "POST",
