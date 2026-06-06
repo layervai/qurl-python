@@ -31,7 +31,16 @@ from layerv_qurl.errors import (
     ServerError,
     ValidationError,
 )
-from layerv_qurl.types import AccessPolicy, AccessToken, AIAgentPolicy, BatchCreateItem
+from layerv_qurl.types import (
+    AccessCode,
+    AccessPolicy,
+    AccessToken,
+    AIAgentPolicy,
+    APIKey,
+    BatchCreateItem,
+    Domain,
+    Webhook,
+)
 
 BASE_URL = "https://api.test.layerv.ai"
 
@@ -127,6 +136,42 @@ def test_repr_short_api_key() -> None:
     assert "***" in r
     assert "short123" not in r
     c.close()
+
+
+def test_repr_no_auth_api_key_is_unquoted_none() -> None:
+    c = QURLClient(base_url=BASE_URL)
+    assert "api_key=None" in repr(c)
+    c.close()
+
+
+def test_secret_dataclass_repr_omits_one_time_values() -> None:
+    webhook = Webhook(
+        webhook_id="wh_secret",
+        url="https://example.com/hook",
+        events=["qurl.created"],
+        secret="whsec_secret",
+    )
+    api_key = APIKey(
+        key_id="key_secret",
+        key_prefix="lv_live_abcd",
+        name="Production",
+        api_key="lv_live_secret",
+    )
+    access_code = AccessCode(
+        access_code_id="ac_secret",
+        resource_id="r_secret",
+        code="ac_code_secret",
+    )
+    domain = Domain(
+        domain="example.com",
+        status="pending",
+        verification_token="qurl_verify_secret",
+    )
+
+    assert "whsec_secret" not in repr(webhook)
+    assert "lv_live_secret" not in repr(api_key)
+    assert "ac_code_secret" not in repr(access_code)
+    assert "qurl_verify_secret" not in repr(domain)
 
 
 # --- CRUD tests with kwargs API ---
@@ -590,7 +635,7 @@ def test_mint_link_no_input(client: QURLClient) -> None:
 @respx.mock
 def test_resolve_plain_string(client: QURLClient) -> None:
     """resolve() accepts a plain string token."""
-    respx.post(f"{BASE_URL}/v1/resolve").mock(
+    route = respx.post(f"{BASE_URL}/v1/resolve").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -607,8 +652,9 @@ def test_resolve_plain_string(client: QURLClient) -> None:
         )
     )
 
-    result = client.resolve("at_k8xqp9h2sj9lx7r4a")
+    result = client.resolve("at_k8xqp9h2sj9lx7r4a", idempotency_key="idem-resolve")
     assert result.target_url == "https://api.example.com/data"
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-resolve"
     assert result.access_grant is not None
     assert result.access_grant.expires_in == 305
     assert result.access_grant.src_ip == "203.0.113.42"
@@ -3519,9 +3565,11 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
         resource_type="tunnel",
         slug="prod-dashboard",
         find_or_create=True,
+        idempotency_key="idem-resource-create",
     )
     create_body = json.loads(create_resource.calls[0].request.content)
     assert create_body == {"type": "tunnel", "slug": "prod-dashboard", "find_or_create": True}
+    assert create_resource.calls[0].request.headers["idempotency-key"] == "idem-resource-create"
     assert resource.resource_type == "tunnel"
     assert resource.knock_resource_id == "qurl-tunnel-server"
 
@@ -3539,9 +3587,16 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
             },
         )
     )
-    client.update_resource("r_tunnel12345", alias=None, tags=[], preserve_host=False)
+    client.update_resource(
+        "r_tunnel12345",
+        alias=None,
+        tags=[],
+        preserve_host=False,
+        idempotency_key="idem-resource-update",
+    )
     update_body = json.loads(update_resource.calls[0].request.content)
     assert update_body == {"tags": [], "preserve_host": False, "alias": None}
+    assert update_resource.calls[0].request.headers["idempotency-key"] == "idem-resource-update"
 
     respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345").mock(
         return_value=httpx.Response(
@@ -3591,7 +3646,9 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
     assert minted.qurl_id == "q_newtoken12"
     assert mint_route.calls[0].request.headers["idempotency-key"] == "idem-resource-mint"
 
-    respx.patch(f"{BASE_URL}/v1/resources/r_tunnel12345/qurls/q_newtoken12").mock(
+    update_token_route = respx.patch(
+        f"{BASE_URL}/v1/resources/r_tunnel12345/qurls/q_newtoken12"
+    ).mock(
         return_value=httpx.Response(
             200,
             json={
@@ -3604,9 +3661,15 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
             },
         )
     )
-    token = client.update_resource_qurl("r_tunnel12345", "q_newtoken12", label="updated")
+    token = client.update_resource_qurl(
+        "r_tunnel12345",
+        "q_newtoken12",
+        label="updated",
+        idempotency_key="idem-token-update",
+    )
     assert token.label == "updated"
     assert token.max_sessions == 2
+    assert update_token_route.calls[0].request.headers["idempotency-key"] == "idem-token-update"
 
     respx.get(f"{BASE_URL}/v1/resources/r_tunnel12345/sessions").mock(
         return_value=httpx.Response(
@@ -3628,6 +3691,17 @@ def test_resource_token_and_session_contract_methods(client: QURLClient) -> None
         return_value=httpx.Response(200, json={"data": {"terminated": 3}})
     )
     assert client.terminate_all_resource_sessions("r_tunnel12345").terminated == 3
+
+
+def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="target_url"):
+        client.create_resource(target_url="ftp://example.com")
+
+    with pytest.raises(ValueError, match="tags"):
+        client.create_resource(target_url="https://example.com", tags=["bad/tag"])
+
+    with pytest.raises(ValueError, match="custom_domain"):
+        client.update_resource("r_tunnel12345", custom_domain="x" * 254)
 
 
 @respx.mock
@@ -3656,7 +3730,7 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
     domain = client.register_domain("secure.example.com")
     assert domain.dns_records[0].type == "TXT"
 
-    respx.post(f"{BASE_URL}/v1/domains/secure.example.com/verify").mock(
+    verify_domain_route = respx.post(f"{BASE_URL}/v1/domains/secure.example.com/verify").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -3668,8 +3742,9 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
             },
         )
     )
-    verify = client.verify_domain("secure.example.com")
+    verify = client.verify_domain("secure.example.com", idempotency_key="idem-domain-verify")
     assert verify.checks["txt"].verified is True
+    assert verify_domain_route.calls[0].request.headers["idempotency-key"] == "idem-domain-verify"
 
     respx.post(f"{BASE_URL}/v1/webhooks").mock(
         return_value=httpx.Response(
@@ -3690,6 +3765,31 @@ def test_domain_webhook_and_error_contracts(client: QURLClient) -> None:
         events=["qurl.accessed"],
     )
     assert webhook.secret == "whsec_test"
+
+    update_webhook_route = respx.patch(
+        f"{BASE_URL}/v1/webhooks/wh_abcdefghijklmnop"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "webhook_id": "wh_abcdefghijklmnop",
+                    "url": "https://example.com/webhook",
+                    "events": ["qurl.created"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    client.update_webhook(
+        "wh_abcdefghijklmnop",
+        events=["qurl.created"],
+        idempotency_key="idem-webhook-update",
+    )
+    assert (
+        update_webhook_route.calls[0].request.headers["idempotency-key"]
+        == "idem-webhook-update"
+    )
 
     respx.get(f"{BASE_URL}/v1/webhooks/events").mock(
         return_value=httpx.Response(
@@ -3768,9 +3868,14 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
             json={"data": {"redirect_url": "https://qurl.link/#at_code"}},
         )
     )
-    redeem = no_auth_client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef", elapsed_ms=5200)
+    redeem = no_auth_client.redeem_access_code(
+        "ac_k8xqp9h2sj9lx7r4abcdef",
+        elapsed_ms=5200,
+        idempotency_key="idem-public-redeem",
+    )
     assert redeem.redirect_url == "https://qurl.link/#at_code"
     assert "authorization" not in redeem_route.calls[0].request.headers
+    assert redeem_route.calls[0].request.headers["idempotency-key"] == "idem-public-redeem"
 
     respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
         return_value=httpx.Response(
@@ -3849,7 +3954,7 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     assert connector.stats is not None
     assert connector.stats.qurls == 4
 
-    respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
+    bootstrap_route = respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -3869,8 +3974,10 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     bootstrap = client.bootstrap_agent(
         public_key="62cFrVBeF1Tl7lUAJ9MNa9lFykVf6D7mNqLaEYggFN0=",
         agent_id="prod-us-east-1",
+        idempotency_key="idem-bootstrap",
     )
     assert bootstrap.nhp_server_peer.port == 62206
+    assert bootstrap_route.calls[0].request.headers["idempotency-key"] == "idem-bootstrap"
 
 
 @respx.mock
@@ -3893,6 +4000,44 @@ def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> 
     assert customer.current_period_usage_count == 0
     assert customer.frozen is False
     assert customer.frozen_reason == "manual"
+
+
+@respx.mock
+def test_invoice_list_tolerates_non_dict_payload(client: QURLClient) -> None:
+    respx.get(f"{BASE_URL}/v1/billing/invoices").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    invoices = client.list_billing_invoices()
+    assert invoices.invoices == []
+
+
+@respx.mock
+def test_billing_session_methods_send_idempotency(client: QURLClient) -> None:
+    checkout_route = respx.post(f"{BASE_URL}/v1/billing/checkout").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://checkout.stripe.com/c/pay/cs_test"}},
+        )
+    )
+    portal_route = respx.post(f"{BASE_URL}/v1/billing/portal").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"url": "https://billing.stripe.com/p/session/test"}},
+        )
+    )
+
+    assert (
+        client.create_billing_checkout(
+            plan="growth",
+            idempotency_key="idem-checkout",
+        ).url
+        == "https://checkout.stripe.com/c/pay/cs_test"
+    )
+    assert client.create_billing_portal(idempotency_key="idem-portal").url == (
+        "https://billing.stripe.com/p/session/test"
+    )
+    assert checkout_route.calls[0].request.headers["idempotency-key"] == "idem-checkout"
+    assert portal_route.calls[0].request.headers["idempotency-key"] == "idem-portal"
 
 
 def test_idempotency_key_validation(client: QURLClient) -> None:
@@ -3934,3 +4079,55 @@ async def test_async_resource_scoped_mint_parity(async_client: AsyncQURLClient) 
 
     assert route.calls[0].request.headers["idempotency-key"] == "idem-async-resource"
     assert result.branded_domain == "async.example.com"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_public_redeem_omits_auth_and_sends_idempotency() -> None:
+    client = AsyncQURLClient(base_url=BASE_URL, max_retries=0)
+    route = respx.post(f"{BASE_URL}/v1/access-codes/redeem").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"redirect_url": "https://qurl.link/#at_async_code"}},
+        )
+    )
+
+    try:
+        redeem = await client.redeem_access_code(
+            "ac_async",
+            idempotency_key="idem-async-redeem",
+        )
+    finally:
+        await client.close()
+
+    assert redeem.redirect_url == "https://qurl.link/#at_async_code"
+    assert "authorization" not in route.calls[0].request.headers
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-async-redeem"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_update_customer_sends_idempotency(
+    async_client: AsyncQURLClient,
+) -> None:
+    route = respx.patch(f"{BASE_URL}/v1/customer").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tier": "growth",
+                    "spending_cap_cents": 5000,
+                    "current_period_usage": 7,
+                    "frozen": False,
+                },
+            },
+        )
+    )
+
+    customer = await async_client.update_customer(
+        spending_cap_cents=5000,
+        idempotency_key="idem-async-customer",
+    )
+
+    assert customer.current_period_usage_count == 7
+    assert route.calls[0].request.headers["idempotency-key"] == "idem-async-customer"

@@ -328,7 +328,7 @@ class Domain:
 
     domain: str
     status: str
-    verification_token: str | None = None
+    verification_token: str | None = field(default=None, repr=False)
     token_expires_at: datetime | None = None
     acme_cname_target: str | None = None
     created_at: datetime | None = None
@@ -380,7 +380,7 @@ class Webhook:
     failure_count: int = 0
     last_delivery_success: bool | None = None
     last_delivery_time: int | None = None
-    secret: str | None = None
+    secret: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -452,7 +452,7 @@ class APIKey:
     expires_at: datetime | None = None
     purpose: str | None = None
     tunnel_slug: str | None = None
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -486,7 +486,7 @@ class AccessCode:
     use_count: int = 0
     created_at: datetime | None = None
     expires_at: datetime | None = None
-    code: str | None = None
+    code: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -541,14 +541,14 @@ class Customer:
 
     tier: QuotaPlan
     spending_cap_cents: int
-    current_period_usage: int
+    current_period_usage_count: int
     frozen: bool
     frozen_reason: str | None = None
 
     @property
-    def current_period_usage_count(self) -> int:
-        """Usage count in the current billing period."""
-        return self.current_period_usage
+    def current_period_usage(self) -> int:
+        """Compatibility alias for the current-period usage count."""
+        return self.current_period_usage_count
 
 
 @dataclass

@@ -322,9 +322,11 @@ def validate_update_input(
     *,
     description: str | None = None,
     tags: list[str] | None = None,
+    custom_domain: str | None = None,
 ) -> None:
     """Validate update_qurl input against spec-documented constraints."""
     _require_max_length(description, "description", MAX_DESCRIPTION)
+    _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
     _require_valid_tags(tags)
 
 
@@ -804,7 +806,7 @@ def parse_customer(data: dict[str, Any]) -> Customer:
     return Customer(
         tier=data.get("tier", "unknown"),
         spending_cap_cents=data.get("spending_cap_cents", 0),
-        current_period_usage=data.get("current_period_usage", 0),
+        current_period_usage_count=data.get("current_period_usage", 0),
         frozen=data.get("frozen", False),
         frozen_reason=data.get("frozen_reason"),
     )
@@ -821,10 +823,12 @@ def parse_portal_session(data: dict[str, Any]) -> PortalSession:
 
 
 def parse_invoice_list_output(
-    data: dict[str, Any], meta: dict[str, Any] | None
+    data: Any, meta: dict[str, Any] | None
 ) -> InvoiceListOutput:
     """Parse billing invoice list output."""
     next_cursor, has_more = _meta_page(meta)
+    raw_invoices = data.get("invoices") if isinstance(data, dict) else None
+    invoice_items = raw_invoices if isinstance(raw_invoices, list) else []
     invoices = [
         Invoice(
             id=item["id"],
@@ -833,7 +837,7 @@ def parse_invoice_list_output(
             created_at=_parse_dt(item.get("created_at")),
             pdf_url=item.get("pdf_url"),
         )
-        for item in data.get("invoices", [])
+        for item in invoice_items
     ]
     return InvoiceListOutput(invoices=invoices, next_cursor=next_cursor, has_more=has_more)
 

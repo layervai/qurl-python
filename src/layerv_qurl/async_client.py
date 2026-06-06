@@ -164,7 +164,7 @@ class AsyncQURLClient:
 
     def __repr__(self) -> str:
         api_key = mask_key(self._api_key) if self._api_key is not None else None
-        return f"AsyncQURLClient(api_key='{api_key}', base_url='{self._base_url}')"
+        return f"AsyncQURLClient(api_key={api_key!r}, base_url='{self._base_url}')"
 
     async def close(self) -> None:
         """Close the underlying HTTP client (only if owned by this instance)."""
@@ -631,7 +631,9 @@ class AsyncQURLClient:
         # not documented by convention at every call site.
         return parse_batch_create_output(resp)
 
-    async def resolve(self, access_token: str) -> ResolveOutput:
+    async def resolve(
+        self, access_token: str, *, idempotency_key: str | None = None
+    ) -> ResolveOutput:
         """Resolve a qURL access token (headless).
 
         Triggers an NHP knock to open firewall access for the caller's IP.
@@ -641,7 +643,12 @@ class AsyncQURLClient:
             access_token: The access token string (e.g. ``"at_k8xqp9h2sj9lx7r4a"``).
         """
         validate_id(access_token, "access_token")
-        resp = await self._request("POST", "/v1/resolve", body={"access_token": access_token})
+        resp = await self._request(
+            "POST",
+            "/v1/resolve",
+            body={"access_token": access_token},
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_resolve_output(resp)
 
     async def get_quota(self) -> Quota:
@@ -686,8 +693,14 @@ class AsyncQURLClient:
         alias: str | None = None,
         slug: str | None = None,
         find_or_create: bool | None = None,
+        idempotency_key: str | None = None,
     ) -> Resource:
         """Create or find a resource."""
+        if target_url is not None:
+            validate_create_input(target_url=target_url, custom_domain=custom_domain)
+        validate_update_input(
+            description=description, tags=tags, custom_domain=custom_domain
+        )
         body = build_body(
             {
                 "type": resource_type,
@@ -700,7 +713,12 @@ class AsyncQURLClient:
                 "find_or_create": find_or_create,
             }
         )
-        resp = await self._request("POST", "/v1/resources", body=body)
+        resp = await self._request(
+            "POST",
+            "/v1/resources",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_resource(resp)
 
     async def get_resource(self, resource_id: str) -> ResourceDetail:
@@ -718,9 +736,13 @@ class AsyncQURLClient:
         custom_domain: str | None = None,
         preserve_host: bool | None = None,
         alias: str | None | _UnsetType = UNSET,
+        idempotency_key: str | None = None,
     ) -> Resource:
         """Update resource metadata."""
         validate_id(resource_id)
+        validate_update_input(
+            description=description, tags=tags, custom_domain=custom_domain
+        )
         body = build_body(
             {
                 "description": description,
@@ -736,7 +758,12 @@ class AsyncQURLClient:
                 "update_resource: at least one field (description, tags, "
                 "custom_domain, preserve_host, alias) must be provided"
             )
-        resp = await self._request("PATCH", f"/v1/resources/{resource_id}", body=body)
+        resp = await self._request(
+            "PATCH",
+            f"/v1/resources/{resource_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_resource(resp)
 
     async def delete_resource(self, resource_id: str) -> None:
@@ -812,6 +839,7 @@ class AsyncQURLClient:
         access_policy: AccessPolicy | None = None,
         max_sessions: int | None = None,
         session_duration: str | None = None,
+        idempotency_key: str | None = None,
     ) -> AccessToken:
         """Update a specific qURL token on a resource."""
         validate_id(resource_id)
@@ -841,6 +869,7 @@ class AsyncQURLClient:
             "PATCH",
             f"/v1/resources/{resource_id}/qurls/{qurl_id}",
             body=body,
+            headers=idempotency_headers(idempotency_key),
         )
         return parse_access_token(resp)
 
@@ -907,17 +936,25 @@ class AsyncQURLClient:
         """Remove a custom-domain registration."""
         await self._request("DELETE", f"/v1/domains/{quote(domain, safe='')}")
 
-    async def verify_domain(self, domain: str) -> DomainVerifyOutput:
+    async def verify_domain(
+        self, domain: str, *, idempotency_key: str | None = None
+    ) -> DomainVerifyOutput:
         """Trigger DNS verification for a custom domain."""
         resp = await self._request(
-            "POST", f"/v1/domains/{quote(domain, safe='')}/verify"
+            "POST",
+            f"/v1/domains/{quote(domain, safe='')}/verify",
+            headers=idempotency_headers(idempotency_key),
         )
         return parse_domain_verify_output(resp)
 
-    async def regenerate_domain_token(self, domain: str) -> Domain:
+    async def regenerate_domain_token(
+        self, domain: str, *, idempotency_key: str | None = None
+    ) -> Domain:
         """Regenerate a custom-domain verification token."""
         resp = await self._request(
-            "POST", f"/v1/domains/{quote(domain, safe='')}/regenerate-token"
+            "POST",
+            f"/v1/domains/{quote(domain, safe='')}/regenerate-token",
+            headers=idempotency_headers(idempotency_key),
         )
         return parse_domain(resp)
 
@@ -976,6 +1013,7 @@ class AsyncQURLClient:
         events: Sequence[str] | None = None,
         description: str | None = None,
         status: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Webhook:
         """Update a webhook subscription."""
         validate_id(webhook_id, "webhook_id")
@@ -992,7 +1030,12 @@ class AsyncQURLClient:
                 "update_webhook: at least one field (url, events, description, "
                 "status) must be provided"
             )
-        resp = await self._request("PATCH", f"/v1/webhooks/{webhook_id}", body=body)
+        resp = await self._request(
+            "PATCH",
+            f"/v1/webhooks/{webhook_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_webhook(resp)
 
     async def delete_webhook(self, webhook_id: str) -> None:
@@ -1000,10 +1043,16 @@ class AsyncQURLClient:
         validate_id(webhook_id, "webhook_id")
         await self._request("DELETE", f"/v1/webhooks/{webhook_id}")
 
-    async def regenerate_webhook_secret(self, webhook_id: str) -> Webhook:
+    async def regenerate_webhook_secret(
+        self, webhook_id: str, *, idempotency_key: str | None = None
+    ) -> Webhook:
         """Regenerate a webhook signing secret."""
         validate_id(webhook_id, "webhook_id")
-        resp = await self._request("POST", f"/v1/webhooks/{webhook_id}/secret")
+        resp = await self._request(
+            "POST",
+            f"/v1/webhooks/{webhook_id}/secret",
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_webhook(resp)
 
     async def list_webhook_deliveries(
@@ -1078,11 +1127,17 @@ class AsyncQURLClient:
         *,
         name: str | None = None,
         scopes: Sequence[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> APIKey:
         """Update API key name or scopes. JWT auth is required by the API."""
         validate_id(key_id, "key_id")
         body = build_body({"name": name, "scopes": list(scopes) if scopes is not None else None})
-        resp = await self._request("PATCH", f"/v1/api-keys/{key_id}", body=body)
+        resp = await self._request(
+            "PATCH",
+            f"/v1/api-keys/{key_id}",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_api_key(resp)
 
     async def revoke_api_key(self, key_id: str) -> None:
@@ -1098,10 +1153,16 @@ class AsyncQURLClient:
         *,
         honeypot: str = "",
         elapsed_ms: int | None = None,
+        idempotency_key: str | None = None,
     ) -> RedeemAccessCodeOutput:
         """Redeem a public access code and return its redirect URL."""
         body = build_body({"code": code, "honeypot": honeypot, "elapsed_ms": elapsed_ms})
-        resp = await self._request("POST", "/v1/access-codes/redeem", body=body)
+        resp = await self._request(
+            "POST",
+            "/v1/access-codes/redeem",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_redeem_access_code_output(resp)
 
     async def create_access_code(
@@ -1158,23 +1219,39 @@ class AsyncQURLClient:
         resp = await self._request("GET", "/v1/customer")
         return parse_customer(resp)
 
-    async def update_customer(self, *, spending_cap_cents: int) -> Customer:
+    async def update_customer(
+        self, *, spending_cap_cents: int, idempotency_key: str | None = None
+    ) -> Customer:
         """Update customer billing settings. JWT auth is required by the API."""
         resp = await self._request(
             "PATCH",
             "/v1/customer",
             body={"spending_cap_cents": spending_cap_cents},
+            headers=idempotency_headers(idempotency_key),
         )
         return parse_customer(resp)
 
-    async def create_billing_checkout(self, *, plan: str) -> CheckoutSession:
+    async def create_billing_checkout(
+        self, *, plan: str, idempotency_key: str | None = None
+    ) -> CheckoutSession:
         """Create a Stripe checkout session. JWT auth is required by the API."""
-        resp = await self._request("POST", "/v1/billing/checkout", body={"plan": plan})
+        resp = await self._request(
+            "POST",
+            "/v1/billing/checkout",
+            body={"plan": plan},
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_checkout_session(resp)
 
-    async def create_billing_portal(self) -> PortalSession:
+    async def create_billing_portal(
+        self, *, idempotency_key: str | None = None
+    ) -> PortalSession:
         """Create a Stripe billing portal session. JWT auth is required by the API."""
-        resp = await self._request("POST", "/v1/billing/portal")
+        resp = await self._request(
+            "POST",
+            "/v1/billing/portal",
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_portal_session(resp)
 
     async def list_billing_invoices(
@@ -1206,6 +1283,7 @@ class AsyncQURLClient:
         agent_id: str | None = None,
         hostname: str | None = None,
         version: str | None = None,
+        idempotency_key: str | None = None,
     ) -> AgentBootstrapOutput:
         """Bootstrap a LayerV qURL Connector agent."""
         body = build_body(
@@ -1216,7 +1294,12 @@ class AsyncQURLClient:
                 "version": version,
             }
         )
-        resp = await self._request("POST", "/v1/agent/bootstrap", body=body)
+        resp = await self._request(
+            "POST",
+            "/v1/agent/bootstrap",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
         return parse_agent_bootstrap_output(resp)
 
     # --- Internal HTTP plumbing ---
