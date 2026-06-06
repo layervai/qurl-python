@@ -68,9 +68,10 @@ Some resource-list responses intentionally omit `target_url` for redacted
 resource types. Treat `QURL.target_url` as `str | None` before formatting or
 parsing it.
 
-Mutating methods that expose `idempotency_key` only send the header when you
-provide one. Pass a stable key for create/mint/bootstrap/billing calls when you
-need retry-safe behavior across server-processed timeouts.
+POST methods generate a per-call `Idempotency-Key` when you do not provide one
+and reuse it across the client's internal retries. Pass a stable
+`idempotency_key` when you need retry-safe behavior across your own retry loop,
+process restart, or job replay.
 
 ## Async Usage
 

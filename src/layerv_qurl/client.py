@@ -26,6 +26,7 @@ from layerv_qurl._utils import (
     build_string_list,
     default_user_agent,
     domain_path_segment,
+    ensure_post_idempotency,
     idempotency_headers,
     logger,
     mask_key,
@@ -1114,7 +1115,10 @@ class QURLClient:
             "POST",
             "/v1/api-keys",
             body=body,
-            headers=idempotency_headers(idempotency_key, min_length=32),
+            headers=idempotency_headers(
+                idempotency_key,
+                min_length=32,  # API-key issuance uses a higher entropy floor.
+            ),
         )
         return parse_api_key(resp)
 
@@ -1182,6 +1186,7 @@ class QURLClient:
             "/v1/access-codes/redeem",
             body=body,
             headers=idempotency_headers(idempotency_key),
+            include_auth=False,
         )
         return parse_redeem_access_code_output(resp)
 
@@ -1339,6 +1344,7 @@ class QURLClient:
         params: dict[str, str] | None = None,
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
+        include_auth: bool = True,
     ) -> Any:
         return self._raw_request(
             method,
@@ -1347,6 +1353,7 @@ class QURLClient:
             params=params,
             allow_statuses=allow_statuses,
             headers=headers,
+            include_auth=include_auth,
         )[0]
 
     def _raw_request(
@@ -1358,6 +1365,7 @@ class QURLClient:
         params: dict[str, str] | None = None,
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
+        include_auth: bool = True,
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
 
@@ -1394,8 +1402,11 @@ class QURLClient:
         url = f"{self._base_url}{path}"
         last_error: Exception | None = None
         request_headers = dict(self._base_headers)
+        if not include_auth:
+            request_headers.pop("Authorization", None)
         if headers:
             request_headers.update(headers)
+        ensure_post_idempotency(method, request_headers)
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0:

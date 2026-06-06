@@ -21,6 +21,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote
+from uuid import uuid4
 
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -234,6 +235,15 @@ def idempotency_headers(
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in idempotency_key):
         raise ValueError("idempotency_key: must not contain control characters")
     return {"Idempotency-Key": idempotency_key}
+
+
+def ensure_post_idempotency(method: str, headers: dict[str, str]) -> None:
+    """Generate a per-call idempotency key for POST requests that need retries."""
+    if method.upper() != "POST":
+        return
+    if any(key.lower() == "idempotency-key" for key in headers):
+        return
+    headers["Idempotency-Key"] = str(uuid4())
 
 
 def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:
@@ -636,6 +646,8 @@ def _parse_dns_record(data: dict[str, Any]) -> DNSRecord:
     )
 
 
+# Object identity fields stay strict so malformed rows fail at the parser,
+# while ancillary fields use defaults for partial-payload tolerance.
 def parse_domain(data: dict[str, Any]) -> Domain:
     """Parse a custom domain response."""
     return Domain(

@@ -995,11 +995,10 @@ async def test_async_retry_after_http_date_falls_back_to_exponential_backoff() -
 
 
 # --- POST retry safety ---
-# POST is non-idempotent (create() might actually hit the DB even if the
-# response is 5xx), so the client deliberately restricts POST retries to
-# {429} only — retrying a 5xx on a create request risks duplicate records.
-# These tests lock that decision in so a future refactor that naively
-# unifies retry sets across methods will trip the guard.
+# POSTs carry an idempotency key across internal retries, but the client still
+# deliberately restricts POST status-code retries to {429}. These tests lock
+# that decision in so a future refactor that naively unifies retry sets across
+# methods will trip the guard.
 
 
 @respx.mock
@@ -1042,6 +1041,9 @@ def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
 
     assert result.resource_id == "r_abc123def45"
     assert route.call_count == 2
+    first_key = route.calls[0].request.headers["idempotency-key"]
+    assert first_key == route.calls[1].request.headers["idempotency-key"]
+    assert len(first_key) == 36
 
 
 @respx.mock
@@ -1062,6 +1064,7 @@ async def test_async_post_does_not_retry_on_503() -> None:
 
         assert exc_info.value.status == 503
         assert route.call_count == 1
+        assert len(route.calls[0].request.headers["idempotency-key"]) == 36
     finally:
         await client.close()
 
@@ -4005,6 +4008,9 @@ def test_account_billing_connector_agent_and_public_access_code_contracts() -> N
     no_auth_client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef", honeypot="bot")
     explicit_honeypot_body = json.loads(redeem_route.calls[1].request.content)
     assert explicit_honeypot_body["honeypot"] == "bot"
+
+    client.redeem_access_code("ac_k8xqp9h2sj9lx7r4abcdef")
+    assert "authorization" not in redeem_route.calls[2].request.headers
 
     respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
         return_value=httpx.Response(
