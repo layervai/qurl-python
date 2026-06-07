@@ -14,7 +14,7 @@ Python SDK for the [qURL™ API](https://docs.layerv.ai) — secure, time-limite
 AI agents need to access APIs, databases, and internal tools — but permanent credentials are a security risk. qURL creates **time-limited, auditable access links** that automatically expire:
 
 - **Time-limited** — links expire after minutes, hours, or days
-- **IP-scoped** — firewall opens only for the requesting IP via NHP
+- **IP-scoped** — access is granted only to the requesting IP via NHP
 - **Auditable** — every access is logged with who, when, and from where
 - **Revocable** — kill access instantly if something goes wrong
 
@@ -45,7 +45,7 @@ result = client.create(
 )
 print(result.qurl_link)  # Share this link
 
-# Resolve a token (opens firewall for your IP)
+# Resolve a token (grants network access for your IP)
 access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 print(f"Access granted to {access.target_url} for {access.access_grant.expires_in}s")
 

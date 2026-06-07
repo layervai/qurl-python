@@ -61,11 +61,11 @@ class CreateQURLTool(BaseTool):
 
 
 class ResolveQURLTool(BaseTool):
-    """Resolve a qURL access token to open firewall access."""
+    """Resolve a qURL access token to grant network access."""
 
     name: str = "resolve_qurl"
     description: str = (
-        "Resolve a qURL access token to gain firewall access to the protected resource. "
+        "Resolve a qURL access token to gain network access to the protected resource. "
         "Input should be the access token string (e.g. 'at_k8xqp9h2sj9lx7r4a')."
     )
     client: Any = None
