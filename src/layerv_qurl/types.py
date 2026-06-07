@@ -150,7 +150,7 @@ class MintOutput:
 
 @dataclass
 class AccessGrant:
-    """Details of the firewall access that was granted."""
+    """Details of the network access that was granted."""
 
     expires_in: int
     granted_at: datetime | None = None

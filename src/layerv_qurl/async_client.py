@@ -641,7 +641,7 @@ class AsyncQURLClient:
     ) -> ResolveOutput:
         """Resolve a qURL access token (headless).
 
-        Triggers an NHP knock to open firewall access for the caller's IP.
+        Triggers an NHP knock to grant network access for the caller's IP.
         Requires ``qurl:resolve`` scope on the API key.
 
         Args:

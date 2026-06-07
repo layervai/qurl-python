@@ -140,7 +140,7 @@ class QURLClient:
         # Create a protected link
         result = client.create(target_url="https://example.com", expires_in="24h")
 
-        # Resolve an access token (opens firewall for your IP)
+        # Resolve an access token (grants network access for your IP)
         access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 
         # Extend a qURL's expiration
@@ -655,7 +655,7 @@ class QURLClient:
     ) -> ResolveOutput:
         """Resolve a qURL access token (headless).
 
-        Triggers an NHP knock to open firewall access for the caller's IP.
+        Triggers an NHP knock to grant network access for the caller's IP.
         Requires ``qurl:resolve`` scope on the API key.
 
         Args:
