@@ -15,13 +15,15 @@ import functools
 import logging
 import random
 import re
+import secrets
+import time
+import uuid
 from collections.abc import Iterable, Mapping, Set
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote
-from uuid import uuid4
 
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -105,10 +107,11 @@ RETRYABLE_STATUS = {429, 502, 503, 504}
 # POST requests still only retry rate limits: resolve can consume one-time
 # tokens after an NHP knock failure, and service errors are not cached.
 RETRYABLE_STATUS_POST = {429}
-# DELETE keeps the wider HTTP retry set without an idempotency key because
-# repeated deletes are safe by HTTP semantics; create/update mutations need
-# service-side replay protection.
-IDEMPOTENCY_METHODS = {"POST", "PATCH"}
+# POST/PATCH, plus any future PUT endpoints from the API contract, carry a
+# qurl-service replay key so retried writes are tied to one logical operation.
+# DELETE keeps the wider HTTP retry set without a key because repeated deletes
+# are safe by HTTP semantics.
+IDEMPOTENCY_METHODS = {"POST", "PUT", "PATCH"}
 
 _RESOURCE_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
@@ -253,7 +256,25 @@ def ensure_mutation_idempotency(method: str, headers: dict[str, str]) -> None:
         return
     if any(key.lower() == "idempotency-key" for key in headers):
         return
-    headers["Idempotency-Key"] = str(uuid4())
+    headers["Idempotency-Key"] = _uuid7()
+
+
+def _uuid7() -> str:
+    """Generate a UUIDv7 string for Python versions before stdlib uuid7.
+
+    The random fields are for uniqueness, not monotonic ordering.
+    """
+    timestamp_ms = time.time_ns() // 1_000_000
+    rand_a = secrets.randbits(12)
+    rand_b = secrets.randbits(62)
+    value = (
+        (timestamp_ms << 80)
+        | (0x7 << 76)
+        | (rand_a << 64)
+        | (0b10 << 62)
+        | rand_b
+    )
+    return str(uuid.UUID(int=value))
 
 
 def _meta_page(meta: dict[str, Any] | None) -> tuple[str | None, bool]:

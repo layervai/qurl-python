@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
 import httpx
 import pytest
 import respx
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
 
 from layerv_qurl import (
     AsyncQURLClient,
@@ -1106,6 +1107,36 @@ def test_post_still_retries_on_429(retry_client: QURLClient) -> None:
 
 
 @respx.mock
+def test_post_network_retry_reuses_auto_idempotency_key(
+    retry_client: QURLClient,
+) -> None:
+    route = respx.post(f"{BASE_URL}/v1/qurls")
+    route.side_effect = [
+        httpx.ConnectError("connection reset"),
+        httpx.Response(
+            201,
+            json={
+                "data": {
+                    "resource_id": "r_abc123def45",
+                    "qurl_link": "https://qurl.link/#at_test",
+                    "qurl_site": "https://r_abc123def45.qurl.site",
+                    "qurl_id": "q_abc",
+                },
+            },
+        ),
+    ]
+
+    with patch("layerv_qurl.client.time.sleep"):
+        result = retry_client.create(target_url="https://example.com", expires_in="24h")
+
+    assert result.resource_id == "r_abc123def45"
+    assert route.call_count == 2
+    first_key = route.calls[0].request.headers["idempotency-key"]
+    assert first_key == route.calls[1].request.headers["idempotency-key"]
+    assert len(first_key) == 36
+
+
+@respx.mock
 def test_auto_idempotency_applies_to_supported_mutations(client: QURLClient) -> None:
     quota_route = respx.get(f"{BASE_URL}/v1/quota").mock(
         return_value=httpx.Response(200, json=_QUOTA_OK)
@@ -1133,6 +1164,19 @@ def test_auto_idempotency_applies_to_supported_mutations(client: QURLClient) -> 
     assert "idempotency-key" not in quota_route.calls[0].request.headers
     assert len(customer_route.calls[0].request.headers["idempotency-key"]) == 36
     assert "idempotency-key" not in webhook_route.calls[0].request.headers
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH"])
+def test_ensure_mutation_idempotency_generates_uuid7_for_supported_methods(
+    method: str,
+) -> None:
+    headers: dict[str, str] = {}
+
+    ensure_mutation_idempotency(method, headers)
+
+    parsed = uuid.UUID(headers["Idempotency-Key"])
+    assert parsed.version == 7
+    assert parsed.variant == uuid.RFC_4122
 
 
 def test_ensure_mutation_idempotency_preserves_explicit_header() -> None:
@@ -1231,6 +1275,42 @@ async def test_async_patch_retry_reuses_auto_idempotency_key() -> None:
         assert len(first_key) == 36
         assert json.loads(route.calls[0].request.content) == {"extend_by": "7d"}
         assert json.loads(route.calls[1].request.content) == {"extend_by": "7d"}
+    finally:
+        await client.close()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_post_network_retry_reuses_auto_idempotency_key() -> None:
+    client = AsyncQURLClient(api_key="lv_live_test", base_url=BASE_URL, max_retries=2)
+    try:
+        route = respx.post(f"{BASE_URL}/v1/qurls")
+        route.side_effect = [
+            httpx.ConnectError("connection reset"),
+            httpx.Response(
+                201,
+                json={
+                    "data": {
+                        "resource_id": "r_async",
+                        "qurl_link": "https://qurl.link/#at_async",
+                        "qurl_site": "https://r_async.qurl.site",
+                        "qurl_id": "q_async",
+                    },
+                },
+            ),
+        ]
+
+        with patch("layerv_qurl.async_client.asyncio.sleep"):
+            result = await client.create(
+                target_url="https://example.com",
+                expires_in="24h",
+            )
+
+        assert result.resource_id == "r_async"
+        assert route.call_count == 2
+        first_key = route.calls[0].request.headers["idempotency-key"]
+        assert first_key == route.calls[1].request.headers["idempotency-key"]
+        assert len(first_key) == 36
     finally:
         await client.close()
 
