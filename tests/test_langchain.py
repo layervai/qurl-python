@@ -99,8 +99,12 @@ def test_resolve_qurl_tool_no_grant() -> None:
     tool = ResolveQURLTool(client=client)
     result = tool._run(access_token="at_k8xqp9h2sj9lx7r4a")
 
-    assert "<redacted>" in result
-    assert "r_abc123def45" in result
+    assert result == "\n".join(
+        [
+            "Resolved: <redacted>",
+            "Resource: r_abc123def45",
+        ]
+    )
 
 
 def test_list_qurls_tool() -> None:
@@ -152,8 +156,7 @@ def test_delete_qurl_tool() -> None:
     tool = DeleteQURLTool(client=client)
     result = tool._run(resource_id="r_abc123def45")
 
-    assert "r_abc123def45" in result
-    assert "revoked" in result
+    assert result == "qURL r_abc123def45 has been revoked."
     client.delete.assert_called_once_with("r_abc123def45")
 
 
