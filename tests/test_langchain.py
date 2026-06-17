@@ -36,23 +36,47 @@ def _mock_client() -> MagicMock:
 
 def test_create_qurl_tool() -> None:
     client = _mock_client()
+    expires_at = datetime(2026, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
     client.create.return_value = CreateOutput(
         resource_id="r_abc123def45",
         qurl_link="https://qurl.link/#at_test",
         qurl_site="https://r_abc123def45.qurl.site",
-        expires_at=datetime(2026, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
+        expires_at=expires_at,
     )
 
     tool = CreateQURLTool(client=client)
     result = tool._run(target_url="https://example.com", expires_in="24h")
 
-    assert result == "\n".join(
-        [
-            "Created qURL r_abc123def45",
-            "Link: https://qurl.link/#at_test",
-            "Site: https://r_abc123def45.qurl.site",
-            "Expires: 2026-03-15 10:00:00+00:00",
-        ]
+    assert result == (
+        "Created qURL r_abc123def45\n"
+        "Link: https://qurl.link/#at_test\n"
+        "Site: https://r_abc123def45.qurl.site\n"
+        f"Expires: {expires_at}"
+    )
+    client.create.assert_called_once_with(
+        target_url="https://example.com",
+        expires_in="24h",
+        label=None,
+    )
+
+
+def test_create_qurl_tool_no_expiration() -> None:
+    client = _mock_client()
+    client.create.return_value = CreateOutput(
+        resource_id="r_abc123def45",
+        qurl_link="https://qurl.link/#at_test",
+        qurl_site="https://r_abc123def45.qurl.site",
+        expires_at=None,
+    )
+
+    tool = CreateQURLTool(client=client)
+    result = tool._run(target_url="https://example.com", expires_in="24h")
+
+    assert result == (
+        "Created qURL r_abc123def45\n"
+        "Link: https://qurl.link/#at_test\n"
+        "Site: https://r_abc123def45.qurl.site\n"
+        "Expires: N/A"
     )
     client.create.assert_called_once_with(
         target_url="https://example.com",
@@ -76,13 +100,11 @@ def test_resolve_qurl_tool() -> None:
     tool = ResolveQURLTool(client=client)
     result = tool._run(access_token="at_k8xqp9h2sj9lx7r4a")
 
-    assert result == "\n".join(
-        [
-            "Resolved: https://api.example.com/data",
-            "Resource: r_abc123def45",
-            "Access expires in: 305s",
-            "Granted to IP: 203.0.113.42",
-        ]
+    assert result == (
+        "Resolved: https://api.example.com/data\n"
+        "Resource: r_abc123def45\n"
+        "Access expires in: 305s\n"
+        "Granted to IP: 203.0.113.42"
     )
     # resolve() now takes a plain string
     client.resolve.assert_called_once_with("at_k8xqp9h2sj9lx7r4a")
@@ -99,16 +121,12 @@ def test_resolve_qurl_tool_no_grant() -> None:
     tool = ResolveQURLTool(client=client)
     result = tool._run(access_token="at_k8xqp9h2sj9lx7r4a")
 
-    assert result == "\n".join(
-        [
-            "Resolved: <redacted>",
-            "Resource: r_abc123def45",
-        ]
-    )
+    assert result == "Resolved: <redacted>\nResource: r_abc123def45"
 
 
 def test_list_qurls_tool() -> None:
     client = _mock_client()
+    expires_at = datetime(2026, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
     client.list.return_value = ListOutput(
         qurls=[
             QURL(
@@ -116,7 +134,7 @@ def test_list_qurls_tool() -> None:
                 target_url="https://example.com",
                 status="active",
                 created_at=datetime(2026, 3, 10, 10, 0, 0, tzinfo=timezone.utc),
-                expires_at=datetime(2026, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
+                expires_at=expires_at,
             ),
             QURL(
                 resource_id="r_tunnel12345",
@@ -130,11 +148,10 @@ def test_list_qurls_tool() -> None:
     tool = ListQURLsTool(client=client)
     result = tool._run(status="active", limit=10)
 
-    assert result == "\n".join(
-        [
-            "- r_abc123def45: https://example.com [active] expires=2026-03-15 10:00:00+00:00",
-            "- r_tunnel12345: <redacted> [active] expires=None",
-        ]
+    assert result == (
+        "- r_abc123def45: https://example.com [active] "
+        f"expires={expires_at}\n"
+        "- r_tunnel12345: <redacted> [active] expires=N/A"
     )
     client.list.assert_called_once_with(status="active", limit=10)
 
