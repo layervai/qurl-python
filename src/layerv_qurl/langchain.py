@@ -107,7 +107,8 @@ class ListQURLsTool(BaseTool):
         lines = []
         for q in result.qurls:
             target = q.target_url or "<redacted>"
-            lines.append(f"- {q.resource_id}: {target} [{q.status}] expires={q.expires_at}")
+            expires = q.expires_at or "N/A"
+            lines.append(f"- {q.resource_id}: {target} [{q.status}] expires={expires}")
         return "\n".join(lines)
 
 
