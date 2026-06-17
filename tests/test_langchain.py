@@ -46,8 +46,14 @@ def test_create_qurl_tool() -> None:
     tool = CreateQURLTool(client=client)
     result = tool._run(target_url="https://example.com", expires_in="24h")
 
-    assert "r_abc123def45" in result
-    assert "https://qurl.link/#at_test" in result
+    assert result == "\n".join(
+        [
+            "Created qURL r_abc123def45",
+            "Link: https://qurl.link/#at_test",
+            "Site: https://r_abc123def45.qurl.site",
+            "Expires: 2026-03-15 10:00:00+00:00",
+        ]
+    )
     client.create.assert_called_once_with(
         target_url="https://example.com",
         expires_in="24h",
@@ -70,9 +76,14 @@ def test_resolve_qurl_tool() -> None:
     tool = ResolveQURLTool(client=client)
     result = tool._run(access_token="at_k8xqp9h2sj9lx7r4a")
 
-    assert "https://api.example.com/data" in result
-    assert "305" in result
-    assert "203.0.113.42" in result
+    assert result == "\n".join(
+        [
+            "Resolved: https://api.example.com/data",
+            "Resource: r_abc123def45",
+            "Access expires in: 305s",
+            "Granted to IP: 203.0.113.42",
+        ]
+    )
     # resolve() now takes a plain string
     client.resolve.assert_called_once_with("at_k8xqp9h2sj9lx7r4a")
 
@@ -115,9 +126,12 @@ def test_list_qurls_tool() -> None:
     tool = ListQURLsTool(client=client)
     result = tool._run(status="active", limit=10)
 
-    assert "r_abc123def45" in result
-    assert "https://example.com" in result
-    assert "r_tunnel12345: <redacted>" in result
+    assert result == "\n".join(
+        [
+            "- r_abc123def45: https://example.com [active] expires=2026-03-15 10:00:00+00:00",
+            "- r_tunnel12345: <redacted> [active] expires=None",
+        ]
+    )
     client.list.assert_called_once_with(status="active", limit=10)
 
 
