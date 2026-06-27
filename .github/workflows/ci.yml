@@ -53,131 +53,20 @@ jobs:
       - name: Run mypy
         run: mypy src/
 
-  # ============================================================================
-  # NOTIFY - Send Slack notification on build completion
-  # ============================================================================
+  # Slack build-completion card. Thin shim over the fleet-shared reusable
+  # in layervai/ops-routines-workflows (public mirror of private
+  # layervai/ops-routines); the curl/jq Block Kit payload builder and the
+  # gate-result aggregation live there now. Adding/removing a gate is a
+  # one-line edit to `needs:` + `gates:` here — no aggregation if-chain.
   notify:
     name: Notify
     needs: [test, type-check]
     if: always() && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    continue-on-error: true
-    steps:
-      - name: Notify Slack
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TEST_RESULT: ${{ needs.test.result }}
-          TYPE_CHECK_RESULT: ${{ needs.type-check.result }}
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-          # All github context moved to env to prevent script injection
-          # via crafted branch names or actor names containing shell metacharacters.
-          GH_SERVER_URL: ${{ github.server_url }}
-          GH_REPOSITORY: ${{ github.repository }}
-          GH_RUN_ID: ${{ github.run_id }}
-          GH_SHA: ${{ github.sha }}
-          GH_REF_NAME: ${{ github.ref_name }}
-          GH_ACTOR: ${{ github.actor }}
-          GH_EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [[ -z "$SLACK_WEBHOOK" ]]; then
-            echo "SLACK_WEBHOOK_URL not configured, skipping notification"
-            exit 0
-          fi
-
-          WORKFLOW_URL="${GH_SERVER_URL}/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}"
-          SHORT_SHA="${GH_SHA:0:7}"
-          COMMIT_URL="${GH_SERVER_URL}/${GH_REPOSITORY}/commit/${GH_SHA}"
-
-          # Determine trigger source
-          TRIGGER="$GH_EVENT_NAME"
-          case "$TRIGGER" in
-            push)
-              if echo "$COMMIT_MESSAGE" | head -n1 | grep -q "Merge pull request"; then
-                TRIGGER_TEXT="PR merge"
-              else
-                TRIGGER_TEXT="Push"
-              fi
-              ;;
-            workflow_dispatch) TRIGGER_TEXT="Manual" ;;
-            *) TRIGGER_TEXT="$TRIGGER" ;;
-          esac
-
-          # Aggregate status across both gates (test matrix + mypy). A
-          # mypy failure is a red build even if every python matrix leg
-          # passed, so the Slack message must reflect the worst of the two.
-          if [[ "$TEST_RESULT" == "success" && "$TYPE_CHECK_RESULT" == "success" ]]; then
-            AGGREGATE="success"
-          elif [[ "$TEST_RESULT" == "failure" || "$TYPE_CHECK_RESULT" == "failure" ]]; then
-            AGGREGATE="failure"
-          elif [[ "$TEST_RESULT" == "cancelled" || "$TYPE_CHECK_RESULT" == "cancelled" ]]; then
-            AGGREGATE="cancelled"
-          else
-            AGGREGATE="incomplete"
-          fi
-
-          # Determine status
-          if [[ "$AGGREGATE" == "success" ]]; then
-            COLOR="#36a64f"; EMOJI="white_check_mark"
-            HEADER="qURL Python SDK Build"; STATUS_TEXT="successful"
-          elif [[ "$AGGREGATE" == "failure" ]]; then
-            COLOR="#dc3545"; EMOJI="x"
-            HEADER="qURL Python SDK Build"; STATUS_TEXT="failed"
-          elif [[ "$AGGREGATE" == "cancelled" ]]; then
-            COLOR="#ffc107"; EMOJI="warning"
-            HEADER="qURL Python SDK Build"; STATUS_TEXT="cancelled"
-          else
-            COLOR="#ffc107"; EMOJI="warning"
-            HEADER="qURL Python SDK"; STATUS_TEXT="incomplete"
-          fi
-
-          # Determine per-gate emoji so the Slack message shows which
-          # gate failed when the aggregate is red.
-          case "$TEST_RESULT" in
-            success) TEST_EMOJI=":white_check_mark:" ;;
-            failure) TEST_EMOJI=":x:" ;;
-            *) TEST_EMOJI=":warning:" ;;
-          esac
-          case "$TYPE_CHECK_RESULT" in
-            success) TYPE_CHECK_EMOJI=":white_check_mark:" ;;
-            failure) TYPE_CHECK_EMOJI=":x:" ;;
-            *) TYPE_CHECK_EMOJI=":warning:" ;;
-          esac
-
-          # Extract first line of commit message (safe for any content)
-          FIRST_LINE=$(echo "$COMMIT_MESSAGE" | head -n1 | cut -c1-100)
-
-          # Build payload with jq — handles all JSON escaping automatically.
-          # Shell string concatenation broke on commit messages with special chars.
-          PAYLOAD=$(jq -n \
-            --arg color "$COLOR" \
-            --arg emoji "$EMOJI" \
-            --arg header "$HEADER" \
-            --arg status "$STATUS_TEXT" \
-            --arg branch "$GH_REF_NAME" \
-            --arg sha "$SHORT_SHA" \
-            --arg trigger "$TRIGGER_TEXT" \
-            --arg actor "$GH_ACTOR" \
-            --arg test_emoji "$TEST_EMOJI" \
-            --arg type_check_emoji "$TYPE_CHECK_EMOJI" \
-            --arg commit "$FIRST_LINE" \
-            --arg commit_url "$COMMIT_URL" \
-            --arg workflow_url "$WORKFLOW_URL" \
-            '{attachments: [{color: $color, blocks: [
-              {type: "section", text: {type: "mrkdwn", text: (":\($emoji): *\($header)* \($status)")}},
-              {type: "section", fields: [
-                {type: "mrkdwn", text: ("*Branch:*\n`\($branch)` (\($sha))")},
-                {type: "mrkdwn", text: ("*Trigger:*\n\($trigger) by \($actor)")},
-                {type: "mrkdwn", text: ("*Tests:*\n\($test_emoji)")},
-                {type: "mrkdwn", text: ("*Type check:*\n\($type_check_emoji)")},
-                {type: "mrkdwn", text: "*Python:*\n3.10, 3.12, 3.13"}
-              ]},
-              {type: "section", text: {type: "mrkdwn", text: ("*Commit:* `\($commit)`")}},
-              {type: "context", elements: [
-                {type: "mrkdwn", text: ("<\($commit_url)|\($sha)>  |  <\($workflow_url)|View workflow>")}
-              ]}
-            ]}]}')
-
-          curl -sfS -X POST "$SLACK_WEBHOOK" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" || echo "Slack notification failed (non-critical)"
+    permissions: {}
+    uses: layervai/ops-routines-workflows/.github/workflows/notify.yml@1536c698add5777aa08c781bc674d1eba469b32d # v0.9.0
+    with:
+      header: "qURL Python SDK Build"
+      gates: '{"Tests": "${{ needs.test.result }}", "Type check": "${{ needs.type-check.result }}"}'
+      extra_fields: '{"Python": "3.10, 3.12, 3.13"}'
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
