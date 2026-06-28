@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.1](https://github.com/layervai/qurl-python/compare/v0.2.0...v0.2.1) (2026-06-28)
+
+
+### Bug Fixes
+
+* rename PyPI distribution to qurl-python ([#89](https://github.com/layervai/qurl-python/issues/89)) ([7f44987](https://github.com/layervai/qurl-python/commit/7f449873ce0cd32a26bc6b9b68848d3393e29740))
+* use UUIDv7 idempotency keys for retries ([#79](https://github.com/layervai/qurl-python/issues/79)) ([400e197](https://github.com/layervai/qurl-python/commit/400e1971644b82e2101f44975250d2d8fc519ff6))
+
+
+### Documentation
+
+* drop "firewall" terminology ([#74](https://github.com/layervai/qurl-python/issues/74)) ([337632a](https://github.com/layervai/qurl-python/commit/337632aad5b708df14a4293ac58272822b187fed))
+
 ## [0.2.0](https://github.com/layervai/qurl-python/compare/v0.1.0...v0.2.0) (2026-06-06)
 
 
