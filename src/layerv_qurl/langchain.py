@@ -1,6 +1,6 @@
 """LangChain tool integration for qURL.
 
-Install with: pip install layerv-qurl[langchain]
+Install with: pip install qurl-python[langchain]
 """
 
 from __future__ import annotations
@@ -145,7 +145,7 @@ class QURLToolkit:
         if not _HAS_LANGCHAIN:
             raise ImportError(
                 "langchain-core is required for LangChain integration. "
-                "Install with: pip install layerv-qurl[langchain]"
+                "Install with: pip install qurl-python[langchain]"
             )
         self.client = client
 

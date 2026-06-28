@@ -1,6 +1,6 @@
 """Tests for the LangChain tool integration.
 
-Requires the ``langchain`` extra: ``pip install layerv-qurl[langchain]``.
+Requires the ``langchain`` extra: ``pip install qurl-python[langchain]``.
 All tests are skipped when ``langchain-core`` is not installed.
 """
 

@@ -156,6 +156,6 @@ __all__ = [
 ]
 
 try:
-    __version__ = _pkg_version("layerv-qurl")
+    __version__ = _pkg_version("qurl-python")
 except PackageNotFoundError:
     __version__ = "dev"

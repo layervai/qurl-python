@@ -1,8 +1,8 @@
-# layerv-qurl
+# qurl-python
 
-[![PyPI](https://img.shields.io/pypi/v/layerv-qurl)](https://pypi.org/project/layerv-qurl/)
+[![PyPI](https://img.shields.io/pypi/v/qurl-python)](https://pypi.org/project/qurl-python/)
 [![CI](https://github.com/layervai/qurl-python/actions/workflows/ci.yml/badge.svg)](https://github.com/layervai/qurl-python/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/pypi/pyversions/layerv-qurl)](https://pypi.org/project/layerv-qurl/)
+[![Python](https://img.shields.io/pypi/pyversions/qurl-python)](https://pypi.org/project/qurl-python/)
 [![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
 
 Python SDK for the [qURL™ API](https://docs.layerv.ai) — secure, time-limited access links for AI agents.
@@ -21,13 +21,13 @@ AI agents need to access APIs, databases, and internal tools — but permanent c
 ## Installation
 
 ```bash
-pip install layerv-qurl
+pip install qurl-python
 ```
 
 For LangChain integration:
 
 ```bash
-pip install layerv-qurl[langchain]
+pip install qurl-python[langchain]
 ```
 
 ## Quick Start
