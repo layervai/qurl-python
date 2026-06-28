@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to `layerv-qurl`!
+Thanks for your interest in contributing to `qurl-python`!
 
 ## Development Setup
 

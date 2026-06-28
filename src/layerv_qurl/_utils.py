@@ -138,7 +138,7 @@ UNSET = UnsetType()
 def default_user_agent() -> str:
     """Return the default User-Agent string, caching the version lookup."""
     try:
-        v = _pkg_version("layerv-qurl")
+        v = _pkg_version("qurl-python")
     except PackageNotFoundError:
         v = "dev"
     return f"qurl-python-sdk/{v}"
