@@ -346,17 +346,18 @@ class QURLClient:
                 non-resource id is not rejected client-side; it reaches
                 the mint endpoint and fails there.
             valid_for: How long the link stays valid — a duration string
-                (``"5m"``, ``"24h"``) or :class:`datetime.timedelta`
-                (whole seconds, at least one minute). Omit to use the
-                API default lifetime.
+                (``"5m"``, ``"24h"``) or :class:`datetime.timedelta`. A
+                timedelta must be whole seconds and **at least one minute**.
+                Omit to use the API default lifetime.
             label: Human-readable label for the link. Max length 500.
             one_time_use: If True, the link expires after its first
                 successful use.
             max_sessions: Concurrent session limit. 0 is sent explicitly
                 and means unlimited; omit to keep the server default.
-            session_duration: How long access lasts after the link is
-                opened — duration string or timedelta (whole seconds, at
-                least one second).
+            session_duration: How long access lasts *after* the link is
+                opened (a different knob from ``valid_for``) — a duration
+                string or timedelta. A timedelta must be whole seconds and
+                **at least one second**.
             idempotency_key: Optional idempotency key for safe retries.
 
         Raises:

@@ -771,6 +771,15 @@ def require_connector_resource(
     return exactly one resource, and its alias must equal the connector
     id. Raises the portal surface's client-detected errors (``status=0``)
     otherwise — see :meth:`QURLClient.connector_resource` for the mapping.
+
+    ASSUMPTION: ``resources`` is the complete result set for the slug —
+    ``slug`` is an exact, unique server-side filter, so a connector maps
+    to at most one resource. This is the same contract qurl-go relies on;
+    the caller passes a single ``list_resources(slug=...)`` page and does
+    not paginate. If ``slug`` ever became a non-exact (prefix/substring)
+    filter whose matches could span pages, the ``len > 1`` ambiguity guard
+    below could be evaded and this lookup would need to page through the
+    full set.
     """
     if not resources:
         raise NotFoundError(
@@ -898,6 +907,11 @@ def extract_access_token(qurl_link: str) -> str:
     """
     if not isinstance(qurl_link, str) or not qurl_link.strip():
         raise ValueError("qurl_link: must be a non-empty string")
+    # The platform fragment is exactly the token (qurl-service builds
+    # links as ``https://<domain>/#<tokenID>`` with nothing appended), so
+    # the whole fragment is the token. If links ever grew fragment
+    # parameters (``#at_xxx&ref=...``), this would need to parse the token
+    # out of the fragment rather than equate them.
     token = qurl_link.split("#", 1)[1] if "#" in qurl_link else qurl_link
     if _SIGNED_FRAGMENT_RE.match(token):
         raise ValueError(

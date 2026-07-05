@@ -8,6 +8,9 @@
 **Use the LayerV [qURL™ Platform](https://docs.layerv.ai) from Python: protect a
 private URL once, then mint short-lived portal links for it.**
 
+LayerV hosts qURL; your app keeps a tiny surface area: protect the URL, create a
+portal for the returned resource, and share the link.
+
 > **Quantum URL (qURL)** · The internet has a hidden layer. This is how you enter.
 
 Portal recipients do not need LayerV credentials, API keys, or SDK state. They
@@ -21,10 +24,14 @@ internal tools. The issue is visibility: every standing public endpoint becomes
 inventory for scanners, fingerprinting, credential attacks, and AI-assisted
 probing before a legitimate user or agent ever arrives.
 
-qURL flips that model. The private resource is not public inventory. A portal
-is **cryptographic, just-in-time permission for one actor to reach one private
-resource** — not another externally visible endpoint in front of the same
-service:
+Opening an inbound port, running a VPN, shipping a bastion, publishing a
+Cloudflare Tunnel or ngrok URL, or passing around a long-lived key all leave
+something durable to find, scan, or steal. qURL flips that model. It is an
+**invisibility primitive for authenticated access**, not another externally
+visible endpoint in front of the same service. The private resource is not
+public inventory. A portal is **cryptographic, just-in-time permission for one
+actor to reach one private resource** — without turning that resource into
+public inventory:
 
 - **Time-limited** — portals expire after minutes, hours, or days
 - **IP-scoped** — access is granted only to the requesting IP via NHP
