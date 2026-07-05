@@ -338,6 +338,27 @@ def test_valid_for_duration_grammar(
     assert json.loads(mint.calls[0].request.content) == {"expires_in": expected}
 
 
+@respx.mock
+def test_valid_for_string_bypasses_timedelta_floor(client: QURLClient) -> None:
+    """A below-minimum *string* is passed through; the floor is timedelta-only.
+
+    Pins the documented asymmetry: ``timedelta(seconds=30)`` is rejected
+    client-side, but ``"30s"`` is sent verbatim for the server to judge
+    (matching mint_link's expires_in). Keep these two behaviors aligned
+    with the create_portal docstring.
+    """
+    mint = respx.post(f"{BASE_URL}/v1/resources/r_abc123def45/qurls").mock(
+        return_value=httpx.Response(201, json={"data": _PORTAL_DATA})
+    )
+
+    client.create_portal("r_abc123def45", valid_for="30s")
+    assert json.loads(mint.calls[0].request.content) == {"expires_in": "30s"}
+
+    # The timedelta form of the same duration is rejected before any request.
+    with pytest.raises(ValueError, match="valid_for: must be at least 60s"):
+        client.create_portal("r_abc123def45", valid_for=timedelta(seconds=30))
+
+
 # --- connector_resource ---
 
 

@@ -347,8 +347,12 @@ class QURLClient:
                 the mint endpoint and fails there.
             valid_for: How long the link stays valid — a duration string
                 (``"5m"``, ``"24h"``) or :class:`datetime.timedelta`. A
-                timedelta must be whole seconds and **at least one minute**.
-                Omit to use the API default lifetime.
+                timedelta must be whole seconds and **at least one minute**;
+                the one-minute floor is a client-side guardrail on the
+                timedelta form only — a duration **string** is passed to
+                the server as-is and validated there (matching
+                :meth:`mint_link`'s ``expires_in``). Omit to use the API
+                default lifetime.
             label: Human-readable label for the link. Max length 500.
             one_time_use: If True, the link expires after its first
                 successful use.
@@ -357,7 +361,8 @@ class QURLClient:
             session_duration: How long access lasts *after* the link is
                 opened (a different knob from ``valid_for``) — a duration
                 string or timedelta. A timedelta must be whole seconds and
-                **at least one second**.
+                **at least one second** (again a guardrail on the timedelta
+                form only; strings pass through to the server).
             idempotency_key: Optional idempotency key for safe retries.
 
         Raises:
@@ -458,6 +463,12 @@ class QURLClient:
         and needs no LayerV credentials), this SDK opens links through
         the LayerV API: the client needs an API key with the
         ``qurl:resolve`` scope. REST-shaped equivalent: :meth:`resolve`.
+
+        Opening is **not a free, idempotent read**: the knock is a side
+        effect (it opens IP access) and can consume a one-time-use
+        portal. ``idempotency_key`` is threaded through to make a single
+        logical open retry-safe, but do not treat repeated
+        ``enter_portal`` calls as cheap polling.
 
         Raises:
             ValueError: If no access token can be extracted from
