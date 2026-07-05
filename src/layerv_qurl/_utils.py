@@ -718,10 +718,17 @@ def validate_portal_target_url(target_url: str) -> None:
     The portal verbs mirror qurl-go's ``ProtectURL`` guardrails: http(s)
     scheme, a host, and no userinfo. The REST-shaped compatibility layer
     keeps its original prefix-only check so its accepted inputs don't
-    change. Error messages never echo the URL — a userinfo URL contains
-    credentials that must stay out of logs and tracebacks.
+    change.
+
+    A userinfo URL contains credentials that must stay out of logs and
+    tracebacks, so the userinfo check runs FIRST with a non-echoing error
+    — before ``_require_http_url``, which echoes its input. Otherwise a
+    credentialed URL with a bad scheme (``ftp://user:pass@host``) would
+    leak the password through the scheme error before ever reaching the
+    userinfo branch.
     """
-    _require_http_url(target_url, "target_url")
+    if not isinstance(target_url, str) or not target_url.strip():
+        raise ValueError("target_url: must be a non-empty string")
     try:
         parts = urlsplit(target_url)
         # Accessed inside the try: .hostname can also raise ValueError
@@ -730,9 +737,14 @@ def validate_portal_target_url(target_url: str) -> None:
     except ValueError:
         raise ValueError("target_url: malformed URL") from None
     if username is not None or password is not None:
+        # Reject credentials before any echoing validator sees the URL.
         raise ValueError(
             "target_url: must not include embedded credentials (userinfo)"
         )
+    # Safe to echo now: the URL carries no userinfo. This enforces the
+    # http(s) scheme and length and gives a helpful (input-echoing) error
+    # for credential-free malformed URLs.
+    _require_http_url(target_url, "target_url")
     if not hostname:
         raise ValueError("target_url: must include a host")
 
@@ -907,6 +919,8 @@ def extract_access_token(qurl_link: str) -> str:
     """
     if not isinstance(qurl_link, str) or not qurl_link.strip():
         raise ValueError("qurl_link: must be a non-empty string")
+    # Tolerate surrounding whitespace/newlines from a copy-paste.
+    qurl_link = qurl_link.strip()
     # The platform fragment is exactly the token (qurl-service builds
     # links as ``https://<domain>/#<tokenID>`` with nothing appended), so
     # the whole fragment is the token. If links ever grew fragment

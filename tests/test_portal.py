@@ -119,6 +119,27 @@ def test_protect_url_rejects_embedded_credentials(client: QURLClient) -> None:
         client.protect_url("https://alice@internal.example.com/dashboard")
 
 
+def test_protect_url_credentials_not_echoed_even_with_bad_scheme(
+    client: QURLClient,
+) -> None:
+    """A credentialed URL with a non-http scheme must not leak the password.
+
+    The userinfo check runs before the (echoing) scheme check, so
+    ``ftp://user:pass@host`` is rejected as embedded credentials without
+    the password reaching the error message.
+    """
+    with pytest.raises(ValueError, match="embedded credentials") as exc_info:
+        client.protect_url("ftp://alice:hunter2@internal.example.com")
+    assert "hunter2" not in str(exc_info.value)
+    assert "alice" not in str(exc_info.value)
+
+
+def test_protect_url_rejects_credential_free_bad_scheme(client: QURLClient) -> None:
+    """A credential-free bad scheme still gets the helpful scheme error."""
+    with pytest.raises(ValueError, match="target_url"):
+        client.protect_url("ftp://internal.example.com")
+
+
 def test_protect_url_rejects_hostless_url(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="must include a host"):
         client.protect_url("https:///dashboard")
@@ -444,6 +465,20 @@ def test_enter_portal_with_bare_token(client: QURLClient) -> None:
     assert handle.open_seconds == 305
 
 
+@respx.mock
+def test_enter_portal_strips_pasted_whitespace(client: QURLClient) -> None:
+    """A token/link pasted with a trailing newline still resolves."""
+    route = respx.post(f"{BASE_URL}/v1/resolve").mock(
+        return_value=httpx.Response(200, json={"data": _RESOLVE_DATA})
+    )
+
+    handle = client.enter_portal("  https://qurl.link/#at_k8xqp9h2sj9lx7r4a\n")
+    assert json.loads(route.calls[0].request.content) == {
+        "access_token": "at_k8xqp9h2sj9lx7r4a"
+    }
+    assert handle.resource_url == "https://internal.example.com/dashboard"
+
+
 def test_enter_portal_rejects_tokenless_link(client: QURLClient) -> None:
     """Unusable links raise without echoing the input (links are credentials)."""
     with pytest.raises(ValueError, match="no access token found"):
@@ -595,6 +630,28 @@ async def test_async_create_portal_guardrails(async_client: AsyncQURLClient) -> 
         await resource.create_portal(valid_for=timedelta(seconds=30))
     with pytest.raises(ValueError, match="label: must not be empty"):
         await resource.create_portal(label="")
+
+
+def test_async_resource_by_id_rejects_invalid_id(
+    async_client: AsyncQURLClient,
+) -> None:
+    """resource_by_id validates the id on the async client too (not a coroutine)."""
+    with pytest.raises(ValueError, match="Invalid resource_id"):
+        async_client.resource_by_id("../../admin")
+
+
+@respx.mock
+async def test_async_connector_resource_ambiguous(
+    async_client: AsyncQURLClient,
+) -> None:
+    second = {**_RESOURCE_DATA, "resource_id": "r_other9999999"}
+    respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
+        return_value=httpx.Response(200, json={"data": [_RESOURCE_DATA, second]})
+    )
+
+    with pytest.raises(QURLError) as exc_info:
+        await async_client.connector_resource("prod-dashboard")
+    assert exc_info.value.code == "ambiguous_resource"
 
 
 @respx.mock
