@@ -877,6 +877,14 @@ _SIGNED_FRAGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2,}$")
 # stable — but leave the length open so a future token-length change
 # doesn't make the SDK reject links the platform still mints. This is a
 # cheap "looks like a token" sanity check; the server stays authoritative.
+#
+# INVARIANT: this pattern must stay a strict subset of ``_RESOURCE_ID_RE``.
+# ``enter_portal`` validates the extracted token here (a non-echoing error)
+# and then hands it to ``resolve`` → ``validate_id``, whose error DOES echo
+# the value. As long as anything matching this pattern also matches
+# ``_RESOURCE_ID_RE``, that echoing check never fires on the enter_portal
+# path, so a credential can't leak into a ``validate_id`` error. Loosening
+# this charset beyond ``_RESOURCE_ID_RE`` would reopen that leak.
 _ACCESS_TOKEN_RE = re.compile(r"^at_[a-z0-9_-]+$")
 
 
