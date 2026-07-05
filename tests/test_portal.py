@@ -215,6 +215,12 @@ def test_create_portal_without_options_sends_empty_body(client: QURLClient) -> N
     assert json.loads(mint.calls[0].request.content) == {}
 
 
+def test_resource_by_id_rejects_invalid_id(client: QURLClient) -> None:
+    """resource_by_id validates the id before returning a handle."""
+    with pytest.raises(ValueError, match="Invalid resource_id"):
+        client.resource_by_id("../../admin")
+
+
 @respx.mock
 def test_create_portal_fails_closed_on_malformed_response(client: QURLClient) -> None:
     """A mint response without identity fields raises a typed error, not KeyError."""
@@ -571,6 +577,24 @@ async def test_async_create_portal_for_url(async_client: AsyncQURLClient) -> Non
     }
     assert portal.resource_id == "r_abc123def45"
     assert resource.id == "r_abc123def45"
+
+
+async def test_async_create_portal_for_url_rejects_embedded_credentials(
+    async_client: AsyncQURLClient,
+) -> None:
+    with pytest.raises(ValueError, match="embedded credentials"):
+        await async_client.create_portal_for_url(
+            "https://bob:secret@internal.example.com"
+        )
+
+
+async def test_async_create_portal_guardrails(async_client: AsyncQURLClient) -> None:
+    """The async client applies the same client-side option guardrails."""
+    resource = async_client.resource_by_id("r_abc123def45")
+    with pytest.raises(ValueError, match="valid_for: must be at least 60s"):
+        await resource.create_portal(valid_for=timedelta(seconds=30))
+    with pytest.raises(ValueError, match="label: must not be empty"):
+        await resource.create_portal(label="")
 
 
 @respx.mock

@@ -871,12 +871,13 @@ def parse_portal(data: dict[str, Any]) -> Portal:
 # future-versioned signed links — only to give them a precise error below
 # (a bare access token never contains a dot, so there's no overlap).
 _SIGNED_FRAGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2,}$")
-# Access tokens carry the stable ``at_`` prefix. The charset and length
-# stay permissive (the server enforces the exact ``^at_[a-z0-9_-]{22}$``
-# form) so a future token-length change doesn't make the SDK reject links
-# the platform still mints — this is only a cheap "looks like a token"
-# sanity check, matching the SDK's server-is-authoritative posture.
-_ACCESS_TOKEN_RE = re.compile(r"^at_[A-Za-z0-9_-]+$")
+# Access tokens carry the stable ``at_`` prefix and a lowercase
+# base64url-ish charset (the server enforces the exact
+# ``^at_[a-z0-9_-]{22}$`` form). We pin the prefix and charset — both
+# stable — but leave the length open so a future token-length change
+# doesn't make the SDK reject links the platform still mints. This is a
+# cheap "looks like a token" sanity check; the server stays authoritative.
+_ACCESS_TOKEN_RE = re.compile(r"^at_[a-z0-9_-]+$")
 
 
 def extract_access_token(qurl_link: str) -> str:
