@@ -149,6 +149,25 @@ class MintOutput:
 
 
 @dataclass
+class Portal:
+    """A qURL link minted for a protected resource.
+
+    A portal is cryptographic, just-in-time permission for one actor to
+    reach one private resource. ``link`` is the shareable qURL link;
+    recipients open it directly and need no LayerV credentials.
+
+    Mirrors ``qurl.Portal`` in qurl-go.
+    """
+
+    resource_id: str
+    link: str
+    site: str | None = None
+    expires_at: datetime | None = None
+    qurl_id: str | None = None
+    label: str | None = None
+
+
+@dataclass
 class AccessGrant:
     """Details of the network access that was granted."""
 
@@ -164,6 +183,21 @@ class ResolveOutput:
     target_url: str | None
     resource_id: str
     access_grant: AccessGrant | None = None
+
+
+@dataclass
+class ResourceHandle:
+    """Result of a successful ``enter_portal``: the reachable resource.
+
+    Carries the reachable resource URL and the access lifetime reported
+    by qURL (``open_seconds`` is 0 when the API does not report one).
+    ``resource_id`` is populated by this SDK's API-backed opener; the
+    field does not exist on qurl-go's offline ``ResourceHandle``.
+    """
+
+    resource_url: str
+    open_seconds: int = 0
+    resource_id: str | None = None
 
 
 @dataclass

@@ -19,11 +19,11 @@ import secrets
 import time
 import uuid
 from collections.abc import Iterable, Mapping, Set
-from datetime import datetime
+from datetime import datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -69,6 +69,7 @@ from layerv_qurl.types import (
     ListOutput,
     MintOutput,
     NHPServerPeerInfo,
+    Portal,
     PortalSession,
     Quota,
     RateLimits,
@@ -76,6 +77,7 @@ from layerv_qurl.types import (
     ResolveOutput,
     Resource,
     ResourceDetail,
+    ResourceHandle,
     ResourceListOutput,
     Session,
     SessionListOutput,
@@ -656,6 +658,265 @@ def parse_resolve_output(data: dict[str, Any]) -> ResolveOutput:
         target_url=data.get("target_url"),
         resource_id=data["resource_id"],
         access_grant=_parse_access_grant(data.get("access_grant")),
+    )
+
+
+# ---- Portal verbs (mirrors qurl-go) --------------------------------------
+# Shared by client.py and async_client.py so the portal surface stays in
+# lockstep between the sync and async clients and with qurl-go's
+# client-side option guardrails.
+
+#: Client-side floor for portal lifetimes, mirroring qurl-go's ``ValidFor``.
+#: The LayerV API remains the source of truth for account limits; there is
+#: intentionally no SDK-side maximum.
+MIN_PORTAL_VALID_FOR_SECONDS = 60
+#: Client-side floor for session durations, mirroring qurl-go's
+#: ``WithSessionDuration`` (at least one second; zero is rejected rather
+#: than treated as the server default).
+MIN_SESSION_DURATION_SECONDS = 1
+
+
+def serialize_api_duration(
+    value: str | timedelta | None, *, field_name: str, minimum_seconds: int
+) -> str | None:
+    """Serialize a duration option to the API's h/m/s duration grammar.
+
+    Strings pass through unvalidated — the server is authoritative, same
+    as the REST-shaped ``expires_in`` fields. :class:`~datetime.timedelta`
+    values get qurl-go's client-side guardrails: whole seconds only and at
+    least ``minimum_seconds``. Serialized with hours as the largest unit
+    so all API duration fields use the same grammar across SDKs.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError(f"{field_name}: must be a non-empty duration string")
+        return value
+    if isinstance(value, timedelta):
+        total = value.total_seconds()
+        # Minimum before whole-seconds, matching qurl-go's check order so
+        # e.g. 30.5s reports "at least 60s" in both SDKs.
+        if total < minimum_seconds:
+            raise ValueError(f"{field_name}: must be at least {minimum_seconds}s")
+        seconds = int(total)
+        if seconds != total:
+            raise ValueError(f"{field_name}: must be whole seconds")
+        if seconds % 3600 == 0:
+            return f"{seconds // 3600}h"
+        if seconds % 60 == 0:
+            return f"{seconds // 60}m"
+        return f"{seconds}s"
+    raise ValueError(
+        f"{field_name}: must be a duration string (e.g. '5m') or datetime.timedelta"
+    )
+
+
+def validate_portal_target_url(target_url: str) -> None:
+    """Reject malformed target URLs and embedded credentials (qurl-go parity).
+
+    The portal verbs mirror qurl-go's ``ProtectURL`` guardrails: http(s)
+    scheme, a host, and no userinfo. The REST-shaped compatibility layer
+    keeps its original prefix-only check so its accepted inputs don't
+    change. Error messages never echo the URL — a userinfo URL contains
+    credentials that must stay out of logs and tracebacks.
+    """
+    _require_http_url(target_url, "target_url")
+    try:
+        parts = urlsplit(target_url)
+        # Accessed inside the try: .hostname can also raise ValueError
+        # for malformed netlocs (e.g. unbalanced IPv6 brackets).
+        username, password, hostname = parts.username, parts.password, parts.hostname
+    except ValueError:
+        raise ValueError("target_url: malformed URL") from None
+    if username is not None or password is not None:
+        raise ValueError(
+            "target_url: must not include embedded credentials (userinfo)"
+        )
+    if not hostname:
+        raise ValueError("target_url: must include a host")
+
+
+def build_protect_body(
+    *,
+    target_url: str,
+    description: str | None,
+    tags: list[str] | None,
+    custom_domain: str | None,
+    alias: str | None,
+) -> dict[str, Any]:
+    """Validate protect-url inputs and build the create-resource request body."""
+    validate_portal_target_url(target_url)
+    validate_update_input(
+        description=description, tags=tags, custom_domain=custom_domain
+    )
+    validate_alias(alias)
+    return build_body(
+        {
+            "target_url": target_url,
+            "description": description,
+            "tags": tags,
+            "custom_domain": custom_domain,
+            "alias": alias,
+        }
+    )
+
+
+def require_connector_resource(
+    resources: list[Resource], connector_id: str
+) -> Resource:
+    """Select the single alias-matching resource from a connector lookup.
+
+    Mirrors qurl-go's ``ConnectorResource`` checks: the slug lookup must
+    return exactly one resource, and its alias must equal the connector
+    id. Raises the portal surface's client-detected errors (``status=0``)
+    otherwise — see :meth:`QURLClient.connector_resource` for the mapping.
+    """
+    if not resources:
+        raise NotFoundError(
+            status=0,
+            code="resource_not_found",
+            title="Resource Not Found",
+            detail=f"connector_resource: no resource found for connector {connector_id!r}",
+        )
+    if len(resources) > 1:
+        raise QURLError(
+            status=0,
+            code="ambiguous_resource",
+            title="Ambiguous Resource",
+            detail=(
+                f"connector_resource: connector {connector_id!r} returned "
+                f"{len(resources)} resources"
+            ),
+        )
+    resource = resources[0]
+    if resource.alias != connector_id:
+        raise ValidationError(
+            status=0,
+            code="unexpected_response",
+            title="Unexpected Response",
+            detail=(
+                f"connector_resource: connector {connector_id!r} returned a "
+                "resource with a missing or different alias"
+            ),
+        )
+    return resource
+
+
+def build_portal_body(
+    *,
+    valid_for: str | timedelta | None,
+    label: str | None,
+    one_time_use: bool | None,
+    max_sessions: int | None,
+    session_duration: str | timedelta | None,
+) -> dict[str, Any]:
+    """Validate portal options and build a create-portal request body."""
+    # qurl-go's WithLabel rejects empty labels; the REST-shaped mint_link
+    # keeps its permissive behavior, so the check lives here rather than
+    # in validate_mint_input.
+    if label is not None and not label.strip():
+        raise ValueError("label: must not be empty")
+    validate_mint_input(label=label, max_sessions=max_sessions)
+    return build_body(
+        {
+            "expires_in": serialize_api_duration(
+                valid_for,
+                field_name="valid_for",
+                minimum_seconds=MIN_PORTAL_VALID_FOR_SECONDS,
+            ),
+            "label": label,
+            "one_time_use": one_time_use,
+            "max_sessions": max_sessions,
+            "session_duration": serialize_api_duration(
+                session_duration,
+                field_name="session_duration",
+                minimum_seconds=MIN_SESSION_DURATION_SECONDS,
+            ),
+        }
+    )
+
+
+def parse_portal(data: dict[str, Any]) -> Portal:
+    """Parse a Portal from a create-portal API response.
+
+    Fails closed like qurl-go when the response lacks its identity
+    fields — a portal without a resource id or link is not actionable.
+    Everything else is optional because the two mint endpoints differ in
+    which ancillary fields they return.
+    """
+    resource_id = data.get("resource_id")
+    qurl_link = data.get("qurl_link")
+    if not resource_id or not qurl_link:
+        raise ValidationError(
+            status=0,
+            code="unexpected_response",
+            title="Unexpected Response",
+            detail="create portal: API response is missing resource_id or qurl_link",
+        )
+    return Portal(
+        resource_id=resource_id,
+        link=qurl_link,
+        site=data.get("qurl_site"),
+        expires_at=_parse_dt(data.get("expires_at")),
+        # Same empty-string → None normalization as parse_create_output.
+        qurl_id=data.get("qurl_id") or None,
+        label=data.get("label"),
+    )
+
+
+# Shape of qurl-go's offline signed-fragment links: three or more
+# dot-separated base64url parts (<version>.<claims>.<secret>.<sig>).
+# Detected only to give those links a precise error below.
+_SIGNED_FRAGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2,}$")
+
+
+def extract_access_token(qurl_link: str) -> str:
+    """Extract the access token from a qURL link, or pass a bare token through.
+
+    Platform-issued links carry the access token in the URL fragment
+    (``https://qurl.link/#at_...``). Error messages deliberately do not
+    echo the input — qURL links are credentials and must stay out of
+    logs and tracebacks.
+    """
+    if not isinstance(qurl_link, str) or not qurl_link.strip():
+        raise ValueError("qurl_link: must be a non-empty string")
+    token = qurl_link.split("#", 1)[1] if "#" in qurl_link else qurl_link
+    if _SIGNED_FRAGMENT_RE.match(token):
+        raise ValueError(
+            "qurl_link: this is a signed qURL link (offline fragment format), "
+            "which cannot be opened through the API resolver — enter_portal "
+            "only accepts platform links (https://qurl.link/#at_...) or bare "
+            "access tokens"
+        )
+    if not token or not _RESOURCE_ID_RE.match(token):
+        raise ValueError(
+            "qurl_link: no access token found — pass a platform qURL link "
+            "(https://qurl.link/#at_...) or a bare access token"
+        )
+    return token
+
+
+def resource_handle_from_resolve(out: ResolveOutput) -> ResourceHandle:
+    """Map a ResolveOutput onto the portal-verb ResourceHandle.
+
+    Fails closed like qurl-go's ``EnterPortal``: a grant that carries no
+    resource URL is not actionable, so raise instead of handing back an
+    empty handle. Uses the same client-detected-failure convention as
+    the batch_create shape guard (``status=0``, ``unexpected_response``).
+    """
+    if not out.target_url:
+        raise ValidationError(
+            status=0,
+            code="unexpected_response",
+            title="Unexpected Response",
+            detail="enter_portal: access was granted but the API returned no resource URL",
+        )
+    open_seconds = out.access_grant.expires_in if out.access_grant else 0
+    return ResourceHandle(
+        resource_url=out.target_url,
+        open_seconds=open_seconds,
+        resource_id=out.resource_id,
     )
 
 

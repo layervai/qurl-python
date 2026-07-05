@@ -1,10 +1,16 @@
-"""qURL Python SDK — secure, time-limited access links for AI agents."""
+"""qURL Python SDK — protect a private URL once, then mint short-lived portal links for it.
+
+A portal is cryptographic, just-in-time permission for one actor to reach
+one private resource. Core flow: :meth:`QURLClient.protect_url` →
+:meth:`ProtectedResource.create_portal`; programmatic openers use
+:meth:`QURLClient.enter_portal`.
+"""
 
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
-from layerv_qurl.async_client import AsyncQURLClient
-from layerv_qurl.client import QURLClient
+from layerv_qurl.async_client import AsyncProtectedResource, AsyncQURLClient
+from layerv_qurl.client import ProtectedResource, QURLClient
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -52,6 +58,7 @@ from layerv_qurl.types import (
     ListOutput,
     MintOutput,
     NHPServerPeerInfo,
+    Portal,
     PortalSession,
     Quota,
     QuotaPlan,
@@ -61,6 +68,7 @@ from layerv_qurl.types import (
     ResolveOutput,
     Resource,
     ResourceDetail,
+    ResourceHandle,
     ResourceListOutput,
     ResourceType,
     Session,
@@ -80,7 +88,9 @@ from layerv_qurl.types import (
 )
 
 __all__ = [
+    "AsyncProtectedResource",
     "AsyncQURLClient",
+    "ProtectedResource",
     "QURLClient",
     # Errors
     "AuthenticationError",
@@ -121,12 +131,14 @@ __all__ = [
     "Invoice",
     "InvoiceListOutput",
     "NHPServerPeerInfo",
+    "Portal",
     "PortalSession",
     "QuotaPlan",
     "QURLStatus",
     "RedeemAccessCodeOutput",
     "Resource",
     "ResourceDetail",
+    "ResourceHandle",
     "ResourceListOutput",
     "ResourceType",
     "Session",
