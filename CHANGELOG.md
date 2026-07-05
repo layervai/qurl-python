@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/layervai/qurl-python/compare/v0.2.1...v0.2.2) (2026-07-05)
+
+
+### Features
+
+* add portal-verb API surface mirroring qurl-go ([#95](https://github.com/layervai/qurl-python/issues/95)) ([2b5c96d](https://github.com/layervai/qurl-python/commit/2b5c96d4c5deed6368cc088cf9a18b9e2e0ed18e))
+
 ## [0.2.1](https://github.com/layervai/qurl-python/compare/v0.2.0...v0.2.1) (2026-06-28)
 
 
