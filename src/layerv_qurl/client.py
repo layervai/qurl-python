@@ -22,11 +22,14 @@ from layerv_qurl._utils import (
     UnsetType,
     build_body,
     build_list_params,
+    build_portal_body,
+    build_protect_body,
     build_query_params,
     build_string_list,
     default_user_agent,
     domain_path_segment,
     ensure_mutation_idempotency,
+    extract_access_token,
     idempotency_headers,
     logger,
     mask_key,
@@ -50,6 +53,7 @@ from layerv_qurl._utils import (
     parse_invoice_list_output,
     parse_list_output,
     parse_mint_output,
+    parse_portal,
     parse_portal_session,
     parse_quota,
     parse_qurl,
@@ -64,8 +68,10 @@ from layerv_qurl._utils import (
     parse_webhook_delivery_list_output,
     parse_webhook_event_types_output,
     parse_webhook_list_output,
+    require_connector_resource,
     require_nonempty_update,
     require_resource_id_prefix,
+    resource_handle_from_resolve,
     retry_delay,
     validate_alias,
     validate_create_input,
@@ -73,6 +79,7 @@ from layerv_qurl._utils import (
     validate_id,
     validate_mint_input,
     validate_nonnegative_int,
+    validate_portal_target_url,
     validate_required_string,
     validate_update_input,
     validate_webhook_url,
@@ -86,7 +93,7 @@ if TYPE_CHECKING:
     # a TYPE_CHECKING block because it's only needed for type annotations.
     import builtins
     from collections.abc import Iterable, Iterator, Sequence
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from layerv_qurl.types import (
         QURL,
@@ -111,6 +118,7 @@ if TYPE_CHECKING:
         InvoiceListOutput,
         ListOutput,
         MintOutput,
+        Portal,
         PortalSession,
         Quota,
         QURLStatus,
@@ -118,6 +126,7 @@ if TYPE_CHECKING:
         ResolveOutput,
         Resource,
         ResourceDetail,
+        ResourceHandle,
         ResourceListOutput,
         SessionListOutput,
         SessionTerminateOutput,
@@ -137,19 +146,21 @@ class QURLClient:
 
         client = QURLClient(api_key="lv_live_xxx")
 
-        # Create a protected link
+        # Portal flow: protect a private URL once, then mint short-lived
+        # portal links for it. Recipients need no LayerV credentials.
+        resource = client.protect_url("https://internal.example.com/dashboard")
+        portal = resource.create_portal(valid_for="5m")
+        print(portal.link)  # Share this link
+
+        # Programmatic opener (requires the qurl:resolve scope)
+        handle = client.enter_portal(portal.link)
+        print(handle.resource_url)
+
+        # REST-shaped compatibility surface
         result = client.create(target_url="https://example.com", expires_in="24h")
-
-        # Resolve an access token (grants network access for your IP)
         access = client.resolve("at_k8xqp9h2sj9lx7r4a")
-
-        # Extend a qURL's expiration
         qurl = client.extend("r_xxx", "7d")
-
-        # Update metadata
         qurl = client.update("r_xxx", description="updated")
-
-        # Iterate all active qURLs
         for qurl in client.list_all(status="active"):
             print(qurl.resource_id)
 
@@ -204,6 +215,273 @@ class QURLClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
+    # --- Portal API (mirrors qurl-go: ProtectURL → CreatePortal → EnterPortal) ---
+
+    def protect_url(
+        self,
+        target_url: str,
+        *,
+        description: str | None = None,
+        tags: builtins.list[str] | None = None,
+        custom_domain: str | None = None,
+        alias: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> ProtectedResource:
+        """Protect a private URL — create or reuse its LayerV resource.
+
+        The first step of the portal flow (qurl-go: ``Client.ProtectURL``).
+        Protect the URL once, then mint short-lived links for it with
+        :meth:`ProtectedResource.create_portal`::
+
+            resource = client.protect_url("https://internal.example.com/dashboard")
+            portal = resource.create_portal(valid_for="5m")
+            share(portal.link)
+
+        Protecting the same target URL again returns the existing
+        resource. Malformed URLs and URLs with embedded credentials
+        (userinfo) are rejected before any request, mirroring qurl-go.
+        REST-shaped equivalent: :meth:`create_resource`.
+
+        Args:
+            target_url: The private URL to protect. Max length 2048.
+            description: Optional resource-level metadata. Max length 500.
+            tags: Optional resource-level tags. Max 10 items.
+            custom_domain: Custom domain already verified in LayerV.
+            alias: Owner-scoped handle for the resource.
+            idempotency_key: Optional idempotency key for safe retries.
+
+        Raises:
+            ValueError: If any field violates the documented API constraints.
+        """
+        resp = self._request(
+            "POST",
+            "/v1/resources",
+            body=build_protect_body(
+                target_url=target_url,
+                description=description,
+                tags=tags,
+                custom_domain=custom_domain,
+                alias=alias,
+            ),
+            headers=idempotency_headers(idempotency_key),
+        )
+        resource = parse_resource(resp)
+        return ProtectedResource(
+            self,
+            resource.resource_id,
+            # Some resource types redact target_url in responses; fall
+            # back to the caller-supplied URL so the handle stays useful.
+            target_url=resource.target_url or target_url,
+            details=resource,
+        )
+
+    def resource_by_id(self, resource_id: str) -> ProtectedResource:
+        """Return a portal-minting handle for a stored resource id (no API call).
+
+        Use when you persisted a LayerV resource id and want to mint more
+        portals for it (qurl-go: ``Client.ResourceByID``)::
+
+            resource = client.resource_by_id("r_demo1234567")
+            portal = resource.create_portal(valid_for="1h")
+
+        The handle carries no server metadata; use :meth:`get_resource`
+        when you need the full resource details.
+        """
+        validate_id(resource_id)
+        return ProtectedResource(self, resource_id)
+
+    def connector_resource(self, connector_id: str) -> ProtectedResource:
+        """Return the resource qURL Connector created for ``connector_id``.
+
+        Use when qURL Connector already protects the service — do not
+        call :meth:`protect_url` again for the same service. The
+        connector id is the resource slug LayerV stores for that
+        connector; the SDK confirms the returned alias matches
+        ``connector_id`` before binding the handle (qurl-go:
+        ``Client.ConnectorResource``).
+
+        Raises:
+            NotFoundError: If no resource exists for the connector id
+                (client-detected, ``status=0``).
+            QURLError: With ``code="ambiguous_resource"`` if the lookup
+                returns more than one resource.
+            ValidationError: With ``code="unexpected_response"`` if the
+                returned resource's alias is missing or does not match.
+        """
+        validate_required_string(connector_id, "connector_id")
+        connector_id = connector_id.strip()
+        resource = require_connector_resource(
+            self.list_resources(slug=connector_id).resources, connector_id
+        )
+        return ProtectedResource(
+            self,
+            resource.resource_id,
+            target_url=resource.target_url,
+            details=resource,
+        )
+
+    def create_portal(
+        self,
+        resource: ProtectedResource | str,
+        *,
+        valid_for: str | timedelta | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | timedelta | None = None,
+        idempotency_key: str | None = None,
+    ) -> Portal:
+        """Mint a short-lived qURL link (a portal) for a protected resource.
+
+        A portal is cryptographic, just-in-time permission for one actor
+        to reach one private resource. Recipients open ``portal.link``
+        directly and need no LayerV credentials. Prefer short lifetimes
+        such as ``valid_for="5m"``. REST-shaped equivalents:
+        :meth:`mint_link` / :meth:`create_qurl_for_resource`.
+
+        Args:
+            resource: A :class:`ProtectedResource` handle, or a resource
+                id string — the ``r_`` id a handle carries or that
+                :meth:`protect_url` returns. Passing a display id or any
+                non-resource id is not rejected client-side; it reaches
+                the mint endpoint and fails there.
+            valid_for: How long the link stays valid — a duration string
+                (``"5m"``, ``"24h"``) or :class:`datetime.timedelta`. A
+                timedelta must be whole seconds and **at least one minute**;
+                the one-minute floor is a client-side guardrail on the
+                timedelta form only — a duration **string** is passed to
+                the server as-is and validated there (matching
+                :meth:`mint_link`'s ``expires_in``). Omit to use the API
+                default lifetime.
+            label: Human-readable label for the link. Max length 500.
+            one_time_use: If True, the link expires after its first
+                successful use.
+            max_sessions: Concurrent session limit. 0 is sent explicitly
+                and means unlimited; omit to keep the server default.
+            session_duration: How long access lasts *after* the link is
+                opened (a different knob from ``valid_for``) — a duration
+                string or timedelta. A timedelta must be whole seconds and
+                **at least one second** (again a guardrail on the timedelta
+                form only; strings pass through to the server).
+            idempotency_key: Optional idempotency key for safe retries.
+
+        Raises:
+            ValueError: If an option violates the client-side guardrails
+                or ``resource`` is bound to a different client.
+            ValidationError: With ``code="unexpected_response"`` if the
+                API response is missing its identity fields (fails
+                closed rather than returning a partial portal).
+        """
+        if isinstance(resource, ProtectedResource):
+            if resource._client is not self:
+                raise ValueError(
+                    "create_portal: resource is bound to a different client"
+                )
+            resource_id = resource.id
+        elif isinstance(resource, str):
+            resource_id = resource
+        else:
+            # Covers the wrong-handle-class case (e.g. an
+            # AsyncProtectedResource passed to the sync client): fail with
+            # a clear ValueError instead of letting validate_id trip over
+            # a non-string and raise TypeError.
+            raise ValueError(
+                "create_portal: resource must be a ProtectedResource or a "
+                "resource id string"
+            )
+        validate_id(resource_id)
+        body = build_portal_body(
+            valid_for=valid_for,
+            label=label,
+            one_time_use=one_time_use,
+            max_sessions=max_sessions,
+            session_duration=session_duration,
+        )
+        resp = self._request(
+            "POST",
+            f"/v1/resources/{resource_id}/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_portal(resp)
+
+    def create_portal_for_url(
+        self,
+        target_url: str,
+        *,
+        valid_for: str | timedelta | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | timedelta | None = None,
+        idempotency_key: str | None = None,
+    ) -> tuple[Portal, ProtectedResource]:
+        """Protect ``target_url`` and mint a portal in one API call.
+
+        Convenience for one-off scripts (qurl-go:
+        ``Client.CreatePortalForURL``). The returned resource handle is
+        reusable for minting more portals but carries only the resource
+        id and the caller-supplied target URL; use :meth:`protect_url`
+        when you need the full server-populated resource metadata.
+        Portal options match :meth:`create_portal`; ``target_url`` gets
+        the same malformed-URL and embedded-credentials rejection as
+        :meth:`protect_url`.
+        """
+        validate_portal_target_url(target_url)
+        body = build_portal_body(
+            valid_for=valid_for,
+            label=label,
+            one_time_use=one_time_use,
+            max_sessions=max_sessions,
+            session_duration=session_duration,
+        )
+        body["target_url"] = target_url
+        resp = self._request(
+            "POST",
+            "/v1/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        portal = parse_portal(resp)
+        return portal, ProtectedResource(
+            self, portal.resource_id, target_url=target_url
+        )
+
+    def enter_portal(
+        self, qurl_link: str, *, idempotency_key: str | None = None
+    ) -> ResourceHandle:
+        """Open a qURL link programmatically and return the reachable resource.
+
+        For services and agents that open received qURL links in code —
+        human recipients just open the link. Accepts a full platform
+        link (``https://qurl.link/#at_...``) or a bare access token.
+        Triggers an NHP knock that grants network access for the
+        caller's IP and returns a :class:`ResourceHandle` with the
+        reachable resource URL and access lifetime.
+
+        Unlike qurl-go's ``EnterPortal`` (which verifies links locally
+        and needs no LayerV credentials), this SDK opens links through
+        the LayerV API: the client needs an API key with the
+        ``qurl:resolve`` scope. REST-shaped equivalent: :meth:`resolve`.
+
+        Opening is **not a free, idempotent read**: the knock is a side
+        effect (it opens IP access) and can consume a one-time-use
+        portal. ``idempotency_key`` is threaded through to make a single
+        logical open retry-safe, but do not treat repeated
+        ``enter_portal`` calls as cheap polling.
+
+        Raises:
+            ValueError: If no access token can be extracted from
+                ``qurl_link``.
+            ValidationError: With ``code="unexpected_response"`` if
+                access is granted but the API reports no resource URL
+                (fails closed rather than returning an empty handle).
+        """
+        token = extract_access_token(qurl_link)
+        return resource_handle_from_resolve(
+            self.resolve(token, idempotency_key=idempotency_key)
+        )
+
     # --- Public API ---
 
     def create(
@@ -221,6 +499,10 @@ class QURLClient:
         idempotency_key: str | None = None,
     ) -> CreateOutput:
         """Create a new qURL.
+
+        Portal-flow equivalent: :meth:`create_portal_for_url` (same
+        endpoint, returns a :class:`Portal` plus a reusable resource
+        handle).
 
         Returns a :class:`CreateOutput` with the ``resource_id``, ``qurl_link``,
         ``qurl_site``, and ``expires_at``. Use :meth:`get` to fetch the full
@@ -519,6 +801,8 @@ class QURLClient:
     ) -> MintOutput:
         """Mint a new access link for a qURL.
 
+        Portal-flow equivalent: :meth:`create_portal`.
+
         Accepts either a resource ID (``r_`` prefix) or a qURL display ID
         (``q_`` prefix). ``expires_in`` and ``expires_at`` are mutually
         exclusive — if neither is set, the link defaults to 24 hours.
@@ -655,6 +939,9 @@ class QURLClient:
     ) -> ResolveOutput:
         """Resolve a qURL access token (headless).
 
+        Portal-flow equivalent: :meth:`enter_portal` (also accepts full
+        qURL links and fails closed when no resource URL is returned).
+
         Triggers an NHP knock to grant network access for the caller's IP.
         Requires ``qurl:resolve`` scope on the API key.
 
@@ -716,6 +1003,9 @@ class QURLClient:
         idempotency_key: str | None = None,
     ) -> Resource:
         """Create or find a resource.
+
+        Portal-flow equivalent for URL resources: :meth:`protect_url`
+        (returns a portal-minting handle).
 
         ``resource_type`` serializes to the API's ``type`` request field.
         Tunnel resources use ``slug`` and may set ``find_or_create=True``.
@@ -840,7 +1130,10 @@ class QURLClient:
         access_policy: AccessPolicy | None = None,
         idempotency_key: str | None = None,
     ) -> CreateOutput:
-        """Mint a qURL against an existing resource."""
+        """Mint a qURL against an existing resource.
+
+        Portal-flow equivalent: :meth:`create_portal` (same endpoint).
+        """
         validate_id(resource_id)
         validate_mint_input(label=label, max_sessions=max_sessions)
         body = build_body(
@@ -1530,4 +1823,62 @@ class QURLClient:
             raise QURLNetworkError(str(last_error), cause=last_error) from last_error
         raise last_error or QURLError(
             status=0, code="unknown", title="Request failed", detail="Exhausted retries"
+        )
+
+
+class ProtectedResource:
+    """A LayerV-protected resource, bound to the client that produced it.
+
+    Obtained from :meth:`QURLClient.protect_url`,
+    :meth:`QURLClient.connector_resource`, or
+    :meth:`QURLClient.resource_by_id` — not constructed directly. Mint
+    short-lived access links for the resource with :meth:`create_portal`
+    (qurl-go: ``qurl.Resource``).
+
+    Attributes:
+        id: The LayerV resource id (``r_`` prefix).
+        target_url: The private URL protected by this resource, when known.
+        details: Full server-populated :class:`~layerv_qurl.types.Resource`
+            metadata when the handle came from an API response; ``None``
+            for :meth:`QURLClient.resource_by_id` handles.
+    """
+
+    def __init__(
+        self,
+        client: QURLClient,
+        resource_id: str,
+        *,
+        target_url: str | None = None,
+        details: Resource | None = None,
+    ) -> None:
+        self._client = client
+        self.id = resource_id
+        self.target_url = target_url
+        self.details = details
+
+    def __repr__(self) -> str:
+        return f"ProtectedResource(id={self.id!r}, target_url={self.target_url!r})"
+
+    def create_portal(
+        self,
+        *,
+        valid_for: str | timedelta | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | timedelta | None = None,
+        idempotency_key: str | None = None,
+    ) -> Portal:
+        """Mint a short-lived qURL link for this resource.
+
+        See :meth:`QURLClient.create_portal` for option details.
+        """
+        return self._client.create_portal(
+            self,
+            valid_for=valid_for,
+            label=label,
+            one_time_use=one_time_use,
+            max_sessions=max_sessions,
+            session_duration=session_duration,
+            idempotency_key=idempotency_key,
         )

@@ -5,15 +5,35 @@
 [![Python](https://img.shields.io/pypi/pyversions/qurl-python)](https://pypi.org/project/qurl-python/)
 [![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
 
-Python SDK for the [qURL™ API](https://docs.layerv.ai) — secure, time-limited access links for AI agents.
+**Use the LayerV [qURL™ Platform](https://docs.layerv.ai) from Python: protect a
+private URL once, then mint short-lived portal links for it.**
+
+LayerV hosts qURL; your app keeps a tiny surface area: protect the URL, create a
+portal for the returned resource, and share the link.
 
 > **Quantum URL (qURL)** · The internet has a hidden layer. This is how you enter.
 
+Portal recipients do not need LayerV credentials, API keys, or SDK state. They
+open the qURL link. Credentials are only for software that protects URLs or
+creates portals.
+
 ## Why qURL?
 
-AI agents need to access APIs, databases, and internal tools — but permanent credentials are a security risk. qURL creates **time-limited, auditable access links** that automatically expire:
+Agents and services increasingly need to reach private MCP servers, APIs, and
+internal tools. The issue is visibility: every standing public endpoint becomes
+inventory for scanners, fingerprinting, credential attacks, and AI-assisted
+probing before a legitimate user or agent ever arrives.
 
-- **Time-limited** — links expire after minutes, hours, or days
+Opening an inbound port, running a VPN, shipping a bastion, publishing a
+Cloudflare Tunnel or ngrok URL, or passing around a long-lived key all leave
+something durable to find, scan, or steal. qURL flips that model. It is an
+**invisibility primitive for authenticated access**, not another externally
+visible endpoint in front of the same service. The private resource is not
+public inventory. A portal is **cryptographic, just-in-time permission for one
+actor to reach one private resource** — without turning that resource into
+public inventory:
+
+- **Time-limited** — portals expire after minutes, hours, or days
 - **IP-scoped** — access is granted only to the requesting IP via NHP
 - **Auditable** — every access is logged with who, when, and from where
 - **Revocable** — kill access instantly if something goes wrong
@@ -30,30 +50,125 @@ For LangChain integration:
 pip install qurl-python[langchain]
 ```
 
-## Quick Start
+## Quickstart
 
 ```python
 from layerv_qurl import QURLClient
 
 client = QURLClient(api_key="lv_live_xxx")
 
-# Create a protected link
+resource = client.protect_url("https://internal.example.com/dashboard")
+portal = resource.create_portal(valid_for="5m")
+
+print(portal.link)  # Share this link — recipients need no credentials
+```
+
+That is the core flow:
+
+| Step | Call | What you provide |
+| --- | --- | --- |
+| Protect a private URL | `client.protect_url` | The target URL you already know |
+| Mint a short-lived access link | `resource.create_portal` | The returned resource handle |
+
+`protect_url` is idempotent for the same account and target URL: protecting
+the same URL again returns the existing resource. `valid_for` accepts a
+duration string (`"5m"`, `"24h"`) or a `datetime.timedelta`; prefer short
+portal lifetimes.
+
+If qURL Connector already protects the service, use the connector id instead
+of calling `protect_url`:
+
+```python
+resource = client.connector_resource("prod-dashboard")
+portal = resource.create_portal(valid_for="5m")
+```
+
+If you persist the resource id, future calls do not need to recreate the
+handle (no API call is made until you mint):
+
+```python
+resource = client.resource_by_id("r_demo1234567")
+portal = resource.create_portal(valid_for="1h")
+```
+
+For one-off scripts, `client.create_portal_for_url` combines the two API calls
+and returns both the portal and a reusable resource handle:
+
+```python
+portal, resource = client.create_portal_for_url(
+    "https://internal.example.com/dashboard", valid_for="5m"
+)
+```
+
+Portal options mirror qurl-go:
+
+```python
+from datetime import timedelta
+
+portal = resource.create_portal(
+    valid_for=timedelta(minutes=5),
+    label="Alice from Acme",
+    one_time_use=True,
+    max_sessions=1,
+)
+```
+
+## Opening Portals
+
+Most recipients open qURL links directly and do not use this SDK at all. If
+you are building a service or agent that opens received qURL links
+programmatically, `enter_portal` accepts a full link or a bare access token,
+grants network access for the caller's IP, and returns the reachable resource:
+
+```python
+handle = client.enter_portal(link)
+print(handle.resource_url)   # The reachable resource location
+print(handle.open_seconds)   # How long access stays open
+```
+
+Unlike qurl-go's offline `EnterPortal`, this SDK opens links through the
+LayerV API: the client needs an API key with the `qurl:resolve` scope.
+`enter_portal` fails closed — if access is granted but no resource URL comes
+back, it raises instead of returning an empty handle.
+
+## Async Usage
+
+```python
+import asyncio
+from layerv_qurl import AsyncQURLClient
+
+async def main():
+    async with AsyncQURLClient(api_key="lv_live_xxx") as client:
+        resource = await client.protect_url("https://internal.example.com/dashboard")
+        portal = await resource.create_portal(valid_for="5m")
+        print(portal.link)
+
+asyncio.run(main())
+```
+
+## REST-Shaped API (Compatibility)
+
+The original REST-shaped methods remain fully supported and share the same
+client. Use them for the qURL/resource/token management surface that has no
+portal-verb equivalent (listing, updating, revoking, quotas, webhooks, ...) or
+if you already build on them:
+
+```python
+# Create a protected link (portal equivalent: create_portal_for_url)
 result = client.create(
     target_url="https://api.example.com/data",
     expires_in="24h",
     label="API access for agent",
 )
-print(result.qurl_link)  # Share this link
+print(result.qurl_link)
 
-# Resolve a token (grants network access for your IP)
+# Resolve a token headlessly (portal equivalent: enter_portal)
 access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 print(f"Access granted to {access.target_url} for {access.access_grant.expires_in}s")
 
-# Extend a qURL's expiration
+# Extend a qURL's expiration and update metadata
 qurl = client.extend("r_xxx", "7d")
-
-# Update resource metadata
-qurl = client.update("r_xxx", description="extended", extend_by="7d")
+qurl = client.update("r_xxx", description="extended")
 ```
 
 ## Authentication Notes
@@ -80,23 +195,6 @@ unique for each logical operation; UUID or ULID values are recommended.
 Fields such as webhook `events` and API-key `scopes` accept ordered non-string
 iterables of strings. Lists, tuples, and generators preserve the caller's
 iteration order; sets are rejected because their iteration order is not stable.
-
-## Async Usage
-
-```python
-import asyncio
-from layerv_qurl import AsyncQURLClient
-
-async def main():
-    async with AsyncQURLClient(api_key="lv_live_xxx") as client:
-        result = await client.create(target_url="https://example.com", expires_in="1h")
-        access = await client.resolve("at_...")
-
-        # Extend expiration
-        qurl = await client.extend("r_xxx", "7d")
-
-asyncio.run(main())
-```
 
 ## Pagination
 
@@ -170,13 +268,13 @@ from layerv_qurl.errors import (
 client = QURLClient(api_key="lv_live_xxx")
 
 try:
-    client.resolve("at_k8xqp9h2sj9lx7r4a")
+    client.enter_portal("https://qurl.link/#at_k8xqp9h2sj9lx7r4a")
 except AuthenticationError:
     print("Bad API key")
 except AuthorizationError:
     print("Valid key but missing qurl:resolve scope")
 except NotFoundError:
-    print("Token doesn't exist or already expired")
+    print("Portal doesn't exist or already expired")
 except RateLimitError as e:
     print(f"Rate limited — retry in {e.retry_after}s")
 except ValidationError as e:
@@ -243,6 +341,16 @@ tools = toolkit.get_tools()  # [CreateQURLTool, ResolveQURLTool, ListQURLsTool, 
 | `max_retries` | No | `3` |
 | `user_agent` | No | `qurl-python-sdk/<version>` |
 | `http_client` | No | Auto-created `httpx.Client` |
+
+## Security Notes
+
+- Treat API keys and qURL links like credentials. Do not log them.
+- Prefer short portal lifetimes such as `valid_for="5m"`.
+- Do not ask portal recipients to handle credentials. Recipients only need
+  the link.
+- `protect_url` and `create_portal_for_url` reject malformed target URLs and
+  URLs with embedded credentials (`https://user:pass@...`) before any request,
+  matching qurl-go.
 
 ## License
 

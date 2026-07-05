@@ -21,11 +21,14 @@ from layerv_qurl._utils import (
     UnsetType,
     build_body,
     build_list_params,
+    build_portal_body,
+    build_protect_body,
     build_query_params,
     build_string_list,
     default_user_agent,
     domain_path_segment,
     ensure_mutation_idempotency,
+    extract_access_token,
     idempotency_headers,
     logger,
     mask_key,
@@ -49,6 +52,7 @@ from layerv_qurl._utils import (
     parse_invoice_list_output,
     parse_list_output,
     parse_mint_output,
+    parse_portal,
     parse_portal_session,
     parse_quota,
     parse_qurl,
@@ -63,8 +67,10 @@ from layerv_qurl._utils import (
     parse_webhook_delivery_list_output,
     parse_webhook_event_types_output,
     parse_webhook_list_output,
+    require_connector_resource,
     require_nonempty_update,
     require_resource_id_prefix,
+    resource_handle_from_resolve,
     retry_delay,
     validate_alias,
     validate_create_input,
@@ -72,6 +78,7 @@ from layerv_qurl._utils import (
     validate_id,
     validate_mint_input,
     validate_nonnegative_int,
+    validate_portal_target_url,
     validate_required_string,
     validate_update_input,
     validate_webhook_url,
@@ -86,7 +93,7 @@ if TYPE_CHECKING:
     # for type annotations.
     import builtins
     from collections.abc import AsyncIterator, Iterable, Sequence
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from layerv_qurl.types import (
         QURL,
@@ -111,6 +118,7 @@ if TYPE_CHECKING:
         InvoiceListOutput,
         ListOutput,
         MintOutput,
+        Portal,
         PortalSession,
         Quota,
         QURLStatus,
@@ -118,6 +126,7 @@ if TYPE_CHECKING:
         ResolveOutput,
         Resource,
         ResourceDetail,
+        ResourceHandle,
         ResourceListOutput,
         SessionListOutput,
         SessionTerminateOutput,
@@ -138,6 +147,12 @@ class AsyncQURLClient:
 
         async def main():
             async with AsyncQURLClient(api_key="lv_live_xxx") as client:
+                # Portal flow
+                resource = await client.protect_url("https://internal.example.com")
+                portal = await resource.create_portal(valid_for="5m")
+                handle = await client.enter_portal(portal.link)
+
+                # REST-shaped compatibility surface
                 result = await client.create(target_url="https://example.com")
                 access = await client.resolve("at_k8xqp9h2sj9lx7r4a")
 
@@ -188,6 +203,174 @@ class AsyncQURLClient:
 
     async def __aexit__(self, *_: object) -> None:
         await self.close()
+
+    # --- Portal API (mirrors qurl-go: ProtectURL → CreatePortal → EnterPortal) ---
+
+    async def protect_url(
+        self,
+        target_url: str,
+        *,
+        description: str | None = None,
+        tags: builtins.list[str] | None = None,
+        custom_domain: str | None = None,
+        alias: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> AsyncProtectedResource:
+        """Protect a private URL — create or reuse its LayerV resource.
+
+        Async counterpart of :meth:`QURLClient.protect_url`; see that
+        method for the full argument reference. Protect the URL once,
+        then mint short-lived links with
+        :meth:`AsyncProtectedResource.create_portal`::
+
+            resource = await client.protect_url("https://internal.example.com")
+            portal = await resource.create_portal(valid_for="5m")
+        """
+        resp = await self._request(
+            "POST",
+            "/v1/resources",
+            body=build_protect_body(
+                target_url=target_url,
+                description=description,
+                tags=tags,
+                custom_domain=custom_domain,
+                alias=alias,
+            ),
+            headers=idempotency_headers(idempotency_key),
+        )
+        resource = parse_resource(resp)
+        return AsyncProtectedResource(
+            self,
+            resource.resource_id,
+            # Some resource types redact target_url in responses; fall
+            # back to the caller-supplied URL so the handle stays useful.
+            target_url=resource.target_url or target_url,
+            details=resource,
+        )
+
+    def resource_by_id(self, resource_id: str) -> AsyncProtectedResource:
+        """Return a portal-minting handle for a stored resource id (no API call).
+
+        Async counterpart of :meth:`QURLClient.resource_by_id`. Not a
+        coroutine — no request is made until the handle is used.
+        """
+        validate_id(resource_id)
+        return AsyncProtectedResource(self, resource_id)
+
+    async def connector_resource(self, connector_id: str) -> AsyncProtectedResource:
+        """Return the resource qURL Connector created for ``connector_id``.
+
+        Async counterpart of :meth:`QURLClient.connector_resource`; see
+        that method for lookup semantics and raised errors.
+        """
+        validate_required_string(connector_id, "connector_id")
+        connector_id = connector_id.strip()
+        resource = require_connector_resource(
+            (await self.list_resources(slug=connector_id)).resources, connector_id
+        )
+        return AsyncProtectedResource(
+            self,
+            resource.resource_id,
+            target_url=resource.target_url,
+            details=resource,
+        )
+
+    async def create_portal(
+        self,
+        resource: AsyncProtectedResource | str,
+        *,
+        valid_for: str | timedelta | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | timedelta | None = None,
+        idempotency_key: str | None = None,
+    ) -> Portal:
+        """Mint a short-lived qURL link (a portal) for a protected resource.
+
+        Async counterpart of :meth:`QURLClient.create_portal`; see that
+        method for the full option reference.
+        """
+        if isinstance(resource, AsyncProtectedResource):
+            if resource._client is not self:
+                raise ValueError(
+                    "create_portal: resource is bound to a different client"
+                )
+            resource_id = resource.id
+        elif isinstance(resource, str):
+            resource_id = resource
+        else:
+            # Covers the wrong-handle-class case (e.g. a sync
+            # ProtectedResource passed to the async client): fail with a
+            # clear ValueError instead of letting validate_id trip over a
+            # non-string and raise TypeError.
+            raise ValueError(
+                "create_portal: resource must be an AsyncProtectedResource or a "
+                "resource id string"
+            )
+        validate_id(resource_id)
+        body = build_portal_body(
+            valid_for=valid_for,
+            label=label,
+            one_time_use=one_time_use,
+            max_sessions=max_sessions,
+            session_duration=session_duration,
+        )
+        resp = await self._request(
+            "POST",
+            f"/v1/resources/{resource_id}/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        return parse_portal(resp)
+
+    async def create_portal_for_url(
+        self,
+        target_url: str,
+        *,
+        valid_for: str | timedelta | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | timedelta | None = None,
+        idempotency_key: str | None = None,
+    ) -> tuple[Portal, AsyncProtectedResource]:
+        """Protect ``target_url`` and mint a portal in one API call.
+
+        Async counterpart of :meth:`QURLClient.create_portal_for_url`.
+        """
+        validate_portal_target_url(target_url)
+        body = build_portal_body(
+            valid_for=valid_for,
+            label=label,
+            one_time_use=one_time_use,
+            max_sessions=max_sessions,
+            session_duration=session_duration,
+        )
+        body["target_url"] = target_url
+        resp = await self._request(
+            "POST",
+            "/v1/qurls",
+            body=body,
+            headers=idempotency_headers(idempotency_key),
+        )
+        portal = parse_portal(resp)
+        return portal, AsyncProtectedResource(
+            self, portal.resource_id, target_url=target_url
+        )
+
+    async def enter_portal(
+        self, qurl_link: str, *, idempotency_key: str | None = None
+    ) -> ResourceHandle:
+        """Open a qURL link programmatically and return the reachable resource.
+
+        Async counterpart of :meth:`QURLClient.enter_portal`; see that
+        method for link handling, required scope, and raised errors.
+        """
+        token = extract_access_token(qurl_link)
+        return resource_handle_from_resolve(
+            await self.resolve(token, idempotency_key=idempotency_key)
+        )
 
     # --- Public API ---
 
@@ -1509,4 +1692,64 @@ class AsyncQURLClient:
             raise QURLNetworkError(str(last_error), cause=last_error) from last_error
         raise last_error or QURLError(
             status=0, code="unknown", title="Request failed", detail="Exhausted retries"
+        )
+
+
+class AsyncProtectedResource:
+    """A LayerV-protected resource, bound to the async client that produced it.
+
+    Obtained from :meth:`AsyncQURLClient.protect_url`,
+    :meth:`AsyncQURLClient.connector_resource`, or
+    :meth:`AsyncQURLClient.resource_by_id` — not constructed directly.
+    Mint short-lived access links for the resource with
+    :meth:`create_portal` (qurl-go: ``qurl.Resource``).
+
+    Attributes:
+        id: The LayerV resource id (``r_`` prefix).
+        target_url: The private URL protected by this resource, when known.
+        details: Full server-populated :class:`~layerv_qurl.types.Resource`
+            metadata when the handle came from an API response; ``None``
+            for :meth:`AsyncQURLClient.resource_by_id` handles.
+    """
+
+    def __init__(
+        self,
+        client: AsyncQURLClient,
+        resource_id: str,
+        *,
+        target_url: str | None = None,
+        details: Resource | None = None,
+    ) -> None:
+        self._client = client
+        self.id = resource_id
+        self.target_url = target_url
+        self.details = details
+
+    def __repr__(self) -> str:
+        return (
+            f"AsyncProtectedResource(id={self.id!r}, target_url={self.target_url!r})"
+        )
+
+    async def create_portal(
+        self,
+        *,
+        valid_for: str | timedelta | None = None,
+        label: str | None = None,
+        one_time_use: bool | None = None,
+        max_sessions: int | None = None,
+        session_duration: str | timedelta | None = None,
+        idempotency_key: str | None = None,
+    ) -> Portal:
+        """Mint a short-lived qURL link for this resource.
+
+        See :meth:`QURLClient.create_portal` for option details.
+        """
+        return await self._client.create_portal(
+            self,
+            valid_for=valid_for,
+            label=label,
+            one_time_use=one_time_use,
+            max_sessions=max_sessions,
+            session_duration=session_duration,
+            idempotency_key=idempotency_key,
         )
