@@ -340,8 +340,11 @@ class QURLClient:
         :meth:`mint_link` / :meth:`create_qurl_for_resource`.
 
         Args:
-            resource: A :class:`ProtectedResource` handle or a resource
-                id (``r_`` prefix).
+            resource: A :class:`ProtectedResource` handle, or a resource
+                id string — the ``r_`` id a handle carries or that
+                :meth:`protect_url` returns. Passing a display id or any
+                non-resource id is not rejected client-side; it reaches
+                the mint endpoint and fails there.
             valid_for: How long the link stays valid — a duration string
                 (``"5m"``, ``"24h"``) or :class:`datetime.timedelta`
                 (whole seconds, at least one minute). Omit to use the
