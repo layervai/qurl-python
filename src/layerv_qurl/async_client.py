@@ -297,8 +297,17 @@ class AsyncQURLClient:
                     "create_portal: resource is bound to a different client"
                 )
             resource_id = resource.id
-        else:
+        elif isinstance(resource, str):
             resource_id = resource
+        else:
+            # Covers the wrong-handle-class case (e.g. a sync
+            # ProtectedResource passed to the async client): fail with a
+            # clear ValueError instead of letting validate_id trip over a
+            # non-string and raise TypeError.
+            raise ValueError(
+                "create_portal: resource must be an AsyncProtectedResource or a "
+                "resource id string"
+            )
         validate_id(resource_id)
         body = build_portal_body(
             valid_for=valid_for,

@@ -239,6 +239,21 @@ def test_create_portal_rejects_foreign_handle(client: QURLClient) -> None:
         other.close()
 
 
+def test_create_portal_rejects_wrong_handle_class(client: QURLClient) -> None:
+    """A cross-class handle fails with a clean ValueError, not TypeError."""
+    # Construct the async handle directly (its client binding is never
+    # dereferenced — rejection happens on the isinstance check first), so
+    # the test needs no live AsyncQURLClient to close.
+    async_handle = AsyncProtectedResource(client, "r_abc123def45")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="must be a ProtectedResource or a resource id"):
+        client.create_portal(async_handle)  # type: ignore[arg-type]
+
+
+def test_create_portal_rejects_non_handle_non_string(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="must be a ProtectedResource or a resource id"):
+        client.create_portal(12345)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     ("options", "match"),
     [
@@ -433,6 +448,14 @@ def test_enter_portal_rejects_tokenless_link(client: QURLClient) -> None:
     assert "bad token" not in str(exc_info.value)
 
 
+def test_enter_portal_rejects_token_without_at_prefix(client: QURLClient) -> None:
+    """A bare string that isn't an at_ token fails locally, not at the server."""
+    with pytest.raises(ValueError, match="no access token found") as exc_info:
+        client.enter_portal("hello")
+    # Never echo the rejected input — it could be a mistyped credential.
+    assert "hello" not in str(exc_info.value)
+
+
 def test_enter_portal_rejects_signed_fragment_link(client: QURLClient) -> None:
     """qurl-go's offline signed links get a precise error, with no echo."""
     with pytest.raises(ValueError, match="signed qURL link") as exc_info:
@@ -595,3 +618,14 @@ async def test_async_create_portal_rejects_foreign_handle(
             await async_client.create_portal(resource)
     finally:
         await other.close()
+
+
+async def test_async_create_portal_rejects_wrong_handle_class(
+    async_client: AsyncQURLClient,
+) -> None:
+    """A sync handle passed to the async client fails with a clean ValueError."""
+    sync_handle = ProtectedResource(async_client, "r_abc123def45")  # type: ignore[arg-type]
+    with pytest.raises(
+        ValueError, match="must be an AsyncProtectedResource or a resource id"
+    ):
+        await async_client.create_portal(sync_handle)  # type: ignore[arg-type]

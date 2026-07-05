@@ -865,19 +865,27 @@ def parse_portal(data: dict[str, Any]) -> Portal:
     )
 
 
-# Shape of qurl-go's offline signed-fragment links: three or more
-# dot-separated base64url parts (<version>.<claims>.<secret>.<sig>).
-# Detected only to give those links a precise error below.
+# qurl-go's offline signed-fragment links have the four-part shape
+# <version>.<claims>.<secret>.<sig>. We match any fragment of 3+
+# dot-separated base64url parts — broad enough to catch malformed or
+# future-versioned signed links — only to give them a precise error below
+# (a bare access token never contains a dot, so there's no overlap).
 _SIGNED_FRAGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){2,}$")
+# Access tokens carry the stable ``at_`` prefix. The charset and length
+# stay permissive (the server enforces the exact ``^at_[a-z0-9_-]{22}$``
+# form) so a future token-length change doesn't make the SDK reject links
+# the platform still mints — this is only a cheap "looks like a token"
+# sanity check, matching the SDK's server-is-authoritative posture.
+_ACCESS_TOKEN_RE = re.compile(r"^at_[A-Za-z0-9_-]+$")
 
 
 def extract_access_token(qurl_link: str) -> str:
     """Extract the access token from a qURL link, or pass a bare token through.
 
     Platform-issued links carry the access token in the URL fragment
-    (``https://qurl.link/#at_...``). Error messages deliberately do not
-    echo the input — qURL links are credentials and must stay out of
-    logs and tracebacks.
+    (``https://qurl.link/#at_...``); a bare ``at_...`` token is accepted
+    as-is. Error messages deliberately do not echo the input — qURL links
+    are credentials and must stay out of logs and tracebacks.
     """
     if not isinstance(qurl_link, str) or not qurl_link.strip():
         raise ValueError("qurl_link: must be a non-empty string")
@@ -889,10 +897,10 @@ def extract_access_token(qurl_link: str) -> str:
             "only accepts platform links (https://qurl.link/#at_...) or bare "
             "access tokens"
         )
-    if not token or not _RESOURCE_ID_RE.match(token):
+    if not _ACCESS_TOKEN_RE.match(token):
         raise ValueError(
             "qurl_link: no access token found — pass a platform qURL link "
-            "(https://qurl.link/#at_...) or a bare access token"
+            "(https://qurl.link/#at_...) or a bare access token (at_...)"
         )
     return token
 
