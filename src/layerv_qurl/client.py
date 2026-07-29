@@ -36,7 +36,6 @@ from layerv_qurl._utils import (
     parse_access_code,
     parse_access_code_list_output,
     parse_access_token,
-    parse_agent_bootstrap_output,
     parse_api_key,
     parse_api_key_list_output,
     parse_batch_create_output,
@@ -101,7 +100,6 @@ if TYPE_CHECKING:
         AccessCodeListOutput,
         AccessPolicy,
         AccessToken,
-        AgentBootstrapOutput,
         APIKey,
         APIKeyListOutput,
         BatchCreateItem,
@@ -1648,33 +1646,6 @@ class QURLClient:
             params=build_list_params(limit, cursor),
         )
         return parse_connector_installation_list_output(data, meta)
-
-    def bootstrap_agent(
-        self,
-        *,
-        public_key: str,
-        agent_id: str | None = None,
-        hostname: str | None = None,
-        version: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> AgentBootstrapOutput:
-        """Bootstrap a LayerV qURL Connector agent."""
-        validate_required_string(public_key, "public_key")
-        body = build_body(
-            {
-                "public_key": public_key,
-                "agent_id": agent_id,
-                "hostname": hostname,
-                "version": version,
-            }
-        )
-        resp = self._request(
-            "POST",
-            "/v1/agent/bootstrap",
-            body=body,
-            headers=idempotency_headers(idempotency_key),
-        )
-        return parse_agent_bootstrap_output(resp)
 
     # --- Internal HTTP plumbing ---
 

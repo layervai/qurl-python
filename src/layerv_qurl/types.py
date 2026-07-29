@@ -663,25 +663,6 @@ class ConnectorInstallationListOutput:
     has_more: bool = False
 
 
-@dataclass
-class NHPServerPeerInfo:
-    """NHP server peer info returned to connector agents."""
-
-    public_key_b64: str
-    host: str
-    port: int
-    expire_time: int
-
-
-@dataclass
-class AgentBootstrapOutput:
-    """Response from connector agent bootstrap."""
-
-    agent_id: str
-    registered_at: datetime | None
-    nhp_server_peer: NHPServerPeerInfo
-
-
 # ---- batch_create input shape -------------------------------------------
 # TypedDicts for :meth:`QURLClient.batch_create` items. Split into a
 # required-fields base class and an `total=False` subclass so callers on

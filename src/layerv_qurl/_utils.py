@@ -43,7 +43,6 @@ from layerv_qurl.types import (
     AccessGrant,
     AccessPolicy,
     AccessToken,
-    AgentBootstrapOutput,
     AIAgentPolicy,
     APIKey,
     APIKeyListOutput,
@@ -68,7 +67,6 @@ from layerv_qurl.types import (
     InvoiceListOutput,
     ListOutput,
     MintOutput,
-    NHPServerPeerInfo,
     Portal,
     PortalSession,
     Quota,
@@ -1436,22 +1434,6 @@ def parse_connector_installation_list_output(
     installations = _parse_list_items(data, parse_connector_installation)
     return ConnectorInstallationListOutput(
         installations=installations, next_cursor=next_cursor, has_more=has_more
-    )
-
-
-def parse_agent_bootstrap_output(data: dict[str, Any]) -> AgentBootstrapOutput:
-    """Parse connector agent bootstrap output."""
-    raw_peer = data.get("nhp_server_peer")
-    peer = raw_peer if isinstance(raw_peer, dict) else {}
-    return AgentBootstrapOutput(
-        agent_id=data.get("agent_id", ""),
-        registered_at=_parse_dt(data.get("registered_at")),
-        nhp_server_peer=NHPServerPeerInfo(
-            public_key_b64=peer.get("public_key_b64", ""),
-            host=peer.get("host", ""),
-            port=peer.get("port", 0),
-            expire_time=peer.get("expire_time", 0),
-        ),
     )
 
 
