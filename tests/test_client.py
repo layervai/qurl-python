@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import uuid
@@ -16,6 +17,8 @@ import httpx
 import pytest
 import respx
 
+import layerv_qurl
+import layerv_qurl.types as qurl_types
 from layerv_qurl import (
     AsyncQURLClient,
     QURLClient,
@@ -127,6 +130,17 @@ def test_empty_api_key_raises() -> None:
 def test_whitespace_api_key_raises() -> None:
     with pytest.raises(ValueError, match="api_key must not be empty"):
         QURLClient(api_key="   ")
+
+
+def test_native_agent_http_lifecycle_is_not_exposed() -> None:
+    for client_type in (QURLClient, AsyncQURLClient):
+        assert not hasattr(client_type, "bootstrap_agent")
+        assert "/v1/agent/bootstrap" not in inspect.getsource(client_type)
+
+    for type_name in ("AgentBootstrapOutput", "NHPServerPeerInfo"):
+        assert type_name not in layerv_qurl.__all__
+        assert not hasattr(layerv_qurl, type_name)
+        assert not hasattr(qurl_types, type_name)
 
 
 def test_repr_masks_api_key() -> None:
@@ -3997,9 +4011,6 @@ def test_resource_methods_validate_shared_metadata(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="plan"):
         client.create_billing_checkout(plan="")
 
-    with pytest.raises(ValueError, match="public_key"):
-        client.bootstrap_agent(public_key="")
-
     with pytest.raises(ValueError, match="spending_cap_cents"):
         client.update_customer(spending_cap_cents=-1)
 
@@ -4534,7 +4545,7 @@ def test_usage_and_billing_contracts(client: QURLClient) -> None:
 
 
 @respx.mock
-def test_connector_and_agent_contracts(
+def test_connector_contracts(
     client: QURLClient, caplog: pytest.LogCaptureFixture
 ) -> None:
     respx.get(f"{BASE_URL}/v1/connectors/installations").mock(
@@ -4579,31 +4590,6 @@ def test_connector_and_agent_contracts(
         "parse_connector_installation" in record.message and "plugin_id" in record.message
         for record in caplog.records
     )
-
-    bootstrap_route = respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": {
-                    "agent_id": "prod-us-east-1",
-                    "registered_at": "2026-05-10T15:30:00Z",
-                    "nhp_server_peer": {
-                        "public_key_b64": "EqHTVFh6t5DUK1aA2nkq82x5HLRqrO6FPqxcwSfKCl8=",
-                        "host": "nhp.layerv.ai",
-                        "port": 62206,
-                        "expire_time": 0,
-                    },
-                },
-            },
-        )
-    )
-    bootstrap = client.bootstrap_agent(
-        public_key="62cFrVBeF1Tl7lUAJ9MNa9lFykVf6D7mNqLaEYggFN0=",
-        agent_id="prod-us-east-1",
-        idempotency_key="idem-bootstrap",
-    )
-    assert bootstrap.nhp_server_peer.port == 62206
-    assert bootstrap_route.calls[0].request.headers["idempotency-key"] == "idem-bootstrap"
 
 
 @respx.mock
@@ -4695,17 +4681,6 @@ def test_invoice_list_tolerates_non_dict_payload(
         invoices = client.list_billing_invoices()
     assert invoices.invoices == []
     assert any("parse_invoice_list_output" in record.message for record in caplog.records)
-
-
-@respx.mock
-def test_agent_bootstrap_tolerates_partial_peer_payload(client: QURLClient) -> None:
-    respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
-        return_value=httpx.Response(200, json={"data": {"nhp_server_peer": None}})
-    )
-    bootstrap = client.bootstrap_agent(public_key="pk_test")
-    assert bootstrap.agent_id == ""
-    assert bootstrap.nhp_server_peer.public_key_b64 == ""
-    assert bootstrap.nhp_server_peer.port == 0
 
 
 @respx.mock
@@ -4946,7 +4921,7 @@ async def test_async_delete_list_and_secret_contracts(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_async_resource_connector_domain_bootstrap_contracts(
+async def test_async_resource_connector_domain_contracts(
     async_client: AsyncQURLClient,
 ) -> None:
     resources_route = respx.get(f"{BASE_URL}/v1/resources").mock(
@@ -5015,22 +4990,6 @@ async def test_async_resource_connector_domain_bootstrap_contracts(
             },
         )
     )
-    bootstrap_route = respx.post(f"{BASE_URL}/v1/agent/bootstrap").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": {
-                    "agent_id": "agent-async",
-                    "nhp_server_peer": {
-                        "public_key_b64": "server-key",
-                        "host": "nhp.example.com",
-                        "port": 62206,
-                    },
-                },
-            },
-        )
-    )
-
     resources = await async_client.list_resources(limit=2, status="active")
     connectors = await async_client.list_connector_installations(limit=1)
     domain = await async_client.get_domain("async.example.com")
@@ -5042,12 +5001,6 @@ async def test_async_resource_connector_domain_bootstrap_contracts(
         "async.example.com",
         idempotency_key="idem-async-domain-token",
     )
-    bootstrap = await async_client.bootstrap_agent(
-        public_key="client-key",
-        agent_id="agent-async",
-        idempotency_key="idem-async-bootstrap",
-    )
-
     assert resources.resources[0].resource_id == "r_asyncresource"
     assert resources.next_cursor == "cur_async_resources"
     assert resources_route.calls[0].request.url.params["limit"] == "2"
@@ -5058,15 +5011,11 @@ async def test_async_resource_connector_domain_bootstrap_contracts(
     assert domain.status == "verified"
     assert verify.checks["txt"].verified is True
     assert regenerated.verification_token == "tok_async"
-    assert bootstrap.nhp_server_peer.port == 62206
     assert verify_route.calls[0].request.headers["idempotency-key"] == (
         "idem-async-domain-verify"
     )
     assert regen_route.calls[0].request.headers["idempotency-key"] == (
         "idem-async-domain-token"
-    )
-    assert bootstrap_route.calls[0].request.headers["idempotency-key"] == (
-        "idem-async-bootstrap"
     )
 
 
