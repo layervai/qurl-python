@@ -311,7 +311,7 @@ jobs:
         if: success()
         # v1.0.180 keeps interactive commands on the same fail-closed runner as
         # automatic review and avoids the v1.0.140/141 issue-comment crash.
-        uses: anthropics/claude-code-action@fa7e2f0a29a126f0b81cdcf360561b36e44cf608 # v1.0.180
+        uses: anthropics/claude-code-action@6b082c41935b4c8a3b8b0ef85ba4ba4d9eeb8975 # v1.0.189
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # Omit github_token so the action uses its OIDC/GitHub App token path.
