@@ -143,6 +143,135 @@ def test_native_agent_http_lifecycle_is_not_exposed() -> None:
         assert not hasattr(qurl_types, type_name)
 
 
+def test_retired_credential_request_fields_are_not_exposed() -> None:
+    for client_type in (QURLClient, AsyncQURLClient):
+        source = inspect.getsource(client_type)
+        for retired in ("key_type", "tunnel_slug", "purpose"):
+            assert retired not in source
+
+    for retired in ("purpose", "tunnel_slug"):
+        assert not hasattr(qurl_types.APIKey(key_id="k", key_prefix="p", name="n"), retired)
+
+
+@respx.mock
+def test_create_api_key_sends_kind_first_durable_body(client: QURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "key_id": "key_abc123def456",
+                    "key_prefix": "lv_live_a3x9",
+                    "api_key": "lv_live_secret",
+                    "kind": "api_key",
+                    "name": "Production",
+                    "scopes": ["qurl:read", "qurl:write"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    key = client.create_api_key(name="Production", scopes=["qurl:read", "qurl:write"])
+
+    body = json.loads(route.calls[0].request.content)
+    assert body == {
+        "kind": "api_key",
+        "name": "Production",
+        "scopes": ["qurl:read", "qurl:write"],
+    }
+    assert key.kind == "api_key"
+
+
+@respx.mock
+def test_create_api_key_mints_connector_enrollment_token(client: QURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "key_id": "key_enroll123456",
+                    "key_prefix": "lv_live_enrl",
+                    "api_key": "lv_live_enrollment_secret",
+                    "kind": "enrollment_token",
+                    "name": "prod-dashboard enrollment",
+                    "target": "connector",
+                    "claims": [{"type": "connector", "id": "prod-dashboard"}],
+                    "scopes": ["qurl:agent", "qurl:write"],
+                    "status": "active",
+                },
+            },
+        )
+    )
+    key = client.create_api_key(
+        name="prod-dashboard enrollment",
+        kind="enrollment_token",
+        target="connector",
+        claims=[qurl_types.CredentialClaim(type="connector", id="prod-dashboard")],
+        expires_in="2h",
+    )
+
+    body = json.loads(route.calls[0].request.content)
+    assert body == {
+        "kind": "enrollment_token",
+        "name": "prod-dashboard enrollment",
+        "target": "connector",
+        "claims": [{"type": "connector", "id": "prod-dashboard"}],
+        "expires_in": "2h",
+    }
+    # The server assigns enrollment-token scopes; sending them is a 400.
+    assert "scopes" not in body
+    assert key.target == "connector"
+    assert key.claims == [qurl_types.CredentialClaim(type="connector", id="prod-dashboard")]
+
+
+def test_create_api_key_rejects_mismatched_scopes(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="not accepted for kind='enrollment_token'"):
+        client.create_api_key(
+            name="bound enrollment",
+            kind="enrollment_token",
+            target="agent",
+            scopes=["qurl:agent"],
+        )
+
+    with pytest.raises(ValueError, match="required for kind='api_key'"):
+        client.create_api_key(name="durable")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_create_api_key_kind_first_parity(async_client: AsyncQURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/api-keys").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "key_id": "key_async12345",
+                    "key_prefix": "lv_live_asyn",
+                    "api_key": "lv_live_async_enrollment",
+                    "kind": "enrollment_token",
+                    "name": "async enrollment",
+                    "target": "agent",
+                    "status": "active",
+                },
+            },
+        )
+    )
+    key = await async_client.create_api_key(name="async enrollment", kind="enrollment_token")
+
+    assert json.loads(route.calls[0].request.content) == {
+        "kind": "enrollment_token",
+        "name": "async enrollment",
+    }
+    assert key.kind == "enrollment_token"
+
+    with pytest.raises(ValueError, match="not accepted for kind='enrollment_token'"):
+        await async_client.create_api_key(
+            name="async bad",
+            kind="enrollment_token",
+            scopes=["qurl:agent"],
+        )
+
+
 def test_repr_masks_api_key() -> None:
     c = QURLClient(api_key="lv_live_abcdefghij", base_url=BASE_URL)
     r = repr(c)

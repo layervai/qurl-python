@@ -470,23 +470,39 @@ class WebhookEventTypesOutput:
 
 
 @dataclass
-class APIKey:
-    """API key metadata.
+class CredentialClaim:
+    """A resource claim binding an enrollment token to one resource.
 
-    ``api_key`` is populated only on create responses.
+    ``connector`` is the only claim type today; ``id`` is the connector id.
+    """
+
+    type: str
+    id: str
+
+
+@dataclass
+class APIKey:
+    """Credential metadata.
+
+    ``kind`` discriminates a durable ``api_key`` from a one-shot
+    ``enrollment_token`` or a system-minted ``device`` credential; unknown
+    future kinds may appear. ``target`` and ``claims`` are populated only
+    on enrollment tokens. ``api_key`` is populated only on create
+    responses.
     """
 
     key_id: str
     key_prefix: str
     name: str
+    kind: str | None = None
     scopes: list[str] = field(default_factory=list)
     status: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     last_used_at: datetime | None = None
     expires_at: datetime | None = None
-    purpose: str | None = None
-    tunnel_slug: str | None = None
+    target: str | None = None
+    claims: list[CredentialClaim] = field(default_factory=list)
     api_key: str | None = field(default=None, repr=False)
 
 
