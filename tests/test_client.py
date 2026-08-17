@@ -236,6 +236,16 @@ def test_create_api_key_rejects_mismatched_scopes(client: QURLClient) -> None:
     with pytest.raises(ValueError, match="required for kind='api_key'"):
         client.create_api_key(name="durable")
 
+    with pytest.raises(ValueError, match="target: only accepted for kind='enrollment_token'"):
+        client.create_api_key(name="durable", scopes=["qurl:read"], target="connector")
+
+    with pytest.raises(ValueError, match="claims: only accepted for kind='enrollment_token'"):
+        client.create_api_key(
+            name="durable",
+            scopes=["qurl:read"],
+            claims=[qurl_types.CredentialClaim(type="connector", id="prod-dashboard")],
+        )
+
 
 @respx.mock
 @pytest.mark.asyncio

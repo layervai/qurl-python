@@ -198,12 +198,16 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
-def build_credential_scopes(kind: str, scopes: Any) -> list[str] | None:
-    """Validate ``scopes`` against the credential ``kind``.
+def build_credential_scopes(
+    kind: str, scopes: Any, target: Any = None, claims: Any = None
+) -> list[str] | None:
+    """Validate the kind-dependent credential fields and return ``scopes``.
 
-    Durable ``api_key`` credentials carry caller-chosen scopes.
-    ``enrollment_token`` scopes are server-assigned from ``target``, so
-    sending them returns 400 ``invalid_input``.
+    The three fields are mutually exclusive by kind, and the server
+    returns 400 ``invalid_input`` for either mismatch. Durable ``api_key``
+    credentials carry caller-chosen ``scopes`` and accept neither
+    ``target`` nor ``claims``; ``enrollment_token`` scopes are
+    server-assigned from ``target``, so sending ``scopes`` is rejected.
     """
     if kind == "enrollment_token":
         if scopes is not None:
@@ -212,6 +216,9 @@ def build_credential_scopes(kind: str, scopes: Any) -> list[str] | None:
                 "assigns them from target"
             )
         return None
+    for field, value in (("target", target), ("claims", claims)):
+        if value is not None:
+            raise ValueError(f"{field}: only accepted for kind='enrollment_token'")
     if scopes is None:
         raise ValueError(f"scopes: required for kind={kind!r}")
     return build_string_list(scopes, "scopes")

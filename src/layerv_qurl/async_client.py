@@ -1313,13 +1313,14 @@ class AsyncQURLClient:
         """
         validate_required_string(name, "name")
         validate_required_string(kind, "kind")
+        claim_list = list(claims) if claims is not None else None
         body = build_body(
             {
                 "kind": kind,
                 "name": name,
-                "scopes": build_credential_scopes(kind, scopes),
+                "scopes": build_credential_scopes(kind, scopes, target, claim_list),
                 "target": target,
-                "claims": list(claims) if claims is not None else None,
+                "claims": claim_list,
                 "expires_in": expires_in,
             }
         )
