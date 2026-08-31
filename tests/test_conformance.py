@@ -207,7 +207,7 @@ def test_build_fragment_cases_accepts_a_well_formed_artifact() -> None:
 
 def test_build_fragment_cases_rejects_a_renamed_artifact() -> None:
     """A different artifact name is a different contract, not a new revision."""
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="qurl-v2-conformance-vectors"):
         _build_fragment_cases(_fake_artifact(artifact="something-else"))
 
 
