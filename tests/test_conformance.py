@@ -26,13 +26,21 @@ NO_ACCESS_TOKEN_ERROR = (
     "(https://qurl.link/#at_...) or a bare access token (at_...)"
 )
 RESOLVER_REACHED_MESSAGE = "qurl-conformance fragment reached API resolver"
+# qv2 artifact schema revisions whose `fragment` class this SDK understands.
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 
 
 def _qurl_conformance_fragment_cases() -> list[Any]:
     """Return the SDK-consumed qv2 fragment inputs from qurl-conformance."""
     conformance = qurl_conformance.qv2_vectors()
     assert conformance["artifact"] == "qurl-v2-conformance-vectors"
-    assert conformance["schema_version"] == 1
+    # Allowlist rather than `== N`: the dependency range spans both schema
+    # revisions, so either can resolve. v2 is purely additive over v1 (it
+    # adds a `transport_contract` key and a `transport` class); the
+    # `fragment` class this SDK consumes is byte-identical between them.
+    # Keep this an explicit set so an unrecognized future bump still fails
+    # loudly instead of silently feeding us a reshaped artifact.
+    assert conformance["schema_version"] in SUPPORTED_SCHEMA_VERSIONS
     vectors = conformance["classes"]["fragment"]["vectors"]
     assert vectors, "fragment class must not be empty"
     assert any(SIGNED_FRAGMENT_SHAPE_RE.match(vector["fragment"]) for vector in vectors), (
