@@ -46,8 +46,8 @@ def _assert_supported_schema_version(conformance: dict[str, Any]) -> None:
     )
 
 
-def _qurl_conformance_fragment_cases() -> list[Any]:
-    """Return the SDK-consumed qv2 fragment inputs from qurl-conformance."""
+def _build_fragment_cases() -> list[Any]:
+    """Extract the SDK-consumed qv2 fragment inputs; raises on a reshaped artifact."""
     conformance = qurl_conformance.qv2_vectors()
     assert conformance["artifact"] == "qurl-v2-conformance-vectors"
     vectors = conformance["classes"]["fragment"]["vectors"]
@@ -67,7 +67,34 @@ def _qurl_conformance_fragment_cases() -> list[Any]:
     return cases
 
 
+def _qurl_conformance_fragment_cases() -> list[Any]:
+    """Build the parametrize cases without ever failing collection.
+
+    The version gate above only covers a *version-number* change. A reshaped
+    artifact — a renamed class, a dropped key, an unexpected vector shape —
+    raises while extracting cases, and this runs at import time, so pytest
+    would interrupt the session and report nothing for the other 277 tests
+    (the schema-2 outage on main, in a different disguise). Carry the error
+    into the parametrization and re-raise it inside the test instead.
+
+    Deliberately not `return []` on failure: an empty parametrize list makes
+    these tests *skip*, and a silently skipped fail-closed test is worse than
+    the outage it replaces.
+    """
+    try:
+        return _build_fragment_cases()
+    except Exception as exc:  # noqa: BLE001 - surfaced by _fragment_or_raise
+        return [pytest.param(exc, id="qurl_conformance_artifact_unusable")]
+
+
 FRAGMENT_CASES = _qurl_conformance_fragment_cases()
+
+
+def _fragment_or_raise(fragment: Any) -> str:
+    """Re-raise a collection-time artifact failure as this test's failure."""
+    if isinstance(fragment, BaseException):
+        raise fragment
+    return fragment
 
 
 # The version gate is a test, not a collection-time assert: an unrecognized
@@ -99,6 +126,7 @@ def test_enter_portal_rejects_qurl_conformance_fragments_before_api_call(
     fragment: str,
 ) -> None:
     """Shared qv2 fragments are offline links, so Python must not resolve them."""
+    fragment = _fragment_or_raise(fragment)
     with (
         QURLClient(api_key="lv_live_test", base_url=BASE_URL) as client,
         patch.object(
@@ -118,6 +146,7 @@ async def test_async_enter_portal_rejects_qurl_conformance_fragments_before_api_
     fragment: str,
 ) -> None:
     """Async portal entry shares the same fail-closed qv2 fragment guard."""
+    fragment = _fragment_or_raise(fragment)
     async with AsyncQURLClient(
         api_key="lv_live_test", base_url=BASE_URL
     ) as client:
