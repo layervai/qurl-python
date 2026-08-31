@@ -38,7 +38,7 @@ SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 
 def _assert_supported_schema_version(conformance: dict[str, Any]) -> None:
     """Reject an artifact revision whose shape nobody has re-verified yet."""
-    schema_version = conformance["schema_version"]
+    schema_version = conformance.get("schema_version")
     assert schema_version in SUPPORTED_SCHEMA_VERSIONS, (
         f"unrecognized qv2 artifact schema_version {schema_version} "
         f"(qurl-conformance {package_version('qurl-conformance')}, supported: "
@@ -106,7 +106,7 @@ def _fragment_or_raise(fragment: str | BaseException) -> str:
         # module-level and holds one instance, so re-raising it would mutate
         # `__traceback__` in place and bleed the sync test's frames into the
         # async test's report.
-        raise AssertionError(str(fragment)) from fragment
+        raise AssertionError(f"{type(fragment).__name__}: {fragment}") from fragment
     return fragment
 
 
@@ -118,16 +118,50 @@ def test_qv2_artifact_schema_version_is_supported() -> None:
     _assert_supported_schema_version(qurl_conformance.qv2_vectors())
 
 
+def test_supported_schema_versions_covers_the_declared_dependency_range() -> None:
+    """Dropping a revision from the allowlist must be a deliberate edit.
+
+    This is a change-detector on purpose. The parametrized test below walks
+    the set itself, so it narrows along with it: cutting `1` leaves CI fully
+    green (verified — 282 passed) while breaking anyone who resolves the
+    lower end of `qurl-conformance>=0.1.2,<0.13`, which is an old lockfile,
+    a `--resolution lowest` job, or a constrained downstream install. Only a
+    pinned expectation catches that, and it forces the range in
+    pyproject.toml to be re-read at the same time.
+    """
+    assert sorted(SUPPORTED_SCHEMA_VERSIONS) == [1, 2], (
+        "SUPPORTED_SCHEMA_VERSIONS changed: qurl-conformance <=0.11.0 ships "
+        "schema 1 and 0.12.x ships schema 2, so both must stay allowlisted "
+        "while the range in pyproject.toml still admits both"
+    )
+
+
+@pytest.mark.parametrize("schema_version", sorted(SUPPORTED_SCHEMA_VERSIONS))
+def test_every_supported_schema_version_is_accepted(schema_version: int) -> None:
+    """Each allowlisted revision must pass — including ones CI never resolves.
+
+    Only whatever `<0.13` resolves (schema 2) gets live coverage, so without
+    this the `1` branch is never exercised at all.
+    """
+    _assert_supported_schema_version({"schema_version": schema_version})
+
+
 def test_unsupported_qv2_schema_version_is_rejected() -> None:
     """The tripwire must actually fire — a silent pass would hide a reshape."""
     with pytest.raises(AssertionError, match=r"unrecognized qv2 artifact schema_version 3"):
         _assert_supported_schema_version({"schema_version": 3})
 
 
+def test_missing_qv2_schema_version_is_rejected_with_the_actionable_message() -> None:
+    """A dropped key must reach the same guidance, not a bare KeyError."""
+    with pytest.raises(AssertionError, match=r"schema_version None"):
+        _assert_supported_schema_version({})
+
+
 def test_fragment_or_raise_surfaces_a_carried_artifact_failure() -> None:
     """A carried failure must fail the test, not flow through as fragment data."""
     assert _fragment_or_raise("qv2.abc.def") == "qv2.abc.def"
-    with pytest.raises(AssertionError, match="boom") as exc_info:
+    with pytest.raises(AssertionError, match=r"ValueError: boom") as exc_info:
         _fragment_or_raise(ValueError("boom"))
     assert isinstance(exc_info.value.__cause__, ValueError), "original cause must be chained"
 
