@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -36,12 +37,27 @@ RESOLVER_REACHED_MESSAGE = "qurl-conformance fragment reached API resolver"
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 
 
+def _conformance_version() -> str:
+    """Installed qurl-conformance version, or "unknown" if it has no metadata.
+
+    `importlib.metadata.version` resolves the *distribution*, so a source
+    checkout on PYTHONPATH or a vendored copy is importable but raises
+    PackageNotFoundError. This is only ever called while building a failure
+    message, so raising there would replace the actionable text with an
+    unrelated traceback on the one path it exists to serve.
+    """
+    try:
+        return package_version("qurl-conformance")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def _assert_supported_schema_version(conformance: dict[str, Any]) -> None:
     """Reject an artifact revision whose shape nobody has re-verified yet."""
     schema_version = conformance.get("schema_version")
     assert schema_version in SUPPORTED_SCHEMA_VERSIONS, (
         f"unrecognized qv2 artifact schema_version {schema_version} "
-        f"(qurl-conformance {package_version('qurl-conformance')}, supported: "
+        f"(qurl-conformance {_conformance_version()}, supported: "
         f"{sorted(SUPPORTED_SCHEMA_VERSIONS)}): re-verify the `fragment` class "
         f"shape, then add it to SUPPORTED_SCHEMA_VERSIONS"
     )
@@ -118,32 +134,25 @@ def test_qv2_artifact_schema_version_is_supported() -> None:
     _assert_supported_schema_version(qurl_conformance.qv2_vectors())
 
 
-def test_supported_schema_versions_covers_the_declared_dependency_range() -> None:
-    """Dropping a revision from the allowlist must be a deliberate edit.
+def test_supported_schema_versions_is_pinned() -> None:
+    """Changing the allowlist must be a deliberate edit, not a silent one.
 
-    This is a change-detector on purpose. The parametrized test below walks
-    the set itself, so it narrows along with it: cutting `1` leaves CI fully
-    green (verified — 282 passed) while breaking anyone who resolves the
-    lower end of `qurl-conformance>=0.1.2,<0.13`, which is an old lockfile,
-    a `--resolution lowest` job, or a constrained downstream install. Only a
-    pinned expectation catches that, and it forces the range in
-    pyproject.toml to be re-read at the same time.
+    A change-detector on purpose, and the only thing that catches a narrowing.
+    CI resolves 0.12.x (schema 2), so cutting `1` leaves the suite fully green
+    (verified — 282 passed) while breaking anyone who resolves the lower end
+    of the declared range: an old lockfile, a `--resolution lowest` job, a
+    constrained downstream install.
+
+    This pins the set; it does not parse the range (tomllib is 3.11+ and this
+    package supports 3.10). Re-read the range in pyproject.toml by hand when
+    this fires.
     """
     assert sorted(SUPPORTED_SCHEMA_VERSIONS) == [1, 2], (
-        "SUPPORTED_SCHEMA_VERSIONS changed: qurl-conformance <=0.11.0 ships "
-        "schema 1 and 0.12.x ships schema 2, so both must stay allowlisted "
-        "while the range in pyproject.toml still admits both"
+        "SUPPORTED_SCHEMA_VERSIONS changed. Today qurl-conformance <=0.11.0 "
+        "ships schema 1 and 0.12.x ships schema 2: confirm the range in "
+        "pyproject.toml admits exactly the revisions now allowlisted, then "
+        "update this pin to match"
     )
-
-
-@pytest.mark.parametrize("schema_version", sorted(SUPPORTED_SCHEMA_VERSIONS))
-def test_every_supported_schema_version_is_accepted(schema_version: int) -> None:
-    """Each allowlisted revision must pass — including ones CI never resolves.
-
-    Only whatever `<0.13` resolves (schema 2) gets live coverage, so without
-    this the `1` branch is never exercised at all.
-    """
-    _assert_supported_schema_version({"schema_version": schema_version})
 
 
 def test_unsupported_qv2_schema_version_is_rejected() -> None:

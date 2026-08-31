@@ -35,8 +35,9 @@ dev = [
     "pytest-asyncio>=0.25",
     # Shared qURL protocol vectors; tests assert the SDK-consumed artifact shape.
     # Widening this range can admit a new qv2 artifact schema revision — if so,
-    # re-verify the `fragment` class shape and update SUPPORTED_SCHEMA_VERSIONS
-    # in tests/test_conformance.py.
+    # re-verify the `fragment` class shape, then update both
+    # SUPPORTED_SCHEMA_VERSIONS and its pinned expectation in
+    # test_supported_schema_versions_is_pinned (tests/test_conformance.py).
     "qurl-conformance>=0.1.2,<0.13",
     "respx>=0.22",
     "ruff>=0.11",
