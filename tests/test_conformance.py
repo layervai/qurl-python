@@ -63,9 +63,15 @@ def _assert_supported_schema_version(conformance: dict[str, Any]) -> None:
     )
 
 
-def _build_fragment_cases() -> list[Any]:
-    """Extract the SDK-consumed qv2 fragment inputs; raises on a reshaped artifact."""
-    conformance = qurl_conformance.qv2_vectors()
+def _build_fragment_cases(conformance: dict[str, Any] | None = None) -> list[Any]:
+    """Extract the SDK-consumed qv2 fragment inputs; raises on a reshaped artifact.
+
+    Takes the artifact as an argument (like _assert_supported_schema_version)
+    so each reshape detector below can be tested against a small fake rather
+    than waiting on a real upstream regression to exercise it.
+    """
+    if conformance is None:
+        conformance = qurl_conformance.qv2_vectors()
     assert conformance["artifact"] == "qurl-v2-conformance-vectors"
     vectors = conformance["classes"]["fragment"]["vectors"]
     assert vectors, "fragment class must not be empty"
@@ -106,10 +112,12 @@ def _qurl_conformance_fragment_cases() -> list[Any]:
     try:
         return _build_fragment_cases()
     # Intentionally broad — anything that stops us building cases must become
-    # a red test rather than a collection abort. (BLE isn't in ruff's select
+    # a red test rather than a collection abort. That includes a bug in the
+    # helper itself, which is why the case id says "could not build" rather
+    # than naming the artifact as the culprit. (BLE isn't in ruff's select
     # list, so this comment is documentation, not suppression.)
     except Exception as exc:
-        return [pytest.param(exc, id="qurl_conformance_artifact_unusable")]
+        return [pytest.param(exc, id="could_not_build_fragment_cases")]
 
 
 FRAGMENT_CASES = _qurl_conformance_fragment_cases()
@@ -173,6 +181,64 @@ def test_fragment_or_raise_surfaces_a_carried_artifact_failure() -> None:
     with pytest.raises(AssertionError, match=r"ValueError: boom") as exc_info:
         _fragment_or_raise(ValueError("boom"))
     assert isinstance(exc_info.value.__cause__, ValueError), "original cause must be chained"
+
+
+def _fake_artifact(**overrides: Any) -> dict[str, Any]:
+    """A minimal well-formed artifact, so each test mutates exactly one thing."""
+    artifact: dict[str, Any] = {
+        "artifact": "qurl-v2-conformance-vectors",
+        "schema_version": 2,
+        "classes": {
+            "fragment": {
+                "vectors": [
+                    {"name": "signed", "fragment": "qv2.eyJhIjoxfQ.c2ln"},
+                ]
+            }
+        },
+    }
+    artifact.update(overrides)
+    return artifact
+
+
+def test_build_fragment_cases_accepts_a_well_formed_artifact() -> None:
+    """The fake must pass, or the reshape tests below would prove nothing."""
+    assert len(_build_fragment_cases(_fake_artifact())) == 1
+
+
+def test_build_fragment_cases_rejects_a_renamed_artifact() -> None:
+    """A different artifact name is a different contract, not a new revision."""
+    with pytest.raises(AssertionError):
+        _build_fragment_cases(_fake_artifact(artifact="something-else"))
+
+
+def test_build_fragment_cases_rejects_an_empty_fragment_class() -> None:
+    """Zero vectors would parametrize zero cases — a silent pass."""
+    with pytest.raises(AssertionError, match="fragment class must not be empty"):
+        _build_fragment_cases(_fake_artifact(classes={"fragment": {"vectors": []}}))
+
+
+def test_build_fragment_cases_rejects_vectors_with_no_signed_fragment() -> None:
+    """The signed-shape path is what these tests exist to exercise."""
+    unsigned = {"name": "unsigned", "fragment": "not-a-qv2-fragment"}
+    with pytest.raises(AssertionError, match="signed-shaped"):
+        _build_fragment_cases(_fake_artifact(classes={"fragment": {"vectors": [unsigned]}}))
+
+
+def test_build_fragment_cases_rejects_a_platform_token_smuggled_in_as_a_fragment() -> None:
+    """Platform tokens resolve online; treating one as an offline fragment
+    would turn a fail-closed test into a live API call."""
+    vectors = [
+        {"name": "signed", "fragment": "qv2.eyJhIjoxfQ.c2ln"},
+        {"name": "token", "fragment": "at_" + "a" * 43},
+    ]
+    with pytest.raises(AssertionError, match="not platform tokens"):
+        _build_fragment_cases(_fake_artifact(classes={"fragment": {"vectors": vectors}}))
+
+
+def test_build_fragment_cases_rejects_a_renamed_fragment_class() -> None:
+    """The exact reshape that motivated the collection guard."""
+    with pytest.raises(KeyError):
+        _build_fragment_cases(_fake_artifact(classes={"fragments": {"vectors": []}}))
 
 
 def test_unusable_artifact_yields_a_red_case_not_an_empty_skip(
