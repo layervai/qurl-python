@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from importlib.metadata import version as package_version
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -68,14 +69,19 @@ def _build_fragment_cases() -> list[Any]:
 
 
 def _qurl_conformance_fragment_cases() -> list[Any]:
-    """Build the parametrize cases without ever failing collection.
+    """Build the parametrize cases without failing collection on a reshaped artifact.
 
     The version gate above only covers a *version-number* change. A reshaped
     artifact — a renamed class, a dropped key, an unexpected vector shape —
     raises while extracting cases, and this runs at import time, so pytest
-    would interrupt the session and report nothing for the other 277 tests
-    (the schema-2 outage on main, in a different disguise). Carry the error
-    into the parametrization and re-raise it inside the test instead.
+    would interrupt the session and report nothing for every other test in
+    the suite (the schema-2 outage on main, in a different disguise). Carry
+    the error into the parametrization and surface it inside the test instead.
+
+    Note the bound: the module-level `import qurl_conformance` is still
+    outside this guard, so a package that renames the top-level module or
+    raises at import reproduces the original outage. `importorskip` would
+    only trade it for a silent skip, which the paragraph below rejects.
 
     Deliberately not `return []` on failure: an empty parametrize list makes
     these tests *skip*, and a silently skipped fail-closed test is worse than
@@ -83,23 +89,30 @@ def _qurl_conformance_fragment_cases() -> list[Any]:
     """
     try:
         return _build_fragment_cases()
-    except Exception as exc:  # noqa: BLE001 - surfaced by _fragment_or_raise
+    # Intentionally broad — anything that stops us building cases must become
+    # a red test rather than a collection abort. (BLE isn't in ruff's select
+    # list, so this comment is documentation, not suppression.)
+    except Exception as exc:
         return [pytest.param(exc, id="qurl_conformance_artifact_unusable")]
 
 
 FRAGMENT_CASES = _qurl_conformance_fragment_cases()
 
 
-def _fragment_or_raise(fragment: Any) -> str:
-    """Re-raise a collection-time artifact failure as this test's failure."""
+def _fragment_or_raise(fragment: str | BaseException) -> str:
+    """Surface a collection-time artifact failure as this test's failure."""
     if isinstance(fragment, BaseException):
-        raise fragment
+        # A fresh exception rather than `raise fragment`: FRAGMENT_CASES is
+        # module-level and holds one instance, so re-raising it would mutate
+        # `__traceback__` in place and bleed the sync test's frames into the
+        # async test's report.
+        raise AssertionError(str(fragment)) from fragment
     return fragment
 
 
 # The version gate is a test, not a collection-time assert: an unrecognized
-# revision must fail one red test, not abort collection and take all 275
-# unrelated tests down with it (which is exactly what schema 2 did on main).
+# revision must fail one red test, not abort collection and take every other
+# test in the suite down with it (exactly what schema 2 did on main).
 def test_qv2_artifact_schema_version_is_supported() -> None:
     """The resolved artifact revision is one whose shape we have checked."""
     _assert_supported_schema_version(qurl_conformance.qv2_vectors())
@@ -109,6 +122,29 @@ def test_unsupported_qv2_schema_version_is_rejected() -> None:
     """The tripwire must actually fire — a silent pass would hide a reshape."""
     with pytest.raises(AssertionError, match=r"unrecognized qv2 artifact schema_version 3"):
         _assert_supported_schema_version({"schema_version": 3})
+
+
+def test_fragment_or_raise_surfaces_a_carried_artifact_failure() -> None:
+    """A carried failure must fail the test, not flow through as fragment data."""
+    assert _fragment_or_raise("qv2.abc.def") == "qv2.abc.def"
+    with pytest.raises(AssertionError, match="boom") as exc_info:
+        _fragment_or_raise(ValueError("boom"))
+    assert isinstance(exc_info.value.__cause__, ValueError), "original cause must be chained"
+
+
+def test_unusable_artifact_yields_a_red_case_not_an_empty_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback must never degrade to `[]`, which would silently skip."""
+
+    def _boom() -> list[Any]:
+        raise AssertionError("reshaped")
+
+    monkeypatch.setattr(sys.modules[__name__], "_build_fragment_cases", _boom)
+    cases = _qurl_conformance_fragment_cases()
+    assert len(cases) == 1, "an unusable artifact must still produce one red test"
+    with pytest.raises(AssertionError, match="reshaped"):
+        _fragment_or_raise(cases[0].values[0])
 
 
 def _assert_qv2_fragment_rejected(error: ValueError, fragment: str) -> None:
@@ -123,7 +159,7 @@ def _assert_qv2_fragment_rejected(error: ValueError, fragment: str) -> None:
 
 @pytest.mark.parametrize("fragment", FRAGMENT_CASES)
 def test_enter_portal_rejects_qurl_conformance_fragments_before_api_call(
-    fragment: str,
+    fragment: str | BaseException,
 ) -> None:
     """Shared qv2 fragments are offline links, so Python must not resolve them."""
     fragment = _fragment_or_raise(fragment)
@@ -143,7 +179,7 @@ def test_enter_portal_rejects_qurl_conformance_fragments_before_api_call(
 
 @pytest.mark.parametrize("fragment", FRAGMENT_CASES)
 async def test_async_enter_portal_rejects_qurl_conformance_fragments_before_api_call(
-    fragment: str,
+    fragment: str | BaseException,
 ) -> None:
     """Async portal entry shares the same fail-closed qv2 fragment guard."""
     fragment = _fragment_or_raise(fragment)
