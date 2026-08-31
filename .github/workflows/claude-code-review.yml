@@ -144,7 +144,7 @@ jobs:
         # step, so the verify step never runs and the PR gets a bare
         # `cancelled` check with no comment and nothing saying why.
         timeout-minutes: 10
-        uses: anthropics/claude-code-action@fa7e2f0a29a126f0b81cdcf360561b36e44cf608 # v1.0.180
+        uses: anthropics/claude-code-action@e5ad3c7725bc2459721893f88879fef9dbcf97b0 # v1.0.202
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
