@@ -40,7 +40,12 @@ def _qurl_conformance_fragment_cases() -> list[Any]:
     # `fragment` class this SDK consumes is byte-identical between them.
     # Keep this an explicit set so an unrecognized future bump still fails
     # loudly instead of silently feeding us a reshaped artifact.
-    assert conformance["schema_version"] in SUPPORTED_SCHEMA_VERSIONS
+    assert conformance["schema_version"] in SUPPORTED_SCHEMA_VERSIONS, (
+        f"unrecognized qv2 artifact schema_version "
+        f"{conformance['schema_version']}: re-verify the `fragment` class "
+        f"shape against the new revision, then add it to "
+        f"SUPPORTED_SCHEMA_VERSIONS"
+    )
     vectors = conformance["classes"]["fragment"]["vectors"]
     assert vectors, "fragment class must not be empty"
     assert any(SIGNED_FRAGMENT_SHAPE_RE.match(vector["fragment"]) for vector in vectors), (
