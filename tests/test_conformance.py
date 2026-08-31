@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version as package_version
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -27,25 +28,28 @@ NO_ACCESS_TOKEN_ERROR = (
 )
 RESOLVER_REACHED_MESSAGE = "qurl-conformance fragment reached API resolver"
 # qv2 artifact schema revisions whose `fragment` class this SDK understands.
+# An allowlist rather than `== N` because the qurl-conformance range in
+# pyproject.toml spans both revisions, so either can legitimately resolve:
+# v2 is purely additive over v1 (it adds a `transport_contract` key and a
+# `transport` class) and leaves the `fragment` class byte-identical.
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+
+
+def _assert_supported_schema_version(conformance: dict[str, Any]) -> None:
+    """Reject an artifact revision whose shape nobody has re-verified yet."""
+    schema_version = conformance["schema_version"]
+    assert schema_version in SUPPORTED_SCHEMA_VERSIONS, (
+        f"unrecognized qv2 artifact schema_version {schema_version} "
+        f"(qurl-conformance {package_version('qurl-conformance')}, supported: "
+        f"{sorted(SUPPORTED_SCHEMA_VERSIONS)}): re-verify the `fragment` class "
+        f"shape, then add it to SUPPORTED_SCHEMA_VERSIONS"
+    )
 
 
 def _qurl_conformance_fragment_cases() -> list[Any]:
     """Return the SDK-consumed qv2 fragment inputs from qurl-conformance."""
     conformance = qurl_conformance.qv2_vectors()
     assert conformance["artifact"] == "qurl-v2-conformance-vectors"
-    # Allowlist rather than `== N`: the dependency range spans both schema
-    # revisions, so either can resolve. v2 is purely additive over v1 (it
-    # adds a `transport_contract` key and a `transport` class); the
-    # `fragment` class this SDK consumes is byte-identical between them.
-    # Keep this an explicit set so an unrecognized future bump still fails
-    # loudly instead of silently feeding us a reshaped artifact.
-    assert conformance["schema_version"] in SUPPORTED_SCHEMA_VERSIONS, (
-        f"unrecognized qv2 artifact schema_version "
-        f"{conformance['schema_version']}: re-verify the `fragment` class "
-        f"shape against the new revision, then add it to "
-        f"SUPPORTED_SCHEMA_VERSIONS"
-    )
     vectors = conformance["classes"]["fragment"]["vectors"]
     assert vectors, "fragment class must not be empty"
     assert any(SIGNED_FRAGMENT_SHAPE_RE.match(vector["fragment"]) for vector in vectors), (
@@ -64,6 +68,20 @@ def _qurl_conformance_fragment_cases() -> list[Any]:
 
 
 FRAGMENT_CASES = _qurl_conformance_fragment_cases()
+
+
+# The version gate is a test, not a collection-time assert: an unrecognized
+# revision must fail one red test, not abort collection and take all 275
+# unrelated tests down with it (which is exactly what schema 2 did on main).
+def test_qv2_artifact_schema_version_is_supported() -> None:
+    """The resolved artifact revision is one whose shape we have checked."""
+    _assert_supported_schema_version(qurl_conformance.qv2_vectors())
+
+
+def test_unsupported_qv2_schema_version_is_rejected() -> None:
+    """The tripwire must actually fire — a silent pass would hide a reshape."""
+    with pytest.raises(AssertionError, match=r"unrecognized qv2 artifact schema_version 3"):
+        _assert_supported_schema_version({"schema_version": 3})
 
 
 def _assert_qv2_fragment_rejected(error: ValueError, fragment: str) -> None:
