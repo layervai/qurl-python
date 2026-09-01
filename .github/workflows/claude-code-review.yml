@@ -126,6 +126,23 @@ jobs:
             echo "::error::Claude review fetch proof installed a Git credential."
             exit 1
           fi
+          # Snapshot the authorized head/base into a ref namespace the action never
+          # writes. Read this for what it is: a ref-tampering canary, NOT independent
+          # snapshot evidence. The verify step compares refs/automatic-review/* against the
+          # same workflow env value written here, so it proves only that nothing
+          # deleted or rewrote the ref. Authority over "the authorized snapshots did
+          # not move" rests on origin_* (read from the LOCAL_ORIGIN bare repo by
+          # --git-dir, which the action never touches) and source_* (the workspace
+          # branches) - both of which are checked alongside it.
+          #
+          # It replaces a refs/remotes/origin/* comparison that had to go: from
+          # v1.0.187 the action re-points origin at an authenticated GitHub URL and
+          # fetches the base branch over the network, which opportunistically advances
+          # refs/remotes/origin/<base> whenever the base branch moves while the review is
+          # running. That check would have failed on a legitimately moving ref rather
+          # than on tampering.
+          git update-ref refs/automatic-review/head "${EXPECTED_HEAD_SHA}"
+          git update-ref refs/automatic-review/base "${EXPECTED_BASE_SHA}"
           {
             echo "trusted_sha=${trusted_head}"
             echo "ready=true"
@@ -245,13 +262,106 @@ jobs:
             echo "::error::Claude changed the credential-free review configuration; failing closed."
             exit 1
           fi
+          # origin stopped being solely ours to pin. claude-code-action v1.0.187
+          # added replaceCheckoutCredentials() to the API-signing path, so every run
+          # re-points origin at
+          # https://x-access-token:<token>@<server>/<owner>/<repo>.git before
+          # Claude's first token; the action needs a working origin because
+          # restoreConfigFromBase() fetches the base branch through it. Asserting the
+          # LOCAL_ORIGIN pin survived therefore tested the action's version, not
+          # Claude's behavior, and failed closed on every real PR. Still
+          # present at v1.0.210, so bumping does not fix it.
+          #
+          # The property that pin bought still has to hold: origin may only ever
+          # address THIS repository, so no credential-bearing remote can point
+          # somewhere data could be pushed. Compare the destination with userinfo
+          # stripped, parsing the authority explicitly so a path that merely looks
+          # like userinfo (https://evil/@github.com/o/r.git) cannot masquerade as the
+          # allowed remote. The split assumes the credential contains no unencoded
+          # "/", which is what RFC 3986 requires of userinfo and what git itself
+          # assumes when parsing this URL; GitHub tokens are [A-Za-z0-9_], so this
+          # holds. It also assumes the action keeps rewriting origin as
+          # "<owner>/<repo>.git" under a scheme and host matching GITHUB_SERVER_URL -
+          # the scheme is not hardcoded, it is whatever the runner reports, which
+          # matters on GHES. A future action version that drops the ".git" suffix,
+          # adds a port, or normalizes the path differently fails CLOSED here - safe,
+          # but it breaks every run until the action_origin construction below is
+          # updated. The failure prints the observed and expected destinations, so
+          # start there.
+          origin_destination() {
+            local url="$1" scheme rest authority path
+            if [[ "${url}" == *://* ]]; then
+              scheme="${url%%://*}"
+              rest="${url#*://}"
+              authority="${rest%%/*}"
+              path="${rest#"${authority}"}"
+              authority="${authority##*@}"
+              printf '%s://%s%s' "${scheme}" "${authority}" "${path}"
+              return
+            fi
+            printf '%s' "${url}"
+          }
+
+          if [[ -z "${GITHUB_SERVER_URL}" || -z "${GITHUB_REPOSITORY}" ||
+                -z "${LOCAL_ORIGIN}" ]]; then
+            echo "::error::Runner-provided boundary comparison targets are unavailable; failing closed."
+            exit 1
+          fi
+          # Accept the repository with or without the ".git" suffix: both address the
+          # same repository, so making the suffix load-bearing would re-arm exactly the
+          # brittleness this change exists to remove. Compare case-insensitively -
+          # GitHub owner/repo names are case-insensitive and cannot differ only by
+          # case, so folding cannot admit a different repository.
+          action_origin="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          action_origin_bare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+
+          # origin is validated exhaustively below, but nothing pinned the remote SET:
+          # "git remote add exfil <url>" sails past a check that only reads origin.
+          # Pre-existing rather than new, and claude-code-review.yml denies Bash - but
+          # claude.yml grants it, so both files carry the guard rather than resting on
+          # a denylist staying correct in a file that does not have one.
+          mapfile -t configured_remotes < <(git remote 2>/dev/null)
+          if (( ${#configured_remotes[@]} != 1 )) || [[ "${configured_remotes[0]}" != "origin" ]]; then
+            echo "::error::Claude added or removed a Git remote; failing closed."
+            exit 1
+          fi
           mapfile -t origin_urls < <(git remote get-url --all origin 2>/dev/null)
           mapfile -t origin_push_urls < <(git remote get-url --push --all origin 2>/dev/null)
-          if (( ${#origin_urls[@]} != 1 || ${#origin_push_urls[@]} != 1 )) ||
-             [[ "${origin_urls[0]}" != "${LOCAL_ORIGIN}" || "${origin_push_urls[0]}" != "${LOCAL_ORIGIN}" ]]; then
+          if (( ${#origin_urls[@]} != 1 || ${#origin_push_urls[@]} != 1 )); then
             echo "::error::Claude changed the credential-free review origin; failing closed."
             exit 1
           fi
+          for origin_candidate in "${origin_urls[0]}" "${origin_push_urls[0]}"; do
+            # Never echo origin_candidate itself - it carries the token. Only the
+            # userinfo-stripped destination is safe to print.
+            origin_dest="$(origin_destination "${origin_candidate}")"
+            # After a correct strip the authority holds no "@", so a userinfo-position
+            # credential can only survive in the PATH: that is the mis-split signal -
+            # userinfo holding an unencoded "/" leaves the "@" past the first path
+            # separator, where "${authority##*@}" never reaches it. Test the path
+            # specifically rather than the whole string, so scp-style remotes
+            # (git@host:o/r.git, no scheme, credential is a key not userinfo) still
+            # print their real destination. This only redacts userinfo-position
+            # credentials; a secret elsewhere in the URL would still print, which
+            # needs the secret to be known already. A schemeless remote
+            # (tok@host:o/r.git) also prints verbatim: that is deliberate, so
+            # scp-style remotes keep their diagnostic value, and Actions secret
+            # masking covers registered secrets.
+            safe_dest="${origin_dest}"
+            if [[ "${origin_dest}" == *://* ]]; then
+              dest_rest="${origin_dest#*://}"
+              dest_authority="${dest_rest%%/*}"
+              if [[ "${dest_rest#"${dest_authority}"}" == *@* ]]; then
+                safe_dest='<redacted: destination path retained userinfo>'
+              fi
+            fi
+            if [[ "${origin_candidate}" != "${LOCAL_ORIGIN}" ]] &&
+               [[ "${origin_dest,,}" != "${action_origin,,}" ]] &&
+               [[ "${origin_dest,,}" != "${action_origin_bare,,}" ]]; then
+              echo "::error::The review origin moved off this repository; failing closed. Got '${safe_dest}', expected '${action_origin}' (with or without .git) or '${LOCAL_ORIGIN}'."
+              exit 1
+            fi
+          done
           mapfile -t recurse_submodule_values < <(git config --local --get-all fetch.recurseSubmodules 2>/dev/null)
           if (( ${#recurse_submodule_values[@]} != 1 )) || [[ "${recurse_submodule_values[0]}" != "false" ]]; then
             echo "::error::Claude changed the submodule-safe review configuration; failing closed."
@@ -262,8 +372,10 @@ jobs:
             echo "::error::Unable to resolve the local pull request head after Claude review; failing closed."
             exit 1
           fi
-          if ! tracking_head="$(git rev-parse "refs/remotes/origin/${HEAD_REF}" 2>/dev/null)" ||
-             ! tracking_base="$(git rev-parse "refs/remotes/origin/${BASE_REF}" 2>/dev/null)" ||
+          # Ref-tampering canary only - see the prepare step. The load-bearing
+          # snapshot comparisons in this block are origin_* and source_*.
+          if ! pinned_head="$(git rev-parse "refs/automatic-review/head" 2>/dev/null)" ||
+             ! pinned_base="$(git rev-parse "refs/automatic-review/base" 2>/dev/null)" ||
              ! source_head="$(git rev-parse "refs/heads/${HEAD_REF}" 2>/dev/null)" ||
              ! source_base="$(git rev-parse "refs/heads/${BASE_REF}" 2>/dev/null)" ||
              ! origin_head="$(git --git-dir="${LOCAL_ORIGIN}" rev-parse "refs/heads/${HEAD_REF}" 2>/dev/null)" ||
@@ -288,7 +400,7 @@ jobs:
           current_base="${current_fields[4]}"
           current_base_ref="${current_fields[5]}"
 
-          for sha_name in current_head current_base EXPECTED_HEAD_SHA EXPECTED_BASE_SHA EXPECTED_LOCAL_SHA local_head source_head source_base tracking_head tracking_base origin_head origin_base; do
+          for sha_name in current_head current_base EXPECTED_HEAD_SHA EXPECTED_BASE_SHA EXPECTED_LOCAL_SHA local_head source_head source_base pinned_head pinned_base origin_head origin_base; do
             if [[ ! "${!sha_name}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
               echo "::error::A pull request snapshot is unavailable or invalid after Claude review; failing closed."
               exit 1
@@ -301,12 +413,12 @@ jobs:
                 "${current_head_ref}" != "${HEAD_REF}" ||
                 "${EXPECTED_LOCAL_SHA}" != "${local_head}" ||
                 "${EXPECTED_HEAD_SHA}" != "${source_head}" ||
-                "${EXPECTED_HEAD_SHA}" != "${tracking_head}" ||
+                "${EXPECTED_HEAD_SHA}" != "${pinned_head}" ||
                 "${EXPECTED_HEAD_SHA}" != "${origin_head}" ||
                 "${current_base}" != "${EXPECTED_BASE_SHA}" ||
                 "${current_base_ref}" != "${BASE_REF}" ||
                 "${EXPECTED_BASE_SHA}" != "${source_base}" ||
-                "${EXPECTED_BASE_SHA}" != "${tracking_base}" ||
+                "${EXPECTED_BASE_SHA}" != "${pinned_base}" ||
                 "${EXPECTED_BASE_SHA}" != "${origin_base}" ]]; then
             echo "::error::The pull request head or base changed during Claude review; rerun review on the current snapshots."
             exit 1
