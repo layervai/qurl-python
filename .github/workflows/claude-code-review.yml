@@ -302,8 +302,8 @@ jobs:
             printf '%s' "${url}"
           }
 
-          if [[ -z "${GITHUB_SERVER_URL}" || -z "${GITHUB_REPOSITORY}" ||
-                -z "${LOCAL_ORIGIN}" ]]; then
+          if [[ -z "${GITHUB_SERVER_URL:-}" || -z "${GITHUB_REPOSITORY:-}" ||
+                -z "${LOCAL_ORIGIN:-}" ]]; then
             echo "::error::Runner-provided boundary comparison targets are unavailable; failing closed."
             exit 1
           fi
