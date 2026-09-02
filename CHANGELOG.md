@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/layervai/qurl-python/compare/v0.2.2...v0.3.0) (2026-09-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove HTTP agent bootstrap ([#121](https://github.com/layervai/qurl-python/issues/121))
+
+### Bug Fixes
+
+* **ci:** assert the review origin's destination, not an exact URL ([#148](https://github.com/layervai/qurl-python/issues/148)) ([9ee30fb](https://github.com/layervai/qurl-python/commit/9ee30fb74aa64a2297a2b37ef4078cf5e4a34919))
+
+
+### Code Refactoring
+
+* remove HTTP agent bootstrap ([#121](https://github.com/layervai/qurl-python/issues/121)) ([1838fe8](https://github.com/layervai/qurl-python/commit/1838fe8c6aad523b50974067addff03f416fecf3))
+
 ## [0.2.2](https://github.com/layervai/qurl-python/compare/v0.2.1...v0.2.2) (2026-07-05)
 
 
