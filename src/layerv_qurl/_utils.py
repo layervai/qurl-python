@@ -56,6 +56,7 @@ from layerv_qurl.types import (
     ConnectorInstallationListOutput,
     ConnectorInstallationStats,
     CreateOutput,
+    CredentialClaim,
     CurrentPeriodUsage,
     Customer,
     DailyUsage,
@@ -195,6 +196,32 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
             continue
         body[k] = _serialize_value(v)
     return body
+
+
+def build_credential_scopes(
+    kind: str, scopes: Any, target: Any = None, claims: Any = None
+) -> list[str] | None:
+    """Validate the kind-dependent credential fields and return ``scopes``.
+
+    The three fields are mutually exclusive by kind, and the server
+    returns 400 ``invalid_input`` for either mismatch. Durable ``api_key``
+    credentials carry caller-chosen ``scopes`` and accept neither
+    ``target`` nor ``claims``; ``enrollment_token`` scopes are
+    server-assigned from ``target``, so sending ``scopes`` is rejected.
+    """
+    if kind == "enrollment_token":
+        if scopes is not None:
+            raise ValueError(
+                "scopes: not accepted for kind='enrollment_token'; the server "
+                "assigns them from target"
+            )
+        return None
+    for field, value in (("target", target), ("claims", claims)):
+        if value is not None:
+            raise ValueError(f"{field}: only accepted for kind='enrollment_token'")
+    if scopes is None:
+        raise ValueError(f"scopes: required for kind={kind!r}")
+    return build_string_list(scopes, "scopes")
 
 
 def build_string_list(value: Any, field: str) -> list[str]:
@@ -1217,20 +1244,25 @@ def parse_webhook_event_types_output(data: Any) -> WebhookEventTypesOutput:
     return WebhookEventTypesOutput(events=events)
 
 
+def _parse_credential_claim(data: dict[str, Any]) -> CredentialClaim:
+    return CredentialClaim(type=data.get("type", ""), id=data.get("id", ""))
+
+
 def parse_api_key(data: dict[str, Any]) -> APIKey:
-    """Parse API key metadata."""
+    """Parse credential metadata."""
     return APIKey(
         key_id=data["key_id"],
         key_prefix=data["key_prefix"],
         name=data.get("name", ""),
+        kind=data.get("kind"),
         scopes=data.get("scopes") or [],
         status=data.get("status"),
         created_at=_parse_dt(data.get("created_at")),
         updated_at=_parse_dt(data.get("updated_at")),
         last_used_at=_parse_dt(data.get("last_used_at")),
         expires_at=_parse_dt(data.get("expires_at")),
-        purpose=data.get("purpose"),
-        tunnel_slug=data.get("tunnel_slug"),
+        target=data.get("target"),
+        claims=_parse_list_items(data.get("claims"), _parse_credential_claim),
         api_key=data.get("api_key"),
     )
 

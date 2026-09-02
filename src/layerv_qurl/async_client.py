@@ -20,6 +20,7 @@ from layerv_qurl._utils import (
     UNSET,
     UnsetType,
     build_body,
+    build_credential_scopes,
     build_list_params,
     build_portal_body,
     build_protect_body,
@@ -107,6 +108,7 @@ if TYPE_CHECKING:
         CheckoutSession,
         ConnectorInstallationListOutput,
         CreateOutput,
+        CredentialClaim,
         CurrentPeriodUsage,
         Customer,
         DailyUsage,
@@ -1291,26 +1293,35 @@ class AsyncQURLClient:
         self,
         *,
         name: str,
-        scopes: Iterable[str],
+        kind: str = "api_key",
+        scopes: Iterable[str] | None = None,
+        target: str | None = None,
+        claims: Iterable[CredentialClaim] | None = None,
         expires_in: str | None = None,
-        purpose: str | None = None,
-        tunnel_slug: str | None = None,
         idempotency_key: str | None = None,
     ) -> APIKey:
-        """Create an API key.
+        """Create a credential.
+
+        ``kind="api_key"`` mints a durable key with the caller-chosen
+        ``scopes``. ``kind="enrollment_token"`` mints a one-shot (<=24h)
+        Connector/agent enrollment credential: pass ``target`` and
+        ``claims`` instead of ``scopes`` (the server assigns them).
 
         If provided, ``idempotency_key`` must be 32-256 characters for
         this security-sensitive endpoint so replay keys have enough
         caller-controlled entropy.
         """
         validate_required_string(name, "name")
+        validate_required_string(kind, "kind")
+        claim_list = list(claims) if claims is not None else None
         body = build_body(
             {
+                "kind": kind,
                 "name": name,
-                "scopes": build_string_list(scopes, "scopes"),
+                "scopes": build_credential_scopes(kind, scopes, target, claim_list),
+                "target": target,
+                "claims": claim_list,
                 "expires_in": expires_in,
-                "purpose": purpose,
-                "tunnel_slug": tunnel_slug,
             }
         )
         resp = await self._request(
