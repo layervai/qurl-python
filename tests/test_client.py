@@ -734,8 +734,9 @@ def test_error_handling(client: QURLClient) -> None:
 
 @respx.mock
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("legacy_limit", [False, True], ids=["absent-limit", "legacy-limit"])
 async def test_quota_typed(
-    client: QURLClient, async_client: AsyncQURLClient, use_async: bool
+    client: QURLClient, async_client: AsyncQURLClient, use_async: bool, legacy_limit: bool
 ) -> None:
     """get_quota() preserves the quota contract without inventing a token cap."""
     respx.get(f"{BASE_URL}/v1/quota").mock(
@@ -752,6 +753,7 @@ async def test_quota_typed(
                         "list_per_minute": 120,
                         "resolve_per_minute": 300,
                         "max_active_qurls": 5000,
+                        **({"max_tokens_per_qurl": 10} if legacy_limit else {}),
                         # Populated to exercise the parse path — earlier
                         # revisions of this test let `max_expiry_seconds`
                         # fall through the `.get(..., 0)` default, which
