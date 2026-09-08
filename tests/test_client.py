@@ -733,8 +733,11 @@ def test_error_handling(client: QURLClient) -> None:
 
 
 @respx.mock
-def test_quota_typed(client: QURLClient) -> None:
-    """get_quota() returns typed RateLimits and Usage objects."""
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_quota_typed(
+    client: QURLClient, async_client: AsyncQURLClient, use_async: bool
+) -> None:
+    """get_quota() preserves the quota contract without inventing a token cap."""
     respx.get(f"{BASE_URL}/v1/quota").mock(
         return_value=httpx.Response(
             200,
@@ -749,7 +752,6 @@ def test_quota_typed(client: QURLClient) -> None:
                         "list_per_minute": 120,
                         "resolve_per_minute": 300,
                         "max_active_qurls": 5000,
-                        "max_tokens_per_qurl": 10,
                         # Populated to exercise the parse path — earlier
                         # revisions of this test let `max_expiry_seconds`
                         # fall through the `.get(..., 0)` default, which
@@ -767,12 +769,13 @@ def test_quota_typed(client: QURLClient) -> None:
         )
     )
 
-    result = client.get_quota()
+    result = await async_client.get_quota() if use_async else client.get_quota()
     assert result.plan == "growth"
     assert isinstance(result.period_start, datetime)
 
     # Typed RateLimits
     assert result.rate_limits is not None
+    assert not hasattr(result.rate_limits, "max_tokens_per_qurl")
     assert result.rate_limits.create_per_minute == 60
     assert result.rate_limits.max_active_qurls == 5000
     assert result.rate_limits.max_expiry_seconds == 604800

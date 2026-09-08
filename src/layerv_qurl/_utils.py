@@ -990,7 +990,6 @@ def _parse_rate_limits(data: dict[str, Any] | None) -> RateLimits | None:
         list_per_minute=data.get("list_per_minute", 0),
         resolve_per_minute=data.get("resolve_per_minute", 0),
         max_active_qurls=data.get("max_active_qurls", 0),
-        max_tokens_per_qurl=data.get("max_tokens_per_qurl", 0),
         max_expiry_seconds=data.get("max_expiry_seconds", 0),
     )
 
