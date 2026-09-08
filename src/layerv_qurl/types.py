@@ -218,7 +218,6 @@ class RateLimits:
     list_per_minute: int = 0
     resolve_per_minute: int = 0
     max_active_qurls: int = 0
-    max_tokens_per_qurl: int = 0
     max_expiry_seconds: int = 0
 
 
