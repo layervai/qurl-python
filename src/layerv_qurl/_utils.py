@@ -989,8 +989,10 @@ def _parse_rate_limits(data: dict[str, Any] | None) -> RateLimits | None:
         create_per_hour=data.get("create_per_hour", 0),
         list_per_minute=data.get("list_per_minute", 0),
         resolve_per_minute=data.get("resolve_per_minute", 0),
-        max_active_qurls=data.get("max_active_qurls", 0),
+        max_active_qurls=data.get("max_active_qurls"),
         max_expiry_seconds=data.get("max_expiry_seconds", 0),
+        max_active_resources=data.get("max_active_resources"),
+        max_data_transfer_bytes=data.get("max_data_transfer_bytes"),
     )
 
 
@@ -999,11 +1001,14 @@ def _parse_usage_block(data: dict[str, Any] | None) -> Usage | None:
         return None
     return Usage(
         qurls_created=data.get("qurls_created", 0),
-        active_qurls=data.get("active_qurls", 0),
+        active_qurls=data.get("active_qurls"),
         # Nullable per the API spec — the field is null when
         # max_active_qurls is unlimited.
         active_qurls_percent=data.get("active_qurls_percent"),
         total_accesses=data.get("total_accesses", 0),
+        active_resources=data.get("active_resources"),
+        active_resources_percent=data.get("active_resources_percent"),
+        data_transfer_bytes=data.get("data_transfer_bytes"),
     )
 
 
@@ -1289,8 +1294,10 @@ def parse_current_period_usage(data: dict[str, Any]) -> CurrentPeriodUsage:
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
         qurls_created=data.get("qurls_created", 0),
-        active_qurls=data.get("active_qurls", 0),
+        active_qurls=data.get("active_qurls"),
         cost_estimate=_parse_usage_cost(data.get("cost_estimate")),
+        active_resources=data.get("active_resources"),
+        data_transfer_bytes=data.get("data_transfer_bytes"),
     )
 
 
