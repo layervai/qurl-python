@@ -876,6 +876,39 @@ async def test_quota_preserves_canonical_resources_and_monthly_bytes(
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@respx.mock
+async def test_quota_preserves_divergent_canonical_and_legacy_values(
+    client: QURLClient, async_client: AsyncQURLClient, use_async: bool
+) -> None:
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "rate_limits": {"max_active_resources": 10, "max_active_qurls": 5000},
+                    "usage": {
+                        "active_resources": 8,
+                        "active_qurls": 3,
+                        "active_resources_percent": 80.0,
+                        "active_qurls_percent": 0.06,
+                    },
+                }
+            },
+        )
+    )
+
+    result = await async_client.get_quota() if use_async else client.get_quota()
+    assert result.rate_limits is not None
+    assert result.rate_limits.max_active_resources == 10
+    assert result.rate_limits.max_active_qurls == 5000
+    assert result.usage is not None
+    assert result.usage.active_resources == 8
+    assert result.usage.active_qurls == 3
+    assert result.usage.active_resources_percent == 80.0
+    assert result.usage.active_qurls_percent == 0.06
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("wire_name", ["active_resources", "active_qurls"])
 @pytest.mark.parametrize(
     ("fields", "expected_count", "expected_bytes"),

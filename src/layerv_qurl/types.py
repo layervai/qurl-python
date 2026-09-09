@@ -211,7 +211,7 @@ class ListOutput:
 
 @dataclass
 class RateLimits:
-    """Rate limit configuration."""
+    """Rate limits and plan allowances."""
 
     create_per_minute: int = 0
     create_per_hour: int = 0
@@ -562,6 +562,7 @@ class CurrentPeriodUsage:
     active_qurls: int | None
     cost_estimate: UsageCostEstimate | None = None
     active_resources: int | None = None
+    # Measured bytes this UTC calendar month, independent of the billing period.
     data_transfer_bytes: int | None = None
 
 
