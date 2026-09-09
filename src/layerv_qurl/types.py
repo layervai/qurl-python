@@ -217,8 +217,12 @@ class RateLimits:
     create_per_hour: int = 0
     list_per_minute: int = 0
     resolve_per_minute: int = 0
-    max_active_qurls: int = 0
+    # Deprecated alias for max_active_resources, not a qURL-count cap.
+    max_active_qurls: int | None = None
     max_expiry_seconds: int = 0
+    # Missing/null limits remain unknown; -1 is the unlimited sentinel.
+    max_active_resources: int | None = None
+    max_data_transfer_bytes: int | None = None
 
 
 @dataclass
@@ -226,10 +230,15 @@ class Usage:
     """Usage statistics."""
 
     qurls_created: int = 0
-    active_qurls: int = 0
+    # Deprecated alias for active_resources, not a count of qURLs.
+    active_qurls: int | None = None
     # Changed from float=0.0 — callers must None-check before arithmetic.
     active_qurls_percent: float | None = None
     total_accesses: int = 0
+    active_resources: int | None = None
+    active_resources_percent: float | None = None
+    # Measured bytes this UTC calendar month; None is distinct from zero.
+    data_transfer_bytes: int | None = None
 
 
 @dataclass
@@ -549,8 +558,11 @@ class CurrentPeriodUsage:
     period_start: datetime | None
     period_end: datetime | None
     qurls_created: int
-    active_qurls: int
+    # Deprecated alias for active_resources, not a count of qURLs.
+    active_qurls: int | None
     cost_estimate: UsageCostEstimate | None = None
+    active_resources: int | None = None
+    data_transfer_bytes: int | None = None
 
 
 @dataclass

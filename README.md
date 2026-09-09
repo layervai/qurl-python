@@ -298,9 +298,24 @@ All error classes inherit from `QURLError`, so `except QURLError` catches everyt
 ```python
 quota = client.get_quota()
 print(f"Plan: {quota.plan}")
-print(f"Active qURLs: {quota.usage.active_qurls}")
-print(f"Rate limit: {quota.rate_limits.create_per_minute}/min")
+active = quota.usage.active_resources if quota.usage is not None else None
+print("Active protected resources:", active if active is not None else "unavailable")
+if quota.rate_limits is not None:
+    print(f"Rate limit: {quota.rate_limits.create_per_minute}/min")
 ```
+
+Use `max_active_resources`, `active_resources`, and `active_resources_percent`
+for resource quotas. `max_data_transfer_bytes` is the monthly byte allowance;
+`data_transfer_bytes` is measured usage, available on both quota usage and
+current-period responses. Missing or null values remain `None`, distinct from
+a reported zero. A limit of `-1` means unlimited.
+
+**Migration:** the deprecated `max_active_qurls` and `active_qurls` fields still
+represent protected resources. Missing values now return `None` instead of
+`0`; check `is not None` before arithmetic or displaying a count. Canonical
+and legacy fields preserve their own wire values, so an older response that
+omits canonical fields leaves those fields `None`. Prefer the canonical fields
+when available.
 
 JWT-authenticated dashboard endpoints are also available for usage, customer
 settings, billing sessions, invoices, and API-key management. API-key auth
