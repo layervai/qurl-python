@@ -1,21 +1,27 @@
-# qurl-python
+# qURL Python SDK for expiring access links
 
 [![PyPI](https://img.shields.io/pypi/v/qurl-python)](https://pypi.org/project/qurl-python/)
 [![CI](https://github.com/layervai/qurl-python/actions/workflows/ci.yml/badge.svg)](https://github.com/layervai/qurl-python/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/pypi/pyversions/qurl-python)](https://pypi.org/project/qurl-python/)
 [![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
 
-**Use the LayerV [qURL™ Platform](https://docs.layerv.ai) from Python: protect a
-private URL once, then mint short-lived portal links for it.**
+Create expiring access links for private web apps and APIs with LayerV's
+[qURL™ Python SDK](https://layerv.ai/sdk/). Use `qurl-python` in Python
+services, automation scripts, or LangChain tools to register resources and
+issue links with a chosen lifetime.
 
-LayerV hosts qURL; your app keeps a tiny surface area: protect the URL, create a
-portal for the returned resource, and share the link.
-
-> **Quantum URL (qURL)** · The internet has a hidden layer. This is how you enter.
+For a local app, [publish it with the CLI](https://github.com/layervai/qurl-integrations/tree/main/apps/cli)
+or configure a connector before creating access links. SDK calls register
+resources and issue links; they do not start the local service or remove
+any separate public route to it. Your app's own sign-in still applies.
 
 Portal recipients do not need LayerV credentials, API keys, or SDK state. They
 open the qURL link. Credentials are only for software that protects URLs or
 creates portals.
+
+[Installation](#installation) · [Quickstart](#quickstart) ·
+[Async usage](#async-usage) · [LangChain integration](#langchain-integration) ·
+[Resource and token management](#rest-shaped-api-compatibility)
 
 ## Why qURL?
 
