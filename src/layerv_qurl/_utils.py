@@ -1016,14 +1016,21 @@ def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
     status = data["status"] if strict_identity else data.get("status", "unknown")
     validate_response_identity(data)
     private = data.get("private")
-    if private is not None and not isinstance(private, bool):
-        raise unexpected_response("invalid resource privacy")
+    access_requests = data.get("access_requests")
+    for value in (private, access_requests):
+        if value is not None and not isinstance(value, bool):
+            raise unexpected_response("invalid resource privacy or access_requests")
+    device_keys = data.get("allowed_device_keys")
+    if device_keys is not None and (
+        not isinstance(device_keys, list) or any(not isinstance(key, str) for key in device_keys)
+    ):
+        raise unexpected_response("invalid resource allowed_device_keys")
     return Resource(
         resource_id=resource_id,
         crid=data.get("crid"),
-        private=data.get("private"),
-        access_requests=data.get("access_requests"),
-        allowed_device_keys=data.get("allowed_device_keys"),
+        private=private,
+        access_requests=access_requests,
+        allowed_device_keys=device_keys,
         status=status,
         resource_type=data.get("type"),
         target_url=data.get("target_url"),
@@ -1734,16 +1741,18 @@ def build_share_body(ttl: timedelta | None, session_duration: timedelta | None) 
     return body
 
 
-
 def parse_share_link(data: dict[str, Any], expected: str) -> ShareLink:
     if not isinstance(data, dict):
         raise unexpected_response("share response must be an object")
     check_response_crid(data, expected)
-    for field_name, expected_type in (("qurl_id", str), ("type", str),
-                                ("expires_in_seconds", int), ("single_use", bool)):
+    for field_name, expected_type in (
+        ("qurl_id", str), ("type", str), ("expires_in_seconds", int), ("single_use", bool)
+    ):
         value = data.get(field_name)
         if value is not None and type(value) is not expected_type:
             raise unexpected_response(f"invalid share field: {field_name}")
+    if (data.get("expires_in_seconds") or 0) < 0:
+        raise unexpected_response("negative share expires_in_seconds")
     link = data.get("qurl")
     if not isinstance(link, str) or not link.strip():
         raise unexpected_response("share response is missing qurl")

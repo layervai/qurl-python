@@ -87,6 +87,7 @@ from layerv_qurl._utils import (
     validate_update_input,
     validate_webhook_url,
 )
+from layerv_qurl.crid import matches_shape
 from layerv_qurl.crid import validate as validate_crid
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
@@ -339,7 +340,7 @@ class AsyncQURLClient:
                 "resource id string"
             )
         validate_id(resource_id)
-        if len(resource_id) in (47, 60):
+        if matches_shape(resource_id):
             validate_crid(resource_id)
         body = build_portal_body(
             valid_for=valid_for,
@@ -354,7 +355,7 @@ class AsyncQURLClient:
             body=body,
             headers=idempotency_headers(idempotency_key),
         )
-        if len(resource_id) in (47, 60):
+        if matches_shape(resource_id):
             check_response_crid(resp, resource_id)
         return parse_portal(resp)
 
@@ -605,7 +606,6 @@ class AsyncQURLClient:
         For one link use revoke_resource_qurl instead. Legacy resource IDs
         are forwarded for compatibility; the current service rejects them.
         """
-        validate_id(resource_id)
         validate_resource_locator(resource_id)
         await self._request("DELETE", f"/v1/qurls/{resource_id}")
 

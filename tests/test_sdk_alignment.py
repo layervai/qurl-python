@@ -27,9 +27,10 @@ SHARE = {"qurl": "https://qurl.link/#qv2.claims.secret.signature", "crid": CRID,
 async def client(request):
     instance = request.param(api_key="lv_test", base_url=BASE, max_retries=0)
     yield instance
-    result = instance.close()
-    if inspect.isawaitable(result):
-        await result
+    if isinstance(instance, AsyncQURLClient):
+        await instance.close()
+    else:
+        instance.close()
 
 
 async def invoke(method, *args, **kwargs):
@@ -272,3 +273,49 @@ def test_share_durations_do_not_lose_subseconds_for_large_values():
     from layerv_qurl._utils import build_share_body
     with pytest.raises(ValueError):
         build_share_body(timedelta(days=999999999, microseconds=1), None)
+
+
+@pytest.mark.parametrize("fields", [
+    {"access_requests": "false"}, {"allowed_device_keys": "key"},
+    {"allowed_device_keys": [1]},
+])
+@respx.mock
+async def test_resource_rejects_malformed_grant_metadata(client, fields):
+    respx.get(f"{BASE}/v1/resources/{CRID}").respond(
+        200, json={"data": {"resource": {**RESOURCE, **fields}}})
+    with pytest.raises(ValidationError):
+        await invoke(client.get_resource, CRID)
+
+
+@respx.mock
+async def test_share_429_is_returned_without_retry(client):
+    from layerv_qurl import RateLimitError
+    route = respx.post(f"{BASE}/v1/resources/{CRID}/share").respond(
+        429, headers={"Retry-After": "1"}, json={"title": "Too many requests"})
+    client._max_retries = 2
+    with pytest.raises(RateLimitError) as exc:
+        await invoke(client.share_resource, CRID)
+    assert exc.value.retry_after == 1
+    assert route.call_count == 1
+
+
+def test_crid_gate_rejects_non_string_consistently():
+    from layerv_qurl.crid import validate
+    with pytest.raises(ValueError):
+        validate(None)
+
+
+def test_crid_shape_dispatch_matches_go():
+    from layerv_qurl.crid import matches_shape
+    assert matches_shape(CRID)
+    assert not matches_shape("X" * 60)
+    assert not matches_shape(KEY)
+    assert matches_shape("a" * 60)  # Shape is not validation.
+
+
+@respx.mock
+async def test_share_rejects_negative_lifetime(client):
+    respx.post(f"{BASE}/v1/resources/{CRID}/share").respond(
+        200, json={"data": {**SHARE, "expires_in_seconds": -1}})
+    with pytest.raises(ValidationError):
+        await invoke(client.share_resource, CRID)

@@ -13,7 +13,7 @@ import re
 
 
 def _payload(value: str) -> bytes:
-    if not re.fullmatch(r"[a-z2-7]*", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z2-7]*", value):
         raise ValueError("crid: charset outside lowercase unpadded base32")
     if len(value) not in (47, 60):
         raise ValueError("crid: length must be 47 or 60")
@@ -34,6 +34,11 @@ def _payload(value: str) -> bytes:
     return payload
 
 
+def matches_shape(value: str) -> bool:
+    """Dispatch predicate matching Go MatchesShape; never substitutes for validate."""
+    return re.fullmatch(r"(?:[a-z2-7]{47}|[a-z2-7]{60})", value) is not None
+
+
 def validate(value: str) -> str:
     """Return a locally valid CRID unchanged, or raise ValueError.
 
@@ -46,5 +51,6 @@ def validate(value: str) -> str:
 def key_matches(value: str, der_spki: bytes) -> bool:
     """Check exact delivered DER SPKI bytes against an independently held CRID."""
     digest = _payload(value)[1:]
+    # Match Go: the same binding rule applies to forwardable version bytes.
     expected = hashlib.sha256(b"NHP-QURL-CRID-V1\x00" + der_spki).digest()
     return hmac.compare_digest(digest, expected[:len(digest)])

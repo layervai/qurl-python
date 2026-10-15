@@ -88,6 +88,7 @@ from layerv_qurl._utils import (
     validate_update_input,
     validate_webhook_url,
 )
+from layerv_qurl.crid import matches_shape
 from layerv_qurl.crid import validate as validate_crid
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
@@ -372,9 +373,8 @@ class QURLClient:
         Args:
             resource: A :class:`ProtectedResource` handle, or a resource
                 id string — the CRID a handle carries or that
-                :meth:`protect_url` returns. Passing a display id or any
-                non-resource id is not rejected client-side; it reaches
-                the mint endpoint and fails there.
+                :meth:`protect_url` returns. CRID-shaped IDs are validated
+                locally; the service validates other identifier forms.
             valid_for: How long the link stays valid — a duration string
                 (``"5m"``, ``"24h"``) or :class:`datetime.timedelta`. A
                 timedelta must be whole seconds and **at least one minute**;
@@ -420,7 +420,7 @@ class QURLClient:
                 "resource id string"
             )
         validate_id(resource_id)
-        if len(resource_id) in (47, 60):
+        if matches_shape(resource_id):
             validate_crid(resource_id)
         body = build_portal_body(
             valid_for=valid_for,
@@ -435,7 +435,7 @@ class QURLClient:
             body=body,
             headers=idempotency_headers(idempotency_key),
         )
-        if len(resource_id) in (47, 60):
+        if matches_shape(resource_id):
             check_response_crid(resp, resource_id)
         return parse_portal(resp)
 
@@ -718,7 +718,6 @@ class QURLClient:
         For one link use revoke_resource_qurl instead. Legacy resource IDs
         are forwarded for compatibility; the current service rejects them.
         """
-        validate_id(resource_id)
         validate_resource_locator(resource_id)
         self._request("DELETE", f"/v1/qurls/{resource_id}")
 

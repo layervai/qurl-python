@@ -120,7 +120,13 @@ public **CRID**; `resource.details.resource_id` remains the resource public key
 for verification and compatibility. Persist the CRID, then call
 `client.resource_by_crid(saved_crid)` to reuse it. The old `resource_by_id`
 method still accepts a public key. Legacy `r_` IDs are no longer accepted by
-the current service.
+the current service. **Migration:** when a response includes a CRID,
+`ProtectedResource.id` now holds that CRID rather than `Resource.resource_id`.
+Use `resource.details.resource_id` if your code needs the public key.
+
+Sharing requires a CRID from the current service. If an older response omits
+it, the compatibility handle can still mint with `create_portal`, but its
+public-key ID cannot be passed to `share_resource`.
 
 Privacy is fixed at creation. Omit `private` to use the service default
 (private for new URL and Connector resources), or explicitly pass `False`
