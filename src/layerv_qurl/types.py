@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, TypedDict
@@ -48,11 +49,18 @@ WebhookEventType = (
 
 
 def _parse_dt(s: str | None) -> datetime | None:
-    """Parse an ISO 8601 datetime string, handling Z suffix for Python 3.10 compat."""
+    """Parse API timestamps at Python's microsecond precision, including on 3.10."""
     if s is None:
         return None
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
+    # Go emits RFC3339Nano with 1–9 fractional digits; Python 3.10 only
+    # accepts 3 or 6. Match newer Python's truncation to microseconds.
+    s = re.sub(
+        r"(\d{2}:\d{2}:\d{2})\.(\d+)",
+        lambda match: match[1] + "." + match[2][:6].ljust(6, "0"),
+        s,
+    )
     return datetime.fromisoformat(s)
 
 

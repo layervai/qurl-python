@@ -319,3 +319,18 @@ async def test_share_rejects_negative_lifetime(client):
         200, json={"data": {**SHARE, "expires_in_seconds": -1}})
     with pytest.raises(ValidationError):
         await invoke(client.share_resource, CRID)
+
+
+@pytest.mark.parametrize("fraction, microsecond", [
+    ("1", 100000), ("12", 120000), ("123", 123000), ("1234", 123400),
+    ("12345", 123450), ("123456", 123456), ("1234567", 123456),
+    ("12345678", 123456), ("123456789", 123456),
+])
+@respx.mock
+async def test_share_accepts_go_rfc3339nano_on_supported_pythons(client, fraction, microsecond):
+    respx.post(f"{BASE}/v1/resources/{CRID}/share").respond(200, json={"data": {
+        **SHARE, "expires_at": f"2026-10-01T00:00:00.{fraction}Z",
+        "resource_created_at": f"2026-09-01T00:00:00.{fraction}+00:00"}})
+    link = await invoke(client.share_resource, CRID)
+    assert link.expires_at.microsecond == microsecond
+    assert link.resource_created_at.microsecond == microsecond
