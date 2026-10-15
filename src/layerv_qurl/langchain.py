@@ -116,7 +116,7 @@ class DeleteQURLTool(BaseTool):
     """Revoke a qURL, immediately ending all access."""
 
     name: str = "delete_qurl"
-    description: str = "Revoke (delete) a qURL by resource ID (e.g. 'r_k8xqp9h2sj9')."
+    description: str = "Revoke a resource and all its links by CRID or resource public key."
     client: Any = None
 
     def _run(

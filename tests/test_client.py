@@ -3077,12 +3077,12 @@ def test_mint_link_rejects_both_expires_in_and_expires_at(client: QURLClient) ->
         )
 
 
-# ---- delete() r_ prefix enforcement ----------------------------------------
+# ---- delete() token ID rejection ----------------------------------------
 
 
 def test_delete_rejects_q_prefix_client_side(client: QURLClient) -> None:
-    """DELETE /v1/qurls/:id only accepts r_ prefix per the API spec."""
-    with pytest.raises(ValueError, match="r_ prefix"):
+    """Resource-wide deletion rejects token IDs."""
+    with pytest.raises(ValueError, match="resource locator"):
         client.delete("q_3a7f2c8e91b")
 
 
@@ -3608,7 +3608,7 @@ async def test_async_delete_rejects_q_prefix_client_side(
     async_client: AsyncQURLClient,
 ) -> None:
     """Sync test exists; async symmetry gap closed."""
-    with pytest.raises(ValueError, match="r_ prefix"):
+    with pytest.raises(ValueError, match="resource locator"):
         await async_client.delete("q_3a7f2c8e91b")
 
 
