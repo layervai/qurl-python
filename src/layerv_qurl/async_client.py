@@ -20,11 +20,14 @@ from layerv_qurl._utils import (
     UNSET,
     UnsetType,
     build_body,
+    build_device_grants,
     build_list_params,
     build_portal_body,
     build_protect_body,
     build_query_params,
+    build_share_body,
     build_string_list,
+    check_response_crid,
     default_user_agent,
     domain_path_segment,
     ensure_mutation_idempotency,
@@ -62,13 +65,13 @@ from layerv_qurl._utils import (
     parse_resource_list_output,
     parse_session_list_output,
     parse_session_terminate_output,
+    parse_share_link,
     parse_webhook,
     parse_webhook_delivery_list_output,
     parse_webhook_event_types_output,
     parse_webhook_list_output,
     require_connector_resource,
     require_nonempty_update,
-    require_resource_id_prefix,
     resource_handle_from_resolve,
     retry_delay,
     validate_alias,
@@ -77,11 +80,14 @@ from layerv_qurl._utils import (
     validate_id,
     validate_mint_input,
     validate_nonnegative_int,
+    validate_optional_bool,
     validate_portal_target_url,
     validate_required_string,
+    validate_resource_locator,
     validate_update_input,
     validate_webhook_url,
 )
+from layerv_qurl.crid import validate as validate_crid
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
 if TYPE_CHECKING:
@@ -128,6 +134,7 @@ if TYPE_CHECKING:
         ResourceListOutput,
         SessionListOutput,
         SessionTerminateOutput,
+        ShareLink,
         Webhook,
         WebhookDeliveryListOutput,
         WebhookEventTypesOutput,
@@ -212,6 +219,7 @@ class AsyncQURLClient:
         tags: builtins.list[str] | None = None,
         custom_domain: str | None = None,
         alias: str | None = None,
+        private: bool | None = None,
         idempotency_key: str | None = None,
     ) -> AsyncProtectedResource:
         """Protect a private URL — create or reuse its LayerV resource.
@@ -233,18 +241,42 @@ class AsyncQURLClient:
                 tags=tags,
                 custom_domain=custom_domain,
                 alias=alias,
+                private=private,
             ),
             headers=idempotency_headers(idempotency_key),
         )
         resource = parse_resource(resp)
         return AsyncProtectedResource(
             self,
-            resource.resource_id,
+            resource.crid or resource.resource_id,
             # Some resource types redact target_url in responses; fall
             # back to the caller-supplied URL so the handle stays useful.
             target_url=resource.target_url or target_url,
             details=resource,
         )
+
+    def resource_by_crid(self, crid: str) -> AsyncProtectedResource:
+        """Bind a validated CRID without network I/O, like Go ResourceByCRID."""
+        return AsyncProtectedResource(self, validate_crid(crid))
+
+    async def share_resource(
+        self,
+        crid: str,
+        *,
+        ttl: timedelta | None = None,
+        session_duration: timedelta | None = None,
+    ) -> ShareLink:
+        """Mint a fresh CRID-addressed link, matching Go ShareResource.
+
+        Durations must be nonnegative whole seconds; zero/None use server
+        defaults. Each call mints a new link: the service excludes this route
+        from idempotency replay. Signed links can be opened in a browser or
+        with qurl-go; Python enter_portal still only opens platform tokens.
+        """
+        validate_crid(crid)
+        body = build_share_body(ttl, session_duration)
+        resp = await self._request("POST", f"/v1/resources/{crid}/share", body=body, retry=False)
+        return parse_share_link(resp, crid)
 
     def resource_by_id(self, resource_id: str) -> AsyncProtectedResource:
         """Return a portal-minting handle for a stored resource id (no API call).
@@ -268,7 +300,7 @@ class AsyncQURLClient:
         )
         return AsyncProtectedResource(
             self,
-            resource.resource_id,
+            resource.crid or resource.resource_id,
             target_url=resource.target_url,
             details=resource,
         )
@@ -307,6 +339,8 @@ class AsyncQURLClient:
                 "resource id string"
             )
         validate_id(resource_id)
+        if len(resource_id) in (47, 60):
+            validate_crid(resource_id)
         body = build_portal_body(
             valid_for=valid_for,
             label=label,
@@ -320,6 +354,8 @@ class AsyncQURLClient:
             body=body,
             headers=idempotency_headers(idempotency_key),
         )
+        if len(resource_id) in (47, 60):
+            check_response_crid(resp, resource_id)
         return parse_portal(resp)
 
     async def create_portal_for_url(
@@ -331,12 +367,14 @@ class AsyncQURLClient:
         one_time_use: bool | None = None,
         max_sessions: int | None = None,
         session_duration: str | timedelta | None = None,
+        private: bool | None = None,
         idempotency_key: str | None = None,
     ) -> tuple[Portal, AsyncProtectedResource]:
         """Protect ``target_url`` and mint a portal in one API call.
 
         Async counterpart of :meth:`QURLClient.create_portal_for_url`.
         """
+        validate_optional_bool(private, "private")
         validate_portal_target_url(target_url)
         body = build_portal_body(
             valid_for=valid_for,
@@ -346,6 +384,8 @@ class AsyncQURLClient:
             session_duration=session_duration,
         )
         body["target_url"] = target_url
+        if private is not None:
+            body["private"] = private
         resp = await self._request(
             "POST",
             "/v1/qurls",
@@ -354,7 +394,7 @@ class AsyncQURLClient:
         )
         portal = parse_portal(resp)
         return portal, AsyncProtectedResource(
-            self, portal.resource_id, target_url=target_url
+            self, portal.crid or portal.resource_id, target_url=target_url
         )
 
     async def enter_portal(
@@ -447,7 +487,7 @@ class AsyncQURLClient:
     async def get(self, resource_id: str) -> QURL:
         """Get a qURL resource and its access tokens.
 
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
         automatically.
 
@@ -560,32 +600,20 @@ class AsyncQURLClient:
             cursor = page.next_cursor
 
     async def delete(self, resource_id: str) -> None:
-        """Delete (revoke) a qURL resource and all its access tokens.
+        """Revoke a resource and all its links using its CRID or public key.
 
-        Only accepts a resource ID (``r_`` prefix), not a qURL display ID
-        (``q_`` prefix). Per the OpenAPI spec:
-        *"Requires a resource ID (r_ prefix). To revoke a single token,
-        use DELETE /v1/resources/:id/qurls/:qurl_id"*.
-
-        A client-side prefix check catches the mistake before the API
-        round-trip.
-
-        Args:
-            resource_id: The resource ID (must start with ``r_``).
-
-        Raises:
-            ValueError: If ``resource_id`` is malformed or does not start
-                with ``r_``.
+        For one link use revoke_resource_qurl instead. Legacy resource IDs
+        are forwarded for compatibility; the current service rejects them.
         """
         validate_id(resource_id)
-        require_resource_id_prefix(resource_id, "delete")
+        validate_resource_locator(resource_id)
         await self._request("DELETE", f"/v1/qurls/{resource_id}")
 
     async def extend(self, resource_id: str, duration: str) -> QURL:
         """Extend a qURL's expiration.
 
         Convenience method — equivalent to ``await update(resource_id, extend_by=duration)``.
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
         automatically.
 
@@ -607,7 +635,7 @@ class AsyncQURLClient:
     ) -> QURL:
         """Update a qURL — extend expiration, change description, set tags.
 
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix). All fields are optional, but at least one must be
         provided. ``extend_by`` and ``expires_at`` are mutually exclusive.
 
@@ -686,7 +714,7 @@ class AsyncQURLClient:
     ) -> MintOutput:
         """Mint a new access link for a qURL.
 
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix). ``expires_in`` and ``expires_at`` are mutually
         exclusive — if neither is set, the link defaults to 24 hours.
 
@@ -881,6 +909,8 @@ class AsyncQURLClient:
         alias: str | None = None,
         slug: str | None = None,
         find_or_create: bool | None = None,
+        private: bool | None = None,
+        allowed_device_keys: Iterable[str] | None = None,
         idempotency_key: str | None = None,
     ) -> Resource:
         """Create or find a resource.
@@ -891,6 +921,7 @@ class AsyncQURLClient:
         ``find_or_create=False`` is treated the same as omitting it because
         the API default is false.
         """
+        validate_optional_bool(private, "private")
         validate_alias(alias)
         if target_url is not None:
             validate_create_input(target_url=target_url, custom_domain=custom_domain)
@@ -910,6 +941,8 @@ class AsyncQURLClient:
                 custom_domain,
                 alias,
                 slug,
+                private,
+                allowed_device_keys,
             )
         ):
             raise ValueError(
@@ -918,6 +951,7 @@ class AsyncQURLClient:
             )
         body = build_body(
             {
+                "private": private,
                 "type": resource_type,
                 "target_url": target_url,
                 "description": description,
@@ -928,6 +962,7 @@ class AsyncQURLClient:
                 "find_or_create": True if find_or_create is True else None,
             }
         )
+        body.update(build_device_grants(allowed_device_keys=allowed_device_keys))
         require_nonempty_update(
             body,
             "create_resource",
@@ -956,6 +991,9 @@ class AsyncQURLClient:
         custom_domain: str | None = None,
         preserve_host: bool | None = None,
         alias: str | None | UnsetType = UNSET,
+        allowed_device_keys: Iterable[str] | None = None,
+        allowed_device_keys_add: Iterable[str] | None = None,
+        allowed_device_keys_remove: Iterable[str] | None = None,
         idempotency_key: str | None = None,
     ) -> Resource:
         """Update resource metadata."""
@@ -975,6 +1013,12 @@ class AsyncQURLClient:
         )
         if alias is not UNSET:
             body["alias"] = alias
+        body.update(build_device_grants(
+            allowed_device_keys=allowed_device_keys,
+            allowed_device_keys_add=allowed_device_keys_add,
+            allowed_device_keys_remove=allowed_device_keys_remove,
+            custom_domain=custom_domain,
+        ))
         require_nonempty_update(
             body,
             "update_resource",
@@ -1526,6 +1570,7 @@ class AsyncQURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
+        retry: bool = True,
     ) -> Any:
         return (
             await self._raw_request(
@@ -1536,6 +1581,7 @@ class AsyncQURLClient:
                 allow_statuses=allow_statuses,
                 headers=headers,
                 include_auth=include_auth,
+                retry=retry,
             )
         )[0]
 
@@ -1549,8 +1595,12 @@ class AsyncQURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
+        retry: bool = True,
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
+
+        ``retry=False`` prevents an ambiguous transport failure from repeating
+        a mutation that has no server-side replay protection (resource sharing).
 
         ``include_auth=False`` is for public flows such as
         :meth:`redeem_access_code`, where the bearer token should stay off
@@ -1595,7 +1645,8 @@ class AsyncQURLClient:
             request_headers.update(headers)
         ensure_mutation_idempotency(method, request_headers)
 
-        for attempt in range(self._max_retries + 1):
+        max_retries = self._max_retries if retry else 0
+        for attempt in range(max_retries + 1):
             if attempt > 0:
                 delay = retry_delay(attempt, last_error)
                 logger.debug("Retry %d/%d after %.1fs", attempt, self._max_retries, delay)
@@ -1613,13 +1664,13 @@ class AsyncQURLClient:
                 )
             except httpx.TimeoutException as exc:
                 logger.debug("%s %s timed out", method, url)
-                if attempt < self._max_retries:
+                if attempt < max_retries:
                     last_error = exc
                     continue
                 raise QURLTimeoutError(str(exc), cause=exc) from exc
             except httpx.TransportError as exc:
                 logger.debug("%s %s transport error: %s", method, url, exc)
-                if attempt < self._max_retries:
+                if attempt < max_retries:
                     last_error = exc
                     continue
                 raise QURLNetworkError(str(exc), cause=exc) from exc
@@ -1652,7 +1703,7 @@ class AsyncQURLClient:
             # 429-only because resolve can consume one-time tokens on server
             # failures.
             retryable = RETRYABLE_STATUS_POST if method == "POST" else RETRYABLE_STATUS
-            if response.status_code in retryable and attempt < self._max_retries:
+            if response.status_code in retryable and attempt < max_retries:
                 last_error = err
                 continue
             raise err
@@ -1676,7 +1727,7 @@ class AsyncProtectedResource:
     :meth:`create_portal` (qurl-go: ``qurl.Resource``).
 
     Attributes:
-        id: The LayerV resource id (``r_`` prefix).
+        id: The resource CRID, or public key for older responses.
         target_url: The private URL protected by this resource, when known.
         details: Full server-populated :class:`~layerv_qurl.types.Resource`
             metadata when the handle came from an API response; ``None``

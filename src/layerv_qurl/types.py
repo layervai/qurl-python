@@ -165,6 +165,40 @@ class Portal:
     expires_at: datetime | None = None
     qurl_id: str | None = None
     label: str | None = None
+    crid: str | None = None
+
+
+@dataclass
+class Publisher:
+    """Service-asserted publisher metadata; escape the untrusted name for display.
+
+    CRID/key verification does not authenticate this metadata.
+    """
+
+    name: str = ""
+    verified: bool = False
+
+
+@dataclass
+class ShareLink:
+    """Fresh share link. Each share call mints again; retain qurl_id to revoke it."""
+
+    link: str
+    crid: str
+    qurl_id: str | None = None
+    type: str | None = None
+    expires_at: datetime | None = None
+    expires_in_seconds: int = 0
+    single_use: bool = False
+    resource_created_at: datetime | None = None
+    publisher: Publisher = field(default_factory=Publisher)
+
+    def verify_crid(self, der_spki: bytes) -> None:
+        """Bind delivered key bytes to this CRID, not to the link or publisher."""
+        from layerv_qurl.crid import key_matches
+
+        if not key_matches(self.crid, der_spki):
+            raise ValueError("share link: resource key does not match CRID")
 
 
 @dataclass
@@ -309,6 +343,10 @@ class Resource:
     created_at: datetime | None = None
     expires_at: datetime | None = None
     tombstoned_at: datetime | None = None
+    crid: str | None = None
+    private: bool | None = None
+    access_requests: bool | None = None
+    allowed_device_keys: list[str] | None = None
 
 
 @dataclass
