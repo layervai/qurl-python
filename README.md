@@ -43,9 +43,9 @@ There are two parts to the workflow:
 | Issue access from Python | Use a resource managed by this SDK's configured API and accessible to its credential. Ask for an appropriate lifetime and send the returned link. |
 
 For a Connector resource already configured for your API credential, the
-following script requests a five-minute link. Set `QURL_CONNECTOR_ID` to the
-configured Connector identifier expected by this SDK, and `QURL_API_KEY` to
-an issuer credential with the required permissions:
+following script requests a five-minute link. Set `QURL_CONNECTOR_SLUG` to the
+resource's immutable slug, and `QURL_API_KEY` to an issuer credential with the
+required permissions. The optional display alias is not a lookup identifier:
 
 ```python
 import os
@@ -53,13 +53,13 @@ import os
 from layerv_qurl import QURLClient
 
 with QURLClient(api_key=os.environ["QURL_API_KEY"]) as client:
-    resource = client.connector_resource(os.environ["QURL_CONNECTOR_ID"])
+    resource = client.connector_resource(os.environ["QURL_CONNECTOR_SLUG"])
     portal = resource.create_portal(valid_for="5m")
     print(portal.link)
 ```
 
-The identifier and credential must refer to the same authorized resource.
-Do not substitute a CLI CRID for a Connector identifier or assume that an
+The slug and credential must refer to the same authorized resource.
+Do not substitute a CLI CRID for a resource slug or assume that an
 account key manages a resource published by another device. If the CLI alone
 published the preview, its `qurl share` command is the direct sharing path;
 use SDK management only after the compatible resource is configured.
@@ -162,8 +162,9 @@ the same URL again returns the existing resource. `valid_for` accepts a
 duration string (`"5m"`, `"24h"`) or a `datetime.timedelta`; prefer short
 portal lifetimes.
 
-If qURL Connector already protects the service, use the connector id instead
-of calling `protect_url`:
+If qURL Connector already protects the service, use its immutable resource
+slug instead of calling `protect_url`. The optional display alias is not a
+lookup identifier:
 
 ```python
 resource = client.connector_resource("prod-dashboard")
