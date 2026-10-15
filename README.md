@@ -87,6 +87,12 @@ This SDK's link-issuing calls do not upload a local Python file or start a
 file server. File-upload link minting can have different identifiers and
 revocation rules; follow the service or integration that created the upload.
 
+## Link issuance and Python connectivity
+
+Use `qurl-python` when an automation job or LangChain tool should issue access to a resource its credential can manage. In the localhost workflow above, a CLI or compatible Connector first supplies connectivity, and Python requests the portal. The [ngrok Python Agent SDK](https://github.com/ngrok/ngrok-python) can establish forwarding to a local address from the Python process itself. These are different operations: resource/link management and establishing an endpoint. Choose the lifecycle your application needs, including its authentication and the runtime that must stay alive.
+
+For a generated report already stored in S3, a [presigned download URL](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html) may fit the existing storage workflow. For a dashboard or files served by a live local app, publish that service and issue access to the compatible resource. This SDK's portal calls do not upload a local report. The [app and file-sharing comparison](https://github.com/layervai/qurl-integrations#choose-how-to-share-an-app-or-file) covers hosting, recipient access, and expiry; [async usage](#async-usage) covers issuing from an async Python service.
+
 ## Python sharing questions
 
 ### Can I pass localhost to `protect_url` and share it immediately?
@@ -118,10 +124,6 @@ separate public route if qURL should be the only way to reach the app.
 A portal link is an access credential, not proof that its holder is the person
 named in a label. Keep application authentication when identity matters. Use
 the resource, token, and session APIs for the access rules your workflow needs.
-
-ngrok also supports authenticated localhost sharing. For the distinction
-between a public endpoint workflow and resource-specific access links, see
-the [qURL and ngrok comparison](https://github.com/layervai/qurl-integrations#qurl-and-ngrok-for-localhost-sharing).
 
 ## Installation
 
