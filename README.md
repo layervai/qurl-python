@@ -1,20 +1,39 @@
 # qURL Python SDK for expiring access links
 
-[![PyPI](https://img.shields.io/pypi/v/qurl-python)](https://pypi.org/project/qurl-python/) [![CI](https://github.com/layervai/qurl-python/actions/workflows/ci.yml/badge.svg)](https://github.com/layervai/qurl-python/actions/workflows/ci.yml) [![Python](https://img.shields.io/pypi/pyversions/qurl-python)](https://pypi.org/project/qurl-python/) [![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/qurl-python)](https://pypi.org/project/qurl-python/)
+[![CI](https://github.com/layervai/qurl-python/actions/workflows/ci.yml/badge.svg)](https://github.com/layervai/qurl-python/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/pypi/pyversions/qurl-python)](https://pypi.org/project/qurl-python/)
+[![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
 
-Use [qURL™ by LayerV](https://layerv.ai/qurl/) to share localhost web apps, private APIs, and files through expiring access links. This [Python SDK](https://layerv.ai/sdk/) creates and manages resource access from your code. Use `qurl-python` in Python services, automation scripts, or LangChain tools to register resources and issue links with a chosen lifetime.
+Use [qURL™ by LayerV](https://layerv.ai/qurl/) to share localhost web apps,
+private APIs, and files through expiring access links. This
+[Python SDK](https://layerv.ai/sdk/) creates and manages resource access from
+your code. Use `qurl-python` in Python
+services, automation scripts, or LangChain tools to register resources and
+issue links with a chosen lifetime.
 
-For a local app, [publish it with the CLI](https://github.com/layervai/qurl-integrations/tree/main/apps/cli) or configure a connector before creating access links. SDK calls register resources and issue links; they do not start the local service or remove any separate public route to it. Your app's own sign-in still applies.
+For a local app, [publish it with the CLI](https://github.com/layervai/qurl-integrations/tree/main/apps/cli)
+or configure a connector before creating access links. SDK calls register
+resources and issue links; they do not start the local service or remove
+any separate public route to it. Your app's own sign-in still applies.
 
-Portal recipients do not need LayerV credentials, API keys, or SDK state. They open the qURL link. Credentials are only for software that protects URLs or creates portals.
+Portal recipients do not need LayerV credentials, API keys, or SDK state. They
+open the qURL link. Credentials are only for software that protects URLs or
+creates portals.
 
-[Installation](#installation) · [Quickstart](#quickstart) · [Async usage](#async-usage) · [LangChain integration](#langchain-integration) · [Resource and token management](#rest-shaped-api-compatibility)
+[Installation](#installation) · [Quickstart](#quickstart) ·
+[Async usage](#async-usage) · [LangChain integration](#langchain-integration) ·
+[Resource and token management](#rest-shaped-api-compatibility)
 
-[Local preview workflow](#share-a-localhost-preview-from-python) · [File-sharing workflows](#share-files-from-a-python-workflow) · [Sharing questions](#python-sharing-questions) · [Private links](https://qurl.link/)
+[Local preview workflow](#share-a-localhost-preview-from-python) ·
+[File-sharing workflows](#share-files-from-a-python-workflow) ·
+[Sharing questions](#python-sharing-questions) · [Private links](https://qurl.link/)
 
 ## Share a localhost preview from Python
 
-Use this SDK when a Python service, automation job, or LangChain tool should issue a short-lived link to an existing app. Examples include a dashboard review, an internal API handoff, or a preview produced by an automation job.
+Use this SDK when a Python service, automation job, or LangChain tool should
+issue a short-lived link to an existing app. Examples include a dashboard
+review, an internal API handoff, or a preview produced by an automation job.
 
 There are two parts to the workflow:
 
@@ -23,7 +42,10 @@ There are two parts to the workflow:
 | Run and publish the local service | Keep the app running and follow the [CLI localhost quickstart](https://github.com/layervai/qurl-integrations#share-a-localhost-web-app), or deploy a compatible Connector beside the app. |
 | Issue access from Python | Use a resource managed by this SDK's configured API and accessible to its credential. Ask for an appropriate lifetime and send the returned link. |
 
-For a Connector resource already configured for your API credential, the following script requests a five-minute link. Set `QURL_CONNECTOR_ID` to the configured Connector identifier expected by this SDK, and `QURL_API_KEY` to an issuer credential with the required permissions:
+For a Connector resource already configured for your API credential, the
+following script requests a five-minute link. Set `QURL_CONNECTOR_ID` to the
+configured Connector identifier expected by this SDK, and `QURL_API_KEY` to
+an issuer credential with the required permissions:
 
 ```python
 import os
@@ -36,41 +58,70 @@ with QURLClient(api_key=os.environ["QURL_API_KEY"]) as client:
     print(portal.link)
 ```
 
-The identifier and credential must refer to the same authorized resource. Do not substitute a CLI CRID for a Connector identifier or assume that an account key manages a resource published by another device. If the CLI alone published the preview, its `qurl share` command is the direct sharing path; use SDK management only after the compatible resource is configured.
+The identifier and credential must refer to the same authorized resource.
+Do not substitute a CLI CRID for a Connector identifier or assume that an
+account key manages a resource published by another device. If the CLI alone
+published the preview, its `qurl share` command is the direct sharing path;
+use SDK management only after the compatible resource is configured.
 
-Keep the full link private. A browser recipient opens it without installing this SDK; the app's own login still applies. See [async usage](#async-usage) for an async Python service and [LangChain integration](#langchain-integration) for agent tools.
+Keep the full link private. A browser recipient opens it without installing
+this SDK; the app's own login still applies. See [async usage](#async-usage)
+for an async Python service and [LangChain integration](#langchain-integration)
+for agent tools.
 
 ## Share files from a Python workflow
 
-For reports or generated documents, choose the actual file-serving path before creating an access link:
+For reports or generated documents, choose the actual file-serving path before
+creating an access link:
 
-- Serve a dedicated directory with a localhost HTTP server and publish it with the [CLI file-sharing workflow](https://github.com/layervai/qurl-integrations#share-files-and-documents). That host and server must remain available for the download.
-- Use the [MCP upload tools](https://github.com/layervai/qurl-mcp#let-an-ai-agent-share-a-pdf-or-image) or [Gmail integration](https://github.com/layervai/qurl-integrations/tree/main/apps/chrome-extension) for supported uploaded documents and images.
-- If a compatible private file service is already registered for your SDK credential, issue access through its resource handle using the portal APIs.
+- Serve a dedicated directory with a localhost HTTP server and publish it with
+  the [CLI file-sharing workflow](https://github.com/layervai/qurl-integrations#share-files-and-documents).
+  That host and server must remain available for the download.
+- Use the [MCP upload tools](https://github.com/layervai/qurl-mcp#let-an-ai-agent-share-a-pdf-or-image)
+  or [Gmail integration](https://github.com/layervai/qurl-integrations/tree/main/apps/chrome-extension)
+  for supported uploaded documents and images.
+- If a compatible private file service is already registered for your SDK
+  credential, issue access through its resource handle using the portal APIs.
 
-This SDK's link-issuing calls do not upload a local Python file or start a file server. File-upload link minting can have different identifiers and revocation rules; follow the service or integration that created the upload.
+This SDK's link-issuing calls do not upload a local Python file or start a
+file server. File-upload link minting can have different identifiers and
+revocation rules; follow the service or integration that created the upload.
 
 ## Python sharing questions
 
 ### Can I pass localhost to `protect_url` and share it immediately?
 
-A URL registration does not create a connection to your laptop. Publish or configure the running service first. Use the appropriate registered resource and permissions; another machine's `localhost` is not your development app.
+A URL registration does not create a connection to your laptop. Publish or
+configure the running service first. Use the appropriate registered resource
+and permissions; another machine's `localhost` is not your development app.
 
 ### Does a five-minute link close every session after five minutes?
 
-Link expiry controls new redemption. Session duration is a separate setting; an already admitted session can outlive the link's redemption deadline. See [portal options](#quickstart) and the service's enforced policy.
+Link expiry controls new redemption. Session duration is a separate setting;
+an already admitted session can outlive the link's redemption deadline. See
+[portal options](#quickstart) and the service's enforced policy.
 
 ### Do browser recipients and Python openers need the same credentials?
 
-Browser recipients open the link and retain any app login requirement. This Python SDK's `enter_portal` uses the LayerV API and requires a credential with `qurl:resolve`; see [opening portals](#opening-portals). Do not pass an issuer API key to someone merely to let them open a browser link.
+Browser recipients open the link and retain any app login requirement.
+This Python SDK's `enter_portal` uses the LayerV API and requires a credential
+with `qurl:resolve`; see [opening portals](#opening-portals). Do not pass an
+issuer API key to someone merely to let them open a browser link.
 
 ## Why qURL?
 
-qURL lets your code issue temporary access to a resource while the local origin can remain on localhost or a private network. The Connector supplies that access path; the SDK controls resource and link operations. Restrict any separate public route if qURL should be the only way to reach the app.
+qURL lets your code issue temporary access to a resource while the local
+origin can remain on localhost or a private network. The Connector supplies
+that access path; the SDK controls resource and link operations. Restrict any
+separate public route if qURL should be the only way to reach the app.
 
-A portal link is an access credential, not proof that its holder is the person named in a label. Keep application authentication when identity matters. Use the resource, token, and session APIs for the access rules your workflow needs.
+A portal link is an access credential, not proof that its holder is the person
+named in a label. Keep application authentication when identity matters. Use
+the resource, token, and session APIs for the access rules your workflow needs.
 
-ngrok also supports authenticated localhost sharing. For the distinction between a public endpoint workflow and resource-specific access links, see the [qURL and ngrok comparison](https://github.com/layervai/qurl-integrations#qurl-and-ngrok-for-localhost-sharing).
+ngrok also supports authenticated localhost sharing. For the distinction
+between a public endpoint workflow and resource-specific access links, see
+the [qURL and ngrok comparison](https://github.com/layervai/qurl-integrations#qurl-and-ngrok-for-localhost-sharing).
 
 ## Installation
 
@@ -104,23 +155,29 @@ That is the core flow:
 | Protect a private URL | `client.protect_url` | The target URL you already know |
 | Mint a short-lived access link | `resource.create_portal` | The returned resource handle |
 
-`protect_url` is idempotent for the same account and target URL: protecting the same URL again returns the existing resource. `valid_for` accepts a duration string (`"5m"`, `"24h"`) or a `datetime.timedelta`; prefer short portal lifetimes.
+`protect_url` is idempotent for the same account and target URL: protecting
+the same URL again returns the existing resource. `valid_for` accepts a
+duration string (`"5m"`, `"24h"`) or a `datetime.timedelta`; prefer short
+portal lifetimes.
 
-If qURL Connector already protects the service, use the connector id instead of calling `protect_url`:
+If qURL Connector already protects the service, use the connector id instead
+of calling `protect_url`:
 
 ```python
 resource = client.connector_resource("prod-dashboard")
 portal = resource.create_portal(valid_for="5m")
 ```
 
-If you persist the resource id, future calls do not need to recreate the handle (no API call is made until you mint):
+If you persist the resource id, future calls do not need to recreate the
+handle (no API call is made until you mint):
 
 ```python
 resource = client.resource_by_id("r_demo1234567")
 portal = resource.create_portal(valid_for="1h")
 ```
 
-For one-off scripts, `client.create_portal_for_url` combines the two API calls and returns both the portal and a reusable resource handle:
+For one-off scripts, `client.create_portal_for_url` combines the two API calls
+and returns both the portal and a reusable resource handle:
 
 ```python
 portal, resource = client.create_portal_for_url(
@@ -143,7 +200,10 @@ portal = resource.create_portal(
 
 ## Opening Portals
 
-Most recipients open qURL links directly and do not use this SDK at all. If you are building a service or agent that opens received qURL links programmatically, `enter_portal` accepts a full link or a bare access token, grants network access for the caller's IP, and returns the reachable resource:
+Most recipients open qURL links directly and do not use this SDK at all. If
+you are building a service or agent that opens received qURL links
+programmatically, `enter_portal` accepts a full link or a bare access token,
+grants network access for the caller's IP, and returns the reachable resource:
 
 ```python
 handle = client.enter_portal(link)
@@ -151,7 +211,10 @@ print(handle.resource_url)   # The reachable resource location
 print(handle.open_seconds)   # How long access stays open
 ```
 
-Unlike qurl-go's offline `EnterPortal`, this SDK opens links through the LayerV API: the client needs an API key with the `qurl:resolve` scope. `enter_portal` fails closed — if access is granted but no resource URL comes back, it raises instead of returning an empty handle.
+Unlike qurl-go's offline `EnterPortal`, this SDK opens links through the
+LayerV API: the client needs an API key with the `qurl:resolve` scope.
+`enter_portal` fails closed — if access is granted but no resource URL comes
+back, it raises instead of returning an empty handle.
 
 ## Async Usage
 
@@ -170,7 +233,10 @@ asyncio.run(main())
 
 ## REST-Shaped API (Compatibility)
 
-The original REST-shaped methods remain fully supported and share the same client. Use them for the qURL/resource/token management surface that has no portal-verb equivalent (listing, updating, revoking, quotas, webhooks, ...) or if you already build on them:
+The original REST-shaped methods remain fully supported and share the same
+client. Use them for the qURL/resource/token management surface that has no
+portal-verb equivalent (listing, updating, revoking, quotas, webhooks, ...) or
+if you already build on them:
 
 ```python
 # Create a protected link (portal equivalent: create_portal_for_url)
@@ -192,13 +258,28 @@ qurl = client.update("r_xxx", description="extended")
 
 ## Authentication Notes
 
-`QURLClient(api_key=...)` accepts either a qURL API key or a JWT bearer token. Dashboard/account endpoints such as billing, customer, connector, webhook, and API-key management require JWT authentication. You may omit `api_key` only for public endpoints such as access-code redemption; authenticated endpoints return 401 without credentials.
+`QURLClient(api_key=...)` accepts either a qURL API key or a JWT bearer token.
+Dashboard/account endpoints such as billing, customer, connector, webhook, and
+API-key management require JWT authentication. You may omit `api_key` only for
+public endpoints such as access-code redemption; authenticated endpoints return
+401 without credentials.
 
-Some resource-list responses intentionally omit `target_url` for redacted resource types. Treat `QURL.target_url` as `str | None` before formatting or parsing it.
+Some resource-list responses intentionally omit `target_url` for redacted
+resource types. Treat `QURL.target_url` as `str | None` before formatting or
+parsing it.
 
-Mutating SDK methods generate a per-call `Idempotency-Key` when you do not provide one and reuse it across the client's internal retries; qurl-service supports that header on mutating endpoints, including `POST /v1/resolve`. Automatic POST status-code retries remain limited to rate limits because one-time resolve tokens can be consumed by server-side knock failures. Pass a stable `idempotency_key` when you need retry-safe behavior across your own retry loop, process restart, or job replay. Caller-supplied keys should be globally unique for each logical operation; UUID or ULID values are recommended.
+Mutating SDK methods generate a per-call `Idempotency-Key` when you do not
+provide one and reuse it across the client's internal retries; qurl-service
+supports that header on mutating endpoints, including `POST /v1/resolve`.
+Automatic POST status-code retries remain limited to rate limits because
+one-time resolve tokens can be consumed by server-side knock failures. Pass a
+stable `idempotency_key` when you need retry-safe behavior across your own retry
+loop, process restart, or job replay. Caller-supplied keys should be globally
+unique for each logical operation; UUID or ULID values are recommended.
 
-Fields such as webhook `events` and API-key `scopes` accept ordered non-string iterables of strings. Lists, tuples, and generators preserve the caller's iteration order; sets are rejected because their iteration order is not stable.
+Fields such as webhook `events` and API-key `scopes` accept ordered non-string
+iterables of strings. Lists, tuples, and generators preserve the caller's
+iteration order; sets are rejected because their iteration order is not stable.
 
 ## Pagination
 
@@ -311,11 +392,26 @@ if quota.rate_limits is not None:
     print(f"Rate limit: {quota.rate_limits.create_per_minute}/min")
 ```
 
-Use `max_active_resources`, `active_resources`, and `active_resources_percent` for resource quotas. `max_data_transfer_bytes` is the monthly byte allowance; `data_transfer_bytes` is measured usage, available on both quota usage and current-period responses. This usage always covers the current UTC calendar month, independently of a paid account's billing period. Missing or null values remain `None`, distinct from a reported zero. The [service OpenAPI spec](https://github.com/layervai/qurl-service/blob/01d7c47361b5f72f890428f1a53bd04e8d7f67cc/api/openapi.yaml#L5796) defines `-1` as unlimited for `max_active_resources` and its legacy alias `max_active_qurls`, as well as `max_data_transfer_bytes`.
+Use `max_active_resources`, `active_resources`, and `active_resources_percent`
+for resource quotas. `max_data_transfer_bytes` is the monthly byte allowance;
+`data_transfer_bytes` is measured usage, available on both quota usage and
+current-period responses. This usage always covers the current UTC calendar
+month, independently of a paid account's billing period. Missing or null values
+remain `None`, distinct from a reported zero. The [service OpenAPI spec](https://github.com/layervai/qurl-service/blob/01d7c47361b5f72f890428f1a53bd04e8d7f67cc/api/openapi.yaml#L5796)
+defines `-1` as unlimited for `max_active_resources` and its legacy alias
+`max_active_qurls`, as well as `max_data_transfer_bytes`.
 
-**Migration:** the deprecated `max_active_qurls` and `active_qurls` fields still represent protected resources. Missing values now return `None` instead of `0`; check `is not None` before arithmetic or displaying a count. Canonical and legacy fields preserve their own wire values, so an older response that omits canonical fields leaves those fields `None`. Prefer the canonical fields when available.
+**Migration:** the deprecated `max_active_qurls` and `active_qurls` fields still
+represent protected resources. Missing values now return `None` instead of
+`0`; check `is not None` before arithmetic or displaying a count. Canonical
+and legacy fields preserve their own wire values, so an older response that
+omits canonical fields leaves those fields `None`. Prefer the canonical fields
+when available.
 
-JWT-authenticated dashboard endpoints are also available for usage, customer settings, billing sessions, invoices, and API-key management. API-key auth continues to work for normal qURL, resource, domain, webhook, connector, and access-code operations according to the API scopes on the key.
+JWT-authenticated dashboard endpoints are also available for usage, customer
+settings, billing sessions, invoices, and API-key management. API-key auth
+continues to work for normal qURL, resource, domain, webhook, connector, and
+access-code operations according to the API scopes on the key.
 
 ## Debug Logging
 
@@ -356,8 +452,11 @@ tools = toolkit.get_tools()  # [CreateQURLTool, ResolveQURLTool, ListQURLsTool, 
 
 - Treat API keys and qURL links like credentials. Do not log them.
 - Prefer short portal lifetimes such as `valid_for="5m"`.
-- Do not ask portal recipients to handle credentials. Recipients only need the link.
-- `protect_url` and `create_portal_for_url` reject malformed target URLs and URLs with embedded credentials (`https://user:pass@...`) before any request, matching qurl-go.
+- Do not ask portal recipients to handle credentials. Recipients only need
+  the link.
+- `protect_url` and `create_portal_for_url` reject malformed target URLs and
+  URLs with embedded credentials (`https://user:pass@...`) before any request,
+  matching qurl-go.
 
 ## License
 
