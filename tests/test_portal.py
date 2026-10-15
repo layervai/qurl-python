@@ -373,6 +373,7 @@ def test_connector_resource(client: QURLClient, alias_fields: dict[str, Any]) ->
         "resource_id": "r_abc123def45",
         "status": "active",
         "slug": "prod-dashboard",
+        "target_url": "https://internal.example.com/dashboard",
         **alias_fields,
     }
     route = respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
@@ -387,6 +388,7 @@ def test_connector_resource(client: QURLClient, alias_fields: dict[str, Any]) ->
 
     assert route.called
     assert resource.id == "r_abc123def45"
+    assert resource.target_url == "https://internal.example.com/dashboard"
     assert resource.details is not None
     assert resource.details.slug == "prod-dashboard"
     assert resource.details.alias == alias_fields.get("alias")
@@ -427,7 +429,12 @@ def test_connector_resource_ambiguous(client: QURLClient) -> None:
 def test_connector_resource_rejects_invalid_slug(
     client: QURLClient, slug_fields: dict[str, Any]
 ) -> None:
-    mismatched = {**_RESOURCE_DATA, **slug_fields}
+    mismatched = {
+        "resource_id": "r_abc123def45",
+        "status": "active",
+        "alias": "prod-dashboard",
+        **slug_fields,
+    }
     respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
         return_value=httpx.Response(200, json={"data": [mismatched]})
     )
@@ -698,6 +705,7 @@ async def test_async_connector_resource(
         "resource_id": "r_abc123def45",
         "status": "active",
         "slug": "prod-dashboard",
+        "target_url": "https://internal.example.com/dashboard",
         **alias_fields,
     }
     route = respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
@@ -712,6 +720,7 @@ async def test_async_connector_resource(
 
     assert route.called
     assert resource.id == "r_abc123def45"
+    assert resource.target_url == "https://internal.example.com/dashboard"
     assert resource.details is not None
     assert resource.details.slug == "prod-dashboard"
     assert resource.details.alias == alias_fields.get("alias")
@@ -755,7 +764,12 @@ async def test_async_connector_resource_not_found(
 async def test_async_connector_resource_rejects_invalid_slug(
     async_client: AsyncQURLClient, slug_fields: dict[str, Any]
 ) -> None:
-    mismatched = {**_RESOURCE_DATA, **slug_fields}
+    mismatched = {
+        "resource_id": "r_abc123def45",
+        "status": "active",
+        "alias": "prod-dashboard",
+        **slug_fields,
+    }
     respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
         return_value=httpx.Response(200, json={"data": [mismatched]})
     )
