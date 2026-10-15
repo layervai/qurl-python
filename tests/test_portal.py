@@ -363,18 +363,35 @@ def test_valid_for_string_bypasses_timedelta_floor(client: QURLClient) -> None:
 
 
 @respx.mock
-def test_connector_resource(client: QURLClient) -> None:
+@pytest.mark.parametrize(
+    "alias_fields",
+    [{}, {"alias": None}, {"alias": "prod-dashboard"}, {"alias": "renamed-display"}],
+    ids=["omitted", "null", "matching", "renamed"],
+)
+def test_connector_resource(client: QURLClient, alias_fields: dict[str, Any]) -> None:
+    resource_data = {
+        "resource_id": "r_abc123def45",
+        "status": "active",
+        "slug": "prod-dashboard",
+        **alias_fields,
+    }
     route = respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
-        return_value=httpx.Response(200, json={"data": [_RESOURCE_DATA]})
+        return_value=httpx.Response(200, json={"data": [resource_data]})
+    )
+    mint = respx.post(f"{BASE_URL}/v1/resources/r_abc123def45/qurls").mock(
+        return_value=httpx.Response(201, json={"data": _PORTAL_DATA})
     )
 
     resource = client.connector_resource("prod-dashboard")
+    portal = resource.create_portal(valid_for="5m")
 
     assert route.called
     assert resource.id == "r_abc123def45"
-    assert resource.target_url == "https://internal.example.com/dashboard"
     assert resource.details is not None
-    assert resource.details.alias == "prod-dashboard"
+    assert resource.details.slug == "prod-dashboard"
+    assert resource.details.alias == alias_fields.get("alias")
+    assert json.loads(mint.calls[0].request.content) == {"expires_in": "5m"}
+    assert portal.link == _PORTAL_DATA["qurl_link"]
 
 
 @respx.mock
@@ -402,8 +419,15 @@ def test_connector_resource_ambiguous(client: QURLClient) -> None:
 
 
 @respx.mock
-def test_connector_resource_alias_mismatch(client: QURLClient) -> None:
-    mismatched = {**_RESOURCE_DATA, "alias": "some-other-alias"}
+@pytest.mark.parametrize(
+    "slug_fields",
+    [{}, {"slug": None}, {"slug": ""}, {"slug": "other-dashboard"}],
+    ids=["omitted", "null", "empty", "mismatched"],
+)
+def test_connector_resource_rejects_invalid_slug(
+    client: QURLClient, slug_fields: dict[str, Any]
+) -> None:
+    mismatched = {**_RESOURCE_DATA, **slug_fields}
     respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
         return_value=httpx.Response(200, json={"data": [mismatched]})
     )
@@ -662,6 +686,40 @@ def test_async_resource_by_id_rejects_invalid_id(
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "alias_fields",
+    [{}, {"alias": None}, {"alias": "prod-dashboard"}, {"alias": "renamed-display"}],
+    ids=["omitted", "null", "matching", "renamed"],
+)
+async def test_async_connector_resource(
+    async_client: AsyncQURLClient, alias_fields: dict[str, Any]
+) -> None:
+    resource_data = {
+        "resource_id": "r_abc123def45",
+        "status": "active",
+        "slug": "prod-dashboard",
+        **alias_fields,
+    }
+    route = respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
+        return_value=httpx.Response(200, json={"data": [resource_data]})
+    )
+    mint = respx.post(f"{BASE_URL}/v1/resources/r_abc123def45/qurls").mock(
+        return_value=httpx.Response(201, json={"data": _PORTAL_DATA})
+    )
+
+    resource = await async_client.connector_resource("prod-dashboard")
+    portal = await resource.create_portal(valid_for="5m")
+
+    assert route.called
+    assert resource.id == "r_abc123def45"
+    assert resource.details is not None
+    assert resource.details.slug == "prod-dashboard"
+    assert resource.details.alias == alias_fields.get("alias")
+    assert json.loads(mint.calls[0].request.content) == {"expires_in": "5m"}
+    assert portal.link == _PORTAL_DATA["qurl_link"]
+
+
+@respx.mock
 async def test_async_connector_resource_ambiguous(
     async_client: AsyncQURLClient,
 ) -> None:
@@ -689,10 +747,15 @@ async def test_async_connector_resource_not_found(
 
 
 @respx.mock
-async def test_async_connector_resource_alias_mismatch(
-    async_client: AsyncQURLClient,
+@pytest.mark.parametrize(
+    "slug_fields",
+    [{}, {"slug": None}, {"slug": ""}, {"slug": "other-dashboard"}],
+    ids=["omitted", "null", "empty", "mismatched"],
+)
+async def test_async_connector_resource_rejects_invalid_slug(
+    async_client: AsyncQURLClient, slug_fields: dict[str, Any]
 ) -> None:
-    mismatched = {**_RESOURCE_DATA, "alias": "some-other-alias"}
+    mismatched = {**_RESOURCE_DATA, **slug_fields}
     respx.get(f"{BASE_URL}/v1/resources", params={"slug": "prod-dashboard"}).mock(
         return_value=httpx.Response(200, json={"data": [mismatched]})
     )
