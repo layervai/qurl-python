@@ -492,7 +492,7 @@ class CredentialClaim:
 class APIKey:
     """Credential metadata.
 
-    ``kind`` discriminates a durable ``api_key`` from a one-shot
+    ``kind`` discriminates an account ``api_key`` from a one-shot
     ``enrollment_token`` or a system-minted ``device`` credential; unknown
     future kinds may appear. ``target`` and ``claims`` are populated only
     on enrollment tokens. ``api_key`` is populated only on create
@@ -502,7 +502,6 @@ class APIKey:
     key_id: str
     key_prefix: str
     name: str
-    kind: str | None = None
     scopes: list[str] = field(default_factory=list)
     status: str | None = None
     created_at: datetime | None = None
@@ -512,6 +511,7 @@ class APIKey:
     target: str | None = None
     claims: list[CredentialClaim] = field(default_factory=list)
     api_key: str | None = field(default=None, repr=False)
+    kind: str | None = None
 
 
 @dataclass

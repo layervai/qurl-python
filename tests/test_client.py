@@ -325,6 +325,14 @@ def test_repr_no_auth_api_key_is_unquoted_none() -> None:
     c.close()
 
 
+def test_api_key_preserves_positional_scopes_and_status() -> None:
+    key = APIKey("key_example", "lv_live_test", "Example", ["qurl:read"], "active")
+
+    assert key.scopes == ["qurl:read"]
+    assert key.status == "active"
+    assert key.kind is None
+
+
 def test_secret_dataclass_repr_omits_one_time_values() -> None:
     webhook = Webhook(
         webhook_id="wh_secret",

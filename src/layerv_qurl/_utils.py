@@ -204,7 +204,7 @@ def build_credential_scopes(
     """Validate the kind-dependent credential fields and return ``scopes``.
 
     The three fields are mutually exclusive by kind, and the server
-    returns 400 ``invalid_input`` for either mismatch. Durable ``api_key``
+    returns 400 ``invalid_input`` for either mismatch. Account ``api_key``
     credentials carry caller-chosen ``scopes`` and accept neither
     ``target`` nor ``claims``; ``enrollment_token`` scopes are
     server-assigned from ``target``, so sending ``scopes`` is rejected.

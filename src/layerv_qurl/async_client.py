@@ -1302,8 +1302,10 @@ class AsyncQURLClient:
     ) -> APIKey:
         """Create a credential.
 
-        ``kind="api_key"`` mints a durable key with the caller-chosen
-        ``scopes``. ``kind="enrollment_token"`` mints a one-shot (<=24h)
+        ``kind="api_key"`` mints an account key with caller-chosen
+        ``scopes``. JWT callers can mint durable keys; account keys with
+        ``qurl:keys`` can mint bounded children under the API's delegation
+        rules. ``kind="enrollment_token"`` mints a one-shot (<=24h)
         Connector/agent enrollment credential: pass ``target`` and
         ``claims`` instead of ``scopes`` (the server assigns them).
 
