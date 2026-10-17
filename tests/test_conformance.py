@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -26,13 +29,50 @@ NO_ACCESS_TOKEN_ERROR = (
     "(https://qurl.link/#at_...) or a bare access token (at_...)"
 )
 RESOLVER_REACHED_MESSAGE = "qurl-conformance fragment reached API resolver"
+# qv2 artifact schema revisions whose `fragment` class this SDK understands.
+# An allowlist rather than `== N` because the qurl-conformance range in
+# pyproject.toml spans both revisions, so either can legitimately resolve:
+# v2 is purely additive over v1 (it adds a `transport_contract` key and a
+# `transport` class) and leaves the `fragment` class byte-identical.
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 
 
-def _qurl_conformance_fragment_cases() -> list[Any]:
-    """Return the SDK-consumed qv2 fragment inputs from qurl-conformance."""
-    conformance = qurl_conformance.qv2_vectors()
+def _conformance_version() -> str:
+    """Installed qurl-conformance version, or "unknown" if it has no metadata.
+
+    `importlib.metadata.version` resolves the *distribution*, so a source
+    checkout on PYTHONPATH or a vendored copy is importable but raises
+    PackageNotFoundError. This is only ever called while building a failure
+    message, so raising there would replace the actionable text with an
+    unrelated traceback on the one path it exists to serve.
+    """
+    try:
+        return package_version("qurl-conformance")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _assert_supported_schema_version(conformance: dict[str, Any]) -> None:
+    """Reject an artifact revision whose shape nobody has re-verified yet."""
+    schema_version = conformance.get("schema_version")
+    assert schema_version in SUPPORTED_SCHEMA_VERSIONS, (
+        f"unrecognized qv2 artifact schema_version {schema_version} "
+        f"(qurl-conformance {_conformance_version()}, supported: "
+        f"{sorted(SUPPORTED_SCHEMA_VERSIONS)}): re-verify the `fragment` class "
+        f"shape, then add it to SUPPORTED_SCHEMA_VERSIONS"
+    )
+
+
+def _build_fragment_cases(conformance: dict[str, Any] | None = None) -> list[Any]:
+    """Extract the SDK-consumed qv2 fragment inputs; raises on a reshaped artifact.
+
+    Takes the artifact as an argument (like _assert_supported_schema_version)
+    so each reshape detector below can be tested against a small fake rather
+    than waiting on a real upstream regression to exercise it.
+    """
+    if conformance is None:
+        conformance = qurl_conformance.qv2_vectors()
     assert conformance["artifact"] == "qurl-v2-conformance-vectors"
-    assert conformance["schema_version"] == 1
     vectors = conformance["classes"]["fragment"]["vectors"]
     assert vectors, "fragment class must not be empty"
     assert any(SIGNED_FRAGMENT_SHAPE_RE.match(vector["fragment"]) for vector in vectors), (
@@ -50,7 +90,170 @@ def _qurl_conformance_fragment_cases() -> list[Any]:
     return cases
 
 
+def _qurl_conformance_fragment_cases() -> list[Any]:
+    """Build the parametrize cases without failing collection on a reshaped artifact.
+
+    The version gate above only covers a *version-number* change. A reshaped
+    artifact — a renamed class, a dropped key, an unexpected vector shape —
+    raises while extracting cases, and this runs at import time, so pytest
+    would interrupt the session and report nothing for every other test in
+    the suite (the schema-2 outage on main, in a different disguise). Carry
+    the error into the parametrization and surface it inside the test instead.
+
+    Note the bound: the module-level `import qurl_conformance` is still
+    outside this guard, so a package that renames the top-level module or
+    raises at import reproduces the original outage. `importorskip` would
+    only trade it for a silent skip, which the paragraph below rejects.
+
+    Deliberately not `return []` on failure: an empty parametrize list makes
+    these tests *skip*, and a silently skipped fail-closed test is worse than
+    the outage it replaces.
+    """
+    try:
+        return _build_fragment_cases()
+    # Intentionally broad — anything that stops us building cases must become
+    # a red test rather than a collection abort. That includes a bug in the
+    # helper itself, which is why the case id says "could not build" rather
+    # than naming the artifact as the culprit. (BLE isn't in ruff's select
+    # list, so this comment is documentation, not suppression.)
+    except Exception as exc:
+        return [pytest.param(exc, id="could_not_build_fragment_cases")]
+
+
 FRAGMENT_CASES = _qurl_conformance_fragment_cases()
+
+
+def _fragment_or_raise(fragment: str | BaseException) -> str:
+    """Surface a collection-time artifact failure as this test's failure."""
+    if isinstance(fragment, BaseException):
+        # A fresh exception rather than `raise fragment`: FRAGMENT_CASES is
+        # module-level and holds one instance, so re-raising it would mutate
+        # `__traceback__` in place and bleed the sync test's frames into the
+        # async test's report.
+        raise AssertionError(f"{type(fragment).__name__}: {fragment}") from fragment
+    return fragment
+
+
+# The version gate is a test, not a collection-time assert: an unrecognized
+# revision must fail one red test, not abort collection and take every other
+# test in the suite down with it (exactly what schema 2 did on main).
+def test_qv2_artifact_schema_version_is_supported() -> None:
+    """The resolved artifact revision is one whose shape we have checked."""
+    _assert_supported_schema_version(qurl_conformance.qv2_vectors())
+
+
+def test_supported_schema_versions_is_pinned() -> None:
+    """Changing the allowlist must be a deliberate edit, not a silent one.
+
+    A change-detector on purpose, and the only thing that catches a narrowing.
+    CI resolves 0.12.x (schema 2), so cutting `1` leaves the suite fully green
+    (verified — 282 passed) while breaking anyone who resolves the lower end
+    of the declared range: an old lockfile, a `--resolution lowest` job, a
+    constrained downstream install.
+
+    This pins the set; it does not parse the range (tomllib is 3.11+ and this
+    package supports 3.10). Re-read the range in pyproject.toml by hand when
+    this fires.
+    """
+    assert sorted(SUPPORTED_SCHEMA_VERSIONS) == [1, 2], (
+        "SUPPORTED_SCHEMA_VERSIONS changed. Today qurl-conformance <=0.11.0 "
+        "ships schema 1 and 0.12.x ships schema 2: confirm the range in "
+        "pyproject.toml admits exactly the revisions now allowlisted, then "
+        "update this pin to match"
+    )
+
+
+def test_unsupported_qv2_schema_version_is_rejected() -> None:
+    """The tripwire must actually fire — a silent pass would hide a reshape."""
+    with pytest.raises(AssertionError, match=r"unrecognized qv2 artifact schema_version 3"):
+        _assert_supported_schema_version({"schema_version": 3})
+
+
+def test_missing_qv2_schema_version_is_rejected_with_the_actionable_message() -> None:
+    """A dropped key must reach the same guidance, not a bare KeyError."""
+    with pytest.raises(AssertionError, match=r"schema_version None"):
+        _assert_supported_schema_version({})
+
+
+def test_fragment_or_raise_surfaces_a_carried_artifact_failure() -> None:
+    """A carried failure must fail the test, not flow through as fragment data."""
+    assert _fragment_or_raise("qv2.abc.def") == "qv2.abc.def"
+    with pytest.raises(AssertionError, match=r"ValueError: boom") as exc_info:
+        _fragment_or_raise(ValueError("boom"))
+    assert isinstance(exc_info.value.__cause__, ValueError), "original cause must be chained"
+
+
+def _fake_artifact(**overrides: Any) -> dict[str, Any]:
+    """A minimal well-formed artifact, so each test mutates exactly one thing."""
+    artifact: dict[str, Any] = {
+        "artifact": "qurl-v2-conformance-vectors",
+        "schema_version": 2,
+        "classes": {
+            "fragment": {
+                "vectors": [
+                    {"name": "signed", "fragment": "qv2.eyJhIjoxfQ.c2ln"},
+                ]
+            }
+        },
+    }
+    artifact.update(overrides)
+    return artifact
+
+
+def test_build_fragment_cases_accepts_a_well_formed_artifact() -> None:
+    """The fake must pass, or the reshape tests below would prove nothing."""
+    assert len(_build_fragment_cases(_fake_artifact())) == 1
+
+
+def test_build_fragment_cases_rejects_a_renamed_artifact() -> None:
+    """A different artifact name is a different contract, not a new revision."""
+    with pytest.raises(AssertionError, match="qurl-v2-conformance-vectors"):
+        _build_fragment_cases(_fake_artifact(artifact="something-else"))
+
+
+def test_build_fragment_cases_rejects_an_empty_fragment_class() -> None:
+    """Zero vectors would parametrize zero cases — a silent pass."""
+    with pytest.raises(AssertionError, match="fragment class must not be empty"):
+        _build_fragment_cases(_fake_artifact(classes={"fragment": {"vectors": []}}))
+
+
+def test_build_fragment_cases_rejects_vectors_with_no_signed_fragment() -> None:
+    """The signed-shape path is what these tests exist to exercise."""
+    unsigned = {"name": "unsigned", "fragment": "not-a-qv2-fragment"}
+    with pytest.raises(AssertionError, match="signed-shaped"):
+        _build_fragment_cases(_fake_artifact(classes={"fragment": {"vectors": [unsigned]}}))
+
+
+def test_build_fragment_cases_rejects_a_platform_token_smuggled_in_as_a_fragment() -> None:
+    """Platform tokens resolve online; treating one as an offline fragment
+    would turn a fail-closed test into a live API call."""
+    vectors = [
+        {"name": "signed", "fragment": "qv2.eyJhIjoxfQ.c2ln"},
+        {"name": "token", "fragment": "at_" + "a" * 43},
+    ]
+    with pytest.raises(AssertionError, match="not platform tokens"):
+        _build_fragment_cases(_fake_artifact(classes={"fragment": {"vectors": vectors}}))
+
+
+def test_build_fragment_cases_rejects_a_renamed_fragment_class() -> None:
+    """The exact reshape that motivated the collection guard."""
+    with pytest.raises(KeyError):
+        _build_fragment_cases(_fake_artifact(classes={"fragments": {"vectors": []}}))
+
+
+def test_unusable_artifact_yields_a_red_case_not_an_empty_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback must never degrade to `[]`, which would silently skip."""
+
+    def _boom() -> list[Any]:
+        raise AssertionError("reshaped")
+
+    monkeypatch.setattr(sys.modules[__name__], "_build_fragment_cases", _boom)
+    cases = _qurl_conformance_fragment_cases()
+    assert len(cases) == 1, "an unusable artifact must still produce one red test"
+    with pytest.raises(AssertionError, match="reshaped"):
+        _fragment_or_raise(cases[0].values[0])
 
 
 def _assert_qv2_fragment_rejected(error: ValueError, fragment: str) -> None:
@@ -65,9 +268,10 @@ def _assert_qv2_fragment_rejected(error: ValueError, fragment: str) -> None:
 
 @pytest.mark.parametrize("fragment", FRAGMENT_CASES)
 def test_enter_portal_rejects_qurl_conformance_fragments_before_api_call(
-    fragment: str,
+    fragment: str | BaseException,
 ) -> None:
     """Shared qv2 fragments are offline links, so Python must not resolve them."""
+    fragment = _fragment_or_raise(fragment)
     with (
         QURLClient(api_key="lv_live_test", base_url=BASE_URL) as client,
         patch.object(
@@ -84,9 +288,10 @@ def test_enter_portal_rejects_qurl_conformance_fragments_before_api_call(
 
 @pytest.mark.parametrize("fragment", FRAGMENT_CASES)
 async def test_async_enter_portal_rejects_qurl_conformance_fragments_before_api_call(
-    fragment: str,
+    fragment: str | BaseException,
 ) -> None:
     """Async portal entry shares the same fail-closed qv2 fragment guard."""
+    fragment = _fragment_or_raise(fragment)
     async with AsyncQURLClient(
         api_key="lv_live_test", base_url=BASE_URL
     ) as client:

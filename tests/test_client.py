@@ -872,8 +872,12 @@ def test_error_handling(client: QURLClient) -> None:
 
 
 @respx.mock
-def test_quota_typed(client: QURLClient) -> None:
-    """get_quota() returns typed RateLimits and Usage objects."""
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("legacy_limit", [False, True], ids=["absent-limit", "legacy-limit"])
+async def test_quota_typed(
+    client: QURLClient, async_client: AsyncQURLClient, use_async: bool, legacy_limit: bool
+) -> None:
+    """get_quota() preserves the quota contract without inventing a token cap."""
     respx.get(f"{BASE_URL}/v1/quota").mock(
         return_value=httpx.Response(
             200,
@@ -888,7 +892,7 @@ def test_quota_typed(client: QURLClient) -> None:
                         "list_per_minute": 120,
                         "resolve_per_minute": 300,
                         "max_active_qurls": 5000,
-                        "max_tokens_per_qurl": 10,
+                        **({"max_tokens_per_qurl": 10} if legacy_limit else {}),
                         # Populated to exercise the parse path — earlier
                         # revisions of this test let `max_expiry_seconds`
                         # fall through the `.get(..., 0)` default, which
@@ -906,15 +910,18 @@ def test_quota_typed(client: QURLClient) -> None:
         )
     )
 
-    result = client.get_quota()
+    result = await async_client.get_quota() if use_async else client.get_quota()
     assert result.plan == "growth"
     assert isinstance(result.period_start, datetime)
 
     # Typed RateLimits
     assert result.rate_limits is not None
+    assert not hasattr(result.rate_limits, "max_tokens_per_qurl")
     assert result.rate_limits.create_per_minute == 60
     assert result.rate_limits.max_active_qurls == 5000
     assert result.rate_limits.max_expiry_seconds == 604800
+    assert result.rate_limits.max_active_resources is None
+    assert result.rate_limits.max_data_transfer_bytes is None
 
     # Typed Usage
     assert result.usage is not None
@@ -922,6 +929,166 @@ def test_quota_typed(client: QURLClient) -> None:
     assert result.usage.qurls_created == 10
     assert result.usage.total_accesses == 42
     assert result.usage.active_qurls_percent == 0.1
+    assert result.usage.active_resources is None
+    assert result.usage.active_resources_percent is None
+    assert result.usage.data_transfer_bytes is None
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("limits", "usage", "expected"),
+    [
+        pytest.param(
+            {"max_active_resources": 10, "max_data_transfer_bytes": 10_737_418_240},
+            {
+                "active_resources": 8,
+                "active_resources_percent": 80.0,
+                "data_transfer_bytes": 23_456_789,
+            },
+            (10, 10_737_418_240, 8, 80.0, 23_456_789),
+            id="canonical-only",
+        ),
+        pytest.param(
+            {"max_active_resources": 0, "max_data_transfer_bytes": 0},
+            {"active_resources": 0, "active_resources_percent": 0.0, "data_transfer_bytes": 0},
+            (0, 0, 0, 0.0, 0),
+            id="zero",
+        ),
+        pytest.param(
+            {"max_active_resources": -1, "max_data_transfer_bytes": -1},
+            {
+                "active_resources": 87,
+                "active_resources_percent": None,
+                "data_transfer_bytes": 9_007_199_254_740_993,
+            },
+            (-1, -1, 87, None, 9_007_199_254_740_993),
+            id="unlimited-and-large-bytes",
+        ),
+        pytest.param({}, {}, (None, None, None, None, None), id="absent-fields"),
+        pytest.param(
+            {"max_active_resources": None, "max_data_transfer_bytes": None},
+            {
+                "active_resources": None,
+                "active_resources_percent": None,
+                "data_transfer_bytes": None,
+            },
+            (None, None, None, None, None),
+            id="null-fields",
+        ),
+    ],
+)
+@respx.mock
+async def test_quota_preserves_canonical_resources_and_monthly_bytes(
+    client: QURLClient,
+    async_client: AsyncQURLClient,
+    use_async: bool,
+    limits: dict[str, Any],
+    usage: dict[str, Any],
+    expected: tuple[int | None, int | None, int | None, float | None, int | None],
+) -> None:
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "plan": "free",
+                    "rate_limits": limits,
+                    "usage": usage,
+                }
+            },
+        )
+    )
+
+    result = await async_client.get_quota() if use_async else client.get_quota()
+    assert result.rate_limits is not None
+    assert result.usage is not None
+    assert (
+        result.rate_limits.max_active_resources,
+        result.rate_limits.max_data_transfer_bytes,
+        result.usage.active_resources,
+        result.usage.active_resources_percent,
+        result.usage.data_transfer_bytes,
+    ) == expected
+    # An omitted legacy alias must not invent a zero-resource account.
+    assert result.rate_limits.max_active_qurls is None
+    assert result.usage.active_qurls is None
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@respx.mock
+async def test_quota_preserves_divergent_canonical_and_legacy_values(
+    client: QURLClient, async_client: AsyncQURLClient, use_async: bool
+) -> None:
+    respx.get(f"{BASE_URL}/v1/quota").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "rate_limits": {"max_active_resources": 10, "max_active_qurls": 5000},
+                    "usage": {
+                        "active_resources": 8,
+                        "active_qurls": 3,
+                        "active_resources_percent": 80.0,
+                        "active_qurls_percent": 0.06,
+                    },
+                }
+            },
+        )
+    )
+
+    result = await async_client.get_quota() if use_async else client.get_quota()
+    assert result.rate_limits is not None
+    assert result.rate_limits.max_active_resources == 10
+    assert result.rate_limits.max_active_qurls == 5000
+    assert result.usage is not None
+    assert result.usage.active_resources == 8
+    assert result.usage.active_qurls == 3
+    assert result.usage.active_resources_percent == 80.0
+    assert result.usage.active_qurls_percent == 0.06
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("wire_name", ["active_resources", "active_qurls"])
+@pytest.mark.parametrize(
+    ("fields", "expected_count", "expected_bytes"),
+    [
+        pytest.param({"count": 8, "data_transfer_bytes": 23_456_789}, 8, 23_456_789, id="observed"),
+        pytest.param({"count": 0, "data_transfer_bytes": 0}, 0, 0, id="zero"),
+        pytest.param(
+            {"count": 87, "data_transfer_bytes": 9_007_199_254_740_993},
+            87,
+            9_007_199_254_740_993,
+            id="large-bytes",
+        ),
+        pytest.param({}, None, None, id="absent"),
+        pytest.param({"count": None, "data_transfer_bytes": None}, None, None, id="null"),
+    ],
+)
+@respx.mock
+async def test_current_period_preserves_resource_counts_and_monthly_bytes(
+    client: QURLClient,
+    async_client: AsyncQURLClient,
+    use_async: bool,
+    wire_name: str,
+    fields: dict[str, int | None],
+    expected_count: int | None,
+    expected_bytes: int | None,
+) -> None:
+    payload = {k: v for k, v in fields.items() if k != "count"}
+    if "count" in fields:
+        payload[wire_name] = fields["count"]
+    respx.get(f"{BASE_URL}/v1/usage/current-period").mock(
+        return_value=httpx.Response(200, json={"data": payload})
+    )
+
+    result = (
+        await async_client.get_usage_current_period()
+        if use_async
+        else client.get_usage_current_period()
+    )
+    assert result.active_resources == (expected_count if wire_name == "active_resources" else None)
+    assert result.active_qurls == (expected_count if wire_name == "active_qurls" else None)
+    assert result.data_transfer_bytes == expected_bytes
 
 
 @respx.mock
@@ -943,7 +1110,7 @@ def test_quota_active_qurls_percent_null(client: QURLClient) -> None:
                     "period_end": "2026-04-01T00:00:00Z",
                     "rate_limits": {
                         "create_per_minute": 1000,
-                        "max_active_qurls": 0,  # unlimited on enterprise
+                        "max_active_qurls": -1,  # unlimited on enterprise
                     },
                     "usage": {
                         "qurls_created": 500,
@@ -4739,7 +4906,7 @@ def test_account_parsers_tolerate_partial_usage_payloads(client: QURLClient) -> 
     usage = client.get_usage_current_period()
     assert usage.tier == "unknown"
     assert usage.qurls_created == 0
-    assert usage.active_qurls == 0
+    assert usage.active_qurls is None
     assert usage.cost_estimate is None
 
     respx.get(f"{BASE_URL}/v1/usage/daily").mock(
