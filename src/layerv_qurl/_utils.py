@@ -149,10 +149,11 @@ def default_user_agent() -> str:
     return f"qurl-python-sdk/{v}"
 
 
-def validate_id(value: str, name: str = "resource_id") -> str:
+def validate_id(value: str, name: str = "resource_id", *, sensitive: bool = False) -> str:
     """Validate that an ID is non-empty and contains no path traversal characters."""
-    if not value or not _RESOURCE_ID_RE.match(value):
-        raise ValueError(f"Invalid {name}: {value!r}")
+    if not value or not _RESOURCE_ID_RE.fullmatch(value):
+        shown = "<redacted>" if sensitive else repr(value)
+        raise ValueError(f"Invalid {name}: {shown}")
     return value
 
 
