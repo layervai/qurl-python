@@ -326,10 +326,9 @@ class QURLClient:
 
         Use when qURL Connector already protects the service — do not
         call :meth:`protect_url` again for the same service. The
-        connector id is the resource slug LayerV stores for that
-        connector; the SDK confirms the returned alias matches
-        ``connector_id`` before binding the handle (qurl-go:
-        ``Client.ConnectorResource``).
+        connector id is the resource's immutable slug; the SDK confirms
+        the returned slug matches ``connector_id`` before binding the
+        handle. The optional alias is display metadata and may differ.
 
         Raises:
             NotFoundError: If no resource exists for the connector id
@@ -337,7 +336,7 @@ class QURLClient:
             QURLError: With ``code="ambiguous_resource"`` if the lookup
                 returns more than one resource.
             ValidationError: With ``code="unexpected_response"`` if the
-                returned resource's alias is missing or does not match.
+                returned resource's slug is missing or does not match.
         """
         validate_required_string(connector_id, "connector_id")
         connector_id = connector_id.strip()

@@ -765,11 +765,12 @@ def build_protect_body(
 def require_connector_resource(
     resources: list[Resource], connector_id: str
 ) -> Resource:
-    """Select the single alias-matching resource from a connector lookup.
+    """Select the single slug-matching resource from a connector lookup.
 
-    Mirrors qurl-go's ``ConnectorResource`` checks: the slug lookup must
-    return exactly one resource, and its alias must equal the connector
-    id. Raises the portal surface's client-detected errors (``status=0``)
+    Like qurl-go's ``GetConnectorResourceBySlug``, validate the immutable
+    slug rather than the optional, mutable alias. The lookup must return
+    exactly one resource whose slug equals the connector id.
+    Raises the portal surface's client-detected errors (``status=0``)
     otherwise — see :meth:`QURLClient.connector_resource` for the mapping.
 
     ASSUMPTION: ``resources`` is the complete result set for the slug —
@@ -799,14 +800,14 @@ def require_connector_resource(
             ),
         )
     resource = resources[0]
-    if resource.alias != connector_id:
+    if resource.slug != connector_id:
         raise ValidationError(
             status=0,
             code="unexpected_response",
             title="Unexpected Response",
             detail=(
                 f"connector_resource: connector {connector_id!r} returned a "
-                "resource with a missing or different alias"
+                "resource with a missing or different slug"
             ),
         )
     return resource
