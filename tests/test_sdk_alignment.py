@@ -349,7 +349,8 @@ async def test_revoke_one_token_keeps_parent_resource(client):
 @pytest.mark.parametrize("method", ["revoke_resource_qurl", "update_resource_qurl"])
 @pytest.mark.parametrize("resource_id,token_id", [
     (CRID, "at_synthetic_secret"), (CRID, "q_0123456789a\n"),
-    (CRID, "r_parent"), (CRID, ".."), (CRID, "q_0123456789a/path"),
+    (CRID, "q_0123456789A"), (CRID, "q_0123456789"),
+    (CRID, "q_0123456789ab"), (CRID, "r_parent"), (CRID, ".."), (CRID, "q_0123456789a/path"),
     ("at_synthetic_secret", "q_0123456789a"),
     ("at_synthetic_secret\n", "q_0123456789a"),
 ])
@@ -378,3 +379,13 @@ async def test_token_revoke_retries_pending_enforcement(client_type):
         assert route.call_count == 2
     finally:
         await invoke(instance.close)
+
+
+@pytest.mark.parametrize("method", ["delete", "delete_resource"])
+@pytest.mark.parametrize("credential", ["at_synthetic_secret", "at_synthetic_secret\n"])
+@respx.mock
+async def test_resource_deletes_refuse_credentials_without_echo(client, method, credential):
+    with pytest.raises(ValueError) as error:
+        await invoke(getattr(client, method), credential)
+    assert "synthetic_secret" not in str(error.value)
+    assert not respx.calls

@@ -1158,7 +1158,7 @@ class QURLClient:
 
     def delete_resource(self, resource_id: str) -> None:
         """Revoke a resource and all qURLs associated with it."""
-        validate_id(resource_id)
+        validate_resource_locator(resource_id)
         self._request("DELETE", f"/v1/resources/{resource_id}")
 
     def create_qurl_for_resource(

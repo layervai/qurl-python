@@ -377,6 +377,20 @@ assert link.qurl_id is not None
 client.revoke_resource_qurl(resource.resource_id, link.qurl_id)
 ```
 
+### Revoke one link
+
+Use the resource CRID and the `qurl_id` returned when the link was created:
+
+```python
+client.revoke_resource_qurl(resource_crid, qurl_id)
+# AsyncQURLClient: await client.revoke_resource_qurl(resource_crid, qurl_id)
+```
+
+This revokes that link and its sessions. Other links on the resource stay active.
+Pass its display ID (`q_` plus 11 hex characters), not the link's bearer token.
+A temporary enforcement error can be retried with the same IDs.
+
+
 ## Custom Domains And Webhooks
 
 ```python
@@ -521,16 +535,3 @@ tools = toolkit.get_tools()  # [CreateQURLTool, ResolveQURLTool, ListQURLsTool, 
 ## License
 
 MIT
-
-### Revoke one link
-
-Use the resource CRID and the `qurl_id` returned when the link was created:
-
-```python
-client.revoke_resource_qurl(resource_crid, qurl_id)
-# AsyncQURLClient: await client.revoke_resource_qurl(resource_crid, qurl_id)
-```
-
-This revokes that link and its sessions. Other links on the resource stay active.
-Pass its display ID (`q_` plus 11 hex characters), not the link's bearer token.
-A temporary enforcement error can be retried with the same IDs.
