@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, TypedDict
@@ -48,11 +49,18 @@ WebhookEventType = (
 
 
 def _parse_dt(s: str | None) -> datetime | None:
-    """Parse an ISO 8601 datetime string, handling Z suffix for Python 3.10 compat."""
+    """Parse API timestamps at Python's microsecond precision, including on 3.10."""
     if s is None:
         return None
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
+    # Go emits RFC3339Nano with 1–9 fractional digits; Python 3.10 only
+    # accepts 3 or 6. Match newer Python's truncation to microseconds.
+    s = re.sub(
+        r"(\d{2}:\d{2}:\d{2})\.(\d+)",
+        lambda match: match[1] + "." + match[2][:6].ljust(6, "0"),
+        s,
+    )
     return datetime.fromisoformat(s)
 
 
@@ -165,6 +173,40 @@ class Portal:
     expires_at: datetime | None = None
     qurl_id: str | None = None
     label: str | None = None
+    crid: str | None = None
+
+
+@dataclass
+class Publisher:
+    """Service-asserted publisher metadata; escape the untrusted name for display.
+
+    CRID/key verification does not authenticate this metadata.
+    """
+
+    name: str = ""
+    verified: bool = False
+
+
+@dataclass
+class ShareLink:
+    """Fresh share link. Each share call mints again; retain qurl_id to revoke it."""
+
+    link: str
+    crid: str
+    qurl_id: str | None = None
+    type: str | None = None
+    expires_at: datetime | None = None
+    expires_in_seconds: int = 0
+    single_use: bool = False
+    resource_created_at: datetime | None = None
+    publisher: Publisher = field(default_factory=Publisher)
+
+    def verify_crid(self, der_spki: bytes) -> None:
+        """Bind delivered key bytes to this CRID, not to the link or publisher."""
+        from layerv_qurl.crid import key_matches
+
+        if not key_matches(self.crid, der_spki):
+            raise ValueError("share link: resource key does not match CRID")
 
 
 @dataclass
@@ -309,6 +351,10 @@ class Resource:
     created_at: datetime | None = None
     expires_at: datetime | None = None
     tombstoned_at: datetime | None = None
+    crid: str | None = None
+    private: bool | None = None
+    access_requests: bool | None = None
+    allowed_device_keys: list[str] | None = None
 
 
 @dataclass
@@ -478,10 +524,25 @@ class WebhookEventTypesOutput:
 
 
 @dataclass
-class APIKey:
-    """API key metadata.
+class CredentialClaim:
+    """A resource claim binding an enrollment token to one resource.
 
-    ``api_key`` is populated only on create responses.
+    ``connector`` is the only claim type today; ``id`` is the connector id.
+    """
+
+    type: str
+    id: str
+
+
+@dataclass
+class APIKey:
+    """Credential metadata.
+
+    ``kind`` discriminates an account ``api_key`` from a one-shot
+    ``enrollment_token`` or a system-minted ``device`` credential; unknown
+    future kinds may appear. ``target`` and ``claims`` are populated only
+    on enrollment tokens. ``api_key`` is populated only on create
+    responses.
     """
 
     key_id: str
@@ -493,9 +554,10 @@ class APIKey:
     updated_at: datetime | None = None
     last_used_at: datetime | None = None
     expires_at: datetime | None = None
-    purpose: str | None = None
-    tunnel_slug: str | None = None
+    target: str | None = None
+    claims: list[CredentialClaim] = field(default_factory=list)
     api_key: str | None = field(default=None, repr=False)
+    kind: str | None = None
 
 
 @dataclass

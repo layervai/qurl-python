@@ -1,42 +1,129 @@
-# qurl-python
+# qURL Python SDK for expiring access links
 
 [![PyPI](https://img.shields.io/pypi/v/qurl-python)](https://pypi.org/project/qurl-python/)
 [![CI](https://github.com/layervai/qurl-python/actions/workflows/ci.yml/badge.svg)](https://github.com/layervai/qurl-python/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/pypi/pyversions/qurl-python)](https://pypi.org/project/qurl-python/)
 [![License](https://img.shields.io/github/license/layervai/qurl-python)](LICENSE)
 
-**Use the LayerV [qURL™ Platform](https://docs.layerv.ai) from Python: protect a
-private URL once, then mint short-lived portal links for it.**
+Use [qURL™ by LayerV](https://layerv.ai/qurl/) to share localhost web apps,
+private APIs, and files through expiring access links. This
+[Python SDK](https://layerv.ai/sdk/) creates and manages resource access from
+your code. Use `qurl-python` in Python
+services, automation scripts, or LangChain tools to register resources and
+issue links with a chosen lifetime.
 
-LayerV hosts qURL; your app keeps a tiny surface area: protect the URL, create a
-portal for the returned resource, and share the link.
-
-> **Quantum URL (qURL)** · The internet has a hidden layer. This is how you enter.
+For a local app, [publish it with the CLI](https://github.com/layervai/qurl-integrations/tree/main/apps/cli)
+or configure a connector before creating access links. SDK calls register
+resources and issue links; they do not start the local service or remove
+any separate public route to it. Your app's own sign-in still applies.
 
 Portal recipients do not need LayerV credentials, API keys, or SDK state. They
 open the qURL link. Credentials are only for software that protects URLs or
 creates portals.
 
+[Installation](#installation) · [Quickstart](#quickstart) ·
+[Async usage](#async-usage) · [LangChain integration](#langchain-integration) ·
+[Resource and token management](#rest-shaped-api-compatibility)
+
+[Local preview workflow](#share-a-localhost-preview-from-python) ·
+[File-sharing workflows](#share-files-from-a-python-workflow) ·
+[Sharing questions](#python-sharing-questions) · [Private links](https://qurl.link/)
+
+## Share a localhost preview from Python
+
+Use this SDK when a Python service, automation job, or LangChain tool should
+issue a short-lived link to an existing app. Examples include a dashboard
+review, an internal API handoff, or a preview produced by an automation job.
+
+There are two parts to the workflow:
+
+| Part | What to do |
+| --- | --- |
+| Run and publish the local service | Keep the app running and follow the [CLI localhost quickstart](https://github.com/layervai/qurl-integrations#share-a-localhost-web-app), or deploy a compatible Connector beside the app. |
+| Issue access from Python | Use a resource managed by this SDK's configured API and accessible to its credential. Ask for an appropriate lifetime and send the returned link. |
+
+For a Connector resource already configured for your API credential, the
+following script requests a five-minute link. Set `QURL_CONNECTOR_SLUG` to the
+resource's immutable slug, and `QURL_API_KEY` to an issuer credential with the
+required permissions. The optional display alias is not a lookup identifier:
+
+```python
+import os
+
+from layerv_qurl import QURLClient
+
+with QURLClient(api_key=os.environ["QURL_API_KEY"]) as client:
+    resource = client.connector_resource(os.environ["QURL_CONNECTOR_SLUG"])
+    portal = resource.create_portal(valid_for="5m")
+    print(portal.link)
+```
+
+The slug and credential must refer to the same authorized resource.
+Do not substitute a CLI CRID for a resource slug or assume that an
+account key manages a resource published by another device. If the CLI alone
+published the preview, its `qurl share` command is the direct sharing path;
+use SDK management only after the compatible resource is configured.
+
+Keep the full link private. A browser recipient opens it without installing
+this SDK; the app's own login still applies. See [async usage](#async-usage)
+for an async Python service and [LangChain integration](#langchain-integration)
+for agent tools.
+
+## Share files from a Python workflow
+
+For reports or generated documents, choose the actual file-serving path before
+creating an access link:
+
+- Serve a dedicated directory with a localhost HTTP server and publish it with
+  the [CLI file-sharing workflow](https://github.com/layervai/qurl-integrations#share-files-and-documents).
+  That host and server must remain available for the download.
+- Use the [MCP upload tools](https://github.com/layervai/qurl-mcp#let-an-ai-agent-share-a-pdf-or-image)
+  or [Gmail integration](https://github.com/layervai/qurl-integrations/tree/main/apps/chrome-extension)
+  for supported uploaded documents and images.
+- If a compatible private file service is already registered for your SDK
+  credential, issue access through its resource handle using the portal APIs.
+
+This SDK's link-issuing calls do not upload a local Python file or start a
+file server. File-upload link minting can have different identifiers and
+revocation rules; follow the service or integration that created the upload.
+
+## Link issuance and Python connectivity
+
+Use `qurl-python` when an automation job or LangChain tool should issue access to a resource its credential can manage. In the localhost workflow above, a CLI or compatible Connector first supplies connectivity, and Python requests the portal. The [ngrok Python Agent SDK](https://github.com/ngrok/ngrok-python) can establish forwarding to a local address from the Python process itself. These are different operations: resource/link management and establishing an endpoint. Choose the lifecycle your application needs, including its authentication and the runtime that must stay alive.
+
+For a generated report already stored in S3, a [presigned download URL](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html) may fit the existing storage workflow. For a dashboard or files served by a live local app, publish that service and issue access to the compatible resource. This SDK's portal calls do not upload a local report. The [app and file-sharing comparison](https://github.com/layervai/qurl-integrations#choose-how-to-share-an-app-or-file) covers hosting, recipient access, and expiry; [async usage](#async-usage) covers issuing from an async Python service.
+
+## Python sharing questions
+
+### Can I pass localhost to `protect_url` and share it immediately?
+
+A URL registration does not create a connection to your laptop. Publish or
+configure the running service first. Use the appropriate registered resource
+and permissions; another machine's `localhost` is not your development app.
+
+### Does a five-minute link close every session after five minutes?
+
+Link expiry controls new redemption. Session duration is a separate setting;
+an already admitted session can outlive the link's redemption deadline. See
+[portal options](#quickstart) and the service's enforced policy.
+
+### Do browser recipients and Python openers need the same credentials?
+
+Browser recipients open the link and retain any app login requirement.
+This Python SDK's `enter_portal` uses the LayerV API and requires a credential
+with `qurl:resolve`; see [opening portals](#opening-portals). Do not pass an
+issuer API key to someone merely to let them open a browser link.
+
 ## Why qURL?
 
-Agents and services increasingly need to reach private MCP servers, APIs, and
-internal tools. The issue is visibility: every standing public endpoint becomes
-inventory for scanners, fingerprinting, credential attacks, and AI-assisted
-probing before a legitimate user or agent ever arrives.
+qURL lets your code issue temporary access to a resource while the local
+origin can remain on localhost or a private network. The Connector supplies
+that access path; the SDK controls resource and link operations. Restrict any
+separate public route if qURL should be the only way to reach the app.
 
-Opening an inbound port, running a VPN, shipping a bastion, publishing a
-Cloudflare Tunnel or ngrok URL, or passing around a long-lived key all leave
-something durable to find, scan, or steal. qURL flips that model. It is an
-**invisibility primitive for authenticated access**, not another externally
-visible endpoint in front of the same service. The private resource is not
-public inventory. A portal is **cryptographic, just-in-time permission for one
-actor to reach one private resource** — without turning that resource into
-public inventory:
-
-- **Time-limited** — portals expire after minutes, hours, or days
-- **IP-scoped** — access is granted only to the requesting IP via NHP
-- **Auditable** — every access is logged with who, when, and from where
-- **Revocable** — kill access instantly if something goes wrong
+A portal link is an access credential, not proof that its holder is the person
+named in a label. Keep application authentication when identity matters. Use
+the resource, token, and session APIs for the access rules your workflow needs.
 
 ## Installation
 
@@ -75,8 +162,9 @@ the same URL again returns the existing resource. `valid_for` accepts a
 duration string (`"5m"`, `"24h"`) or a `datetime.timedelta`; prefer short
 portal lifetimes.
 
-If qURL Connector already protects the service, use the connector id instead
-of calling `protect_url`:
+If qURL Connector already protects the service, use its immutable resource
+slug instead of calling `protect_url`. The optional display alias is not a
+lookup identifier:
 
 ```python
 resource = client.connector_resource("prod-dashboard")
@@ -87,7 +175,7 @@ If you persist the resource id, future calls do not need to recreate the
 handle (no API call is made until you mint):
 
 ```python
-resource = client.resource_by_id("r_demo1234567")
+resource = client.resource_by_crid(saved_crid)
 portal = resource.create_portal(valid_for="1h")
 ```
 
@@ -112,6 +200,62 @@ portal = resource.create_portal(
     max_sessions=1,
 )
 ```
+
+## Resource Identity, Privacy, and Sharing
+
+`qurl-go` is the behavior reference for this SDK. Resource handles prefer the
+public **CRID**; `resource.details.resource_id` remains the resource public key
+for verification and compatibility. Persist the CRID, then call
+`client.resource_by_crid(saved_crid)` to reuse it. The old `resource_by_id`
+method still accepts a public key. Legacy `r_` IDs are no longer accepted by
+the current service. **Migration:** when a response includes a CRID,
+`ProtectedResource.id` now holds that CRID rather than `Resource.resource_id`.
+Use `resource.details.resource_id` if your code needs the public key.
+
+Sharing requires a CRID from the current service. If an older response omits
+it, the compatibility handle can still mint with `create_portal`, but its
+public-key ID cannot be passed to `share_resource`.
+
+Privacy is fixed at creation. Omit `private` to use the service default
+(private for new URL and Connector resources), or explicitly pass `False`
+for a public resource. Reusing an existing resource preserves its privacy;
+asking for a different value returns an API error. An omitted response
+`private` remains `None`, not an assertion that the resource is public.
+
+```python
+resource = client.protect_url("https://internal.example.com/dashboard", private=True)
+link = client.share_resource(resource.id, ttl=timedelta(minutes=5))
+print(link.link)
+# Revoke only this link, leaving the resource and other links intact:
+if link.qurl_id:
+    client.revoke_resource_qurl(link.crid, link.qurl_id)
+```
+
+`share_resource` mirrors Go's `ShareResource`: it requires a locally valid
+CRID, rejects a response for another CRID, and accepts `timedelta` values for
+`ttl` and `session_duration`. Durations must be nonnegative whole seconds;
+zero or `None` uses the service default. Each call mints a fresh link, and the
+share endpoint does **not** support idempotency replay, so the SDK does not
+automatically retry this call after errors. Retain `qurl_id` with
+the link if individual revocation is needed.
+
+`link.verify_crid(der_spki_bytes)` checks a delivered key against the CRID you
+requested. This does not verify the signed link or the publisher metadata.
+`link.publisher.name` is untrusted display text; escape it before rendering,
+and use `link.publisher.verified` for the service's verification status.
+
+Owners can pass `allowed_device_keys` to `create_resource` or
+`update_resource` (an empty list clears grants). To preserve other grants
+while changing individual devices, use `allowed_device_keys_add` and
+`allowed_device_keys_remove` on `update_resource`. Keys are canonical padded
+standard-base64 X25519 public keys. Replacement and incremental updates cannot
+be combined, and grants must be updated separately from `custom_domain`.
+Removing a grant blocks new links; already minted links retain their lifetime.
+
+Both sync and async clients expose these methods. Native UDP enrollment,
+credential recovery, and opening/verifying signed `qv2` links remain outside
+this Python SDK's current scope. Open signed links in a browser or with Go's
+`EnterPortal`; Python's `enter_portal` still accepts only platform access tokens.
 
 ## Opening Portals
 
@@ -167,8 +311,8 @@ access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 print(f"Access granted to {access.target_url} for {access.access_grant.expires_in}s")
 
 # Extend a qURL's expiration and update metadata
-qurl = client.extend("r_xxx", "7d")
-qurl = client.update("r_xxx", description="extended")
+qurl = client.extend(saved_crid, "7d")
+qurl = client.update(saved_crid, description="extended")
 ```
 
 ## Authentication Notes
@@ -185,7 +329,8 @@ parsing it.
 
 Mutating SDK methods generate a per-call `Idempotency-Key` when you do not
 provide one and reuse it across the client's internal retries; qurl-service
-supports that header on mutating endpoints, including `POST /v1/resolve`.
+supports that header on mutating endpoints, including `POST /v1/resolve`,
+except that `share_resource` always mints a new link.
 Automatic POST status-code retries remain limited to rate limits because
 one-time resolve tokens can be consumed by server-side knock failures. Pass a
 stable `idempotency_key` when you need retry-safe behavior across your own retry
