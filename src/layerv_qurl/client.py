@@ -974,7 +974,7 @@ class QURLClient:
         Args:
             access_token: The access token string (e.g. ``"at_k8xqp9h2sj9lx7r4a"``).
         """
-        validate_id(access_token, "access_token")
+        validate_id(access_token, "access_token", sensitive=True)
         resp = self._request(
             "POST",
             "/v1/resolve",

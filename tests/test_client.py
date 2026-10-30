@@ -5700,3 +5700,21 @@ async def test_async_usage_billing_and_resource_qurl_validation_contracts(
     assert invoices_route.calls[0].request.url.params["cursor"] == (
         "cur_async_invoice_prev"
     )
+
+
+@respx.mock
+@pytest.mark.parametrize("token", ["", "at_secret!", "at_secret/../token", "at_secret\n"])
+def test_resolve_does_not_echo_invalid_token(client: QURLClient, token: str) -> None:
+    with pytest.raises(ValueError, match="Invalid access_token") as exc:
+        client.resolve(token)
+    assert "at_secret" not in str(exc.value)
+
+
+@respx.mock
+@pytest.mark.parametrize("token", ["", "at_secret!", "at_secret/../token", "at_secret\n"])
+async def test_async_resolve_does_not_echo_invalid_token(
+    async_client: AsyncQURLClient, token: str
+) -> None:
+    with pytest.raises(ValueError, match="Invalid access_token") as exc:
+        await async_client.resolve(token)
+    assert "at_secret" not in str(exc.value)
