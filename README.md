@@ -75,8 +75,9 @@ the same URL again returns the existing resource. `valid_for` accepts a
 duration string (`"5m"`, `"24h"`) or a `datetime.timedelta`; prefer short
 portal lifetimes.
 
-If qURL Connector already protects the service, use the connector id instead
-of calling `protect_url`:
+If qURL Connector already protects the service, use its immutable resource
+slug instead of calling `protect_url`. The optional display alias is not a
+lookup identifier:
 
 ```python
 resource = client.connector_resource("prod-dashboard")
