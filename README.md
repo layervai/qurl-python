@@ -377,6 +377,11 @@ assert link.qurl_id is not None
 client.revoke_resource_qurl(resource.resource_id, link.qurl_id)
 ```
 
+Use the resource CRID or public key and the returned `qurl_id` display ID,
+not the link's bearer token. This revokes that link and its sessions; other
+links stay active. A temporary enforcement error can be retried with the same
+IDs. With `AsyncQURLClient`, await the same method.
+
 ## Custom Domains And Webhooks
 
 ```python
