@@ -75,8 +75,9 @@ the same URL again returns the existing resource. `valid_for` accepts a
 duration string (`"5m"`, `"24h"`) or a `datetime.timedelta`; prefer short
 portal lifetimes.
 
-If qURL Connector already protects the service, use the connector id instead
-of calling `protect_url`:
+If qURL Connector already protects the service, use its immutable resource
+slug instead of calling `protect_url`. The optional display alias is not a
+lookup identifier:
 
 ```python
 resource = client.connector_resource("prod-dashboard")
@@ -87,7 +88,7 @@ If you persist the resource id, future calls do not need to recreate the
 handle (no API call is made until you mint):
 
 ```python
-resource = client.resource_by_id("r_demo1234567")
+resource = client.resource_by_crid(saved_crid)
 portal = resource.create_portal(valid_for="1h")
 ```
 
@@ -112,6 +113,62 @@ portal = resource.create_portal(
     max_sessions=1,
 )
 ```
+
+## Resource Identity, Privacy, and Sharing
+
+`qurl-go` is the behavior reference for this SDK. Resource handles prefer the
+public **CRID**; `resource.details.resource_id` remains the resource public key
+for verification and compatibility. Persist the CRID, then call
+`client.resource_by_crid(saved_crid)` to reuse it. The old `resource_by_id`
+method still accepts a public key. Legacy `r_` IDs are no longer accepted by
+the current service. **Migration:** when a response includes a CRID,
+`ProtectedResource.id` now holds that CRID rather than `Resource.resource_id`.
+Use `resource.details.resource_id` if your code needs the public key.
+
+Sharing requires a CRID from the current service. If an older response omits
+it, the compatibility handle can still mint with `create_portal`, but its
+public-key ID cannot be passed to `share_resource`.
+
+Privacy is fixed at creation. Omit `private` to use the service default
+(private for new URL and Connector resources), or explicitly pass `False`
+for a public resource. Reusing an existing resource preserves its privacy;
+asking for a different value returns an API error. An omitted response
+`private` remains `None`, not an assertion that the resource is public.
+
+```python
+resource = client.protect_url("https://internal.example.com/dashboard", private=True)
+link = client.share_resource(resource.id, ttl=timedelta(minutes=5))
+print(link.link)
+# Revoke only this link, leaving the resource and other links intact:
+if link.qurl_id:
+    client.revoke_resource_qurl(link.crid, link.qurl_id)
+```
+
+`share_resource` mirrors Go's `ShareResource`: it requires a locally valid
+CRID, rejects a response for another CRID, and accepts `timedelta` values for
+`ttl` and `session_duration`. Durations must be nonnegative whole seconds;
+zero or `None` uses the service default. Each call mints a fresh link, and the
+share endpoint does **not** support idempotency replay, so the SDK does not
+automatically retry this call after errors. Retain `qurl_id` with
+the link if individual revocation is needed.
+
+`link.verify_crid(der_spki_bytes)` checks a delivered key against the CRID you
+requested. This does not verify the signed link or the publisher metadata.
+`link.publisher.name` is untrusted display text; escape it before rendering,
+and use `link.publisher.verified` for the service's verification status.
+
+Owners can pass `allowed_device_keys` to `create_resource` or
+`update_resource` (an empty list clears grants). To preserve other grants
+while changing individual devices, use `allowed_device_keys_add` and
+`allowed_device_keys_remove` on `update_resource`. Keys are canonical padded
+standard-base64 X25519 public keys. Replacement and incremental updates cannot
+be combined, and grants must be updated separately from `custom_domain`.
+Removing a grant blocks new links; already minted links retain their lifetime.
+
+Both sync and async clients expose these methods. Native UDP enrollment,
+credential recovery, and opening/verifying signed `qv2` links remain outside
+this Python SDK's current scope. Open signed links in a browser or with Go's
+`EnterPortal`; Python's `enter_portal` still accepts only platform access tokens.
 
 ## Opening Portals
 
@@ -167,8 +224,8 @@ access = client.resolve("at_k8xqp9h2sj9lx7r4a")
 print(f"Access granted to {access.target_url} for {access.access_grant.expires_in}s")
 
 # Extend a qURL's expiration and update metadata
-qurl = client.extend("r_xxx", "7d")
-qurl = client.update("r_xxx", description="extended")
+qurl = client.extend(saved_crid, "7d")
+qurl = client.update(saved_crid, description="extended")
 ```
 
 ## Authentication Notes
@@ -185,7 +242,8 @@ parsing it.
 
 Mutating SDK methods generate a per-call `Idempotency-Key` when you do not
 provide one and reuse it across the client's internal retries; qurl-service
-supports that header on mutating endpoints, including `POST /v1/resolve`.
+supports that header on mutating endpoints, including `POST /v1/resolve`,
+except that `share_resource` always mints a new link.
 Automatic POST status-code retries remain limited to rate limits because
 one-time resolve tokens can be consumed by server-side knock failures. Pass a
 stable `idempotency_key` when you need retry-safe behavior across your own retry
