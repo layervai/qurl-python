@@ -85,6 +85,7 @@ from layerv_qurl._utils import (
     validate_portal_target_url,
     validate_required_string,
     validate_resource_locator,
+    validate_resource_qurl_ids,
     validate_update_input,
     validate_webhook_url,
 )
@@ -1086,8 +1087,7 @@ class AsyncQURLClient:
         idempotency_key: str | None = None,
     ) -> AccessToken:
         """Update a specific qURL token on a resource."""
-        validate_id(resource_id)
-        validate_id(qurl_id, "qurl_id")
+        validate_resource_qurl_ids(resource_id, qurl_id)
         if extend_by is not None and expires_at is not None:
             raise ValueError(
                 "update_resource_qurl: `extend_by` and `expires_at` are mutually "
@@ -1119,8 +1119,7 @@ class AsyncQURLClient:
 
     async def revoke_resource_qurl(self, resource_id: str, qurl_id: str) -> None:
         """Revoke one qURL token without revoking the parent resource."""
-        validate_id(resource_id)
-        validate_id(qurl_id, "qurl_id")
+        validate_resource_qurl_ids(resource_id, qurl_id)
         await self._request("DELETE", f"/v1/resources/{resource_id}/qurls/{qurl_id}")
 
     async def list_resource_sessions(self, resource_id: str) -> SessionListOutput:

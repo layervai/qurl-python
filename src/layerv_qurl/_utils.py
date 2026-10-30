@@ -538,9 +538,16 @@ def validate_mint_input(
     _require_max_sessions_in_range(max_sessions)
 
 
+def validate_resource_qurl_ids(resource_id: str, qurl_id: str) -> None:
+    """Keep bearer tokens out of token-management paths and errors."""
+    validate_resource_locator(resource_id)
+    if not isinstance(qurl_id, str) or not re.fullmatch(r"q_[0-9a-f]{11}", qurl_id):
+        raise ValueError("qurl_id must be the qURL display ID returned by the API")
+
+
 def validate_resource_locator(resource_id: str) -> None:
     """Keep token IDs off resource-wide deletion; the API validates public keys."""
-    validate_id(resource_id)
+    validate_id(resource_id, sensitive=True)
     if resource_id.startswith(("q_", "at_")):
         raise ValueError(
             f"resource locator cannot start with {resource_id[:2]!r}; "

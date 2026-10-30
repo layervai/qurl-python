@@ -7,6 +7,7 @@ import json
 from datetime import timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 import respx
 
@@ -334,3 +335,46 @@ async def test_share_accepts_go_rfc3339nano_on_supported_pythons(client, fractio
     link = await invoke(client.share_resource, CRID)
     assert link.expires_at.microsecond == microsecond
     assert link.resource_created_at.microsecond == microsecond
+
+
+@respx.mock
+async def test_revoke_one_token_keeps_parent_resource(client):
+    token_id = "q_0123456789a"
+    route = respx.delete(f"{BASE}/v1/resources/{CRID}/qurls/{token_id}").respond(204)
+    assert await invoke(client.revoke_resource_qurl, CRID, token_id) is None
+    assert route.call_count == 1
+    assert len(respx.calls) == 1
+
+
+@pytest.mark.parametrize("method", ["revoke_resource_qurl", "update_resource_qurl"])
+@pytest.mark.parametrize("resource_id,token_id", [
+    (CRID, "at_synthetic_secret"), (CRID, "q_0123456789a\n"),
+    (CRID, "r_parent"), (CRID, ".."), (CRID, "q_0123456789a/path"),
+    ("at_synthetic_secret", "q_0123456789a"),
+    ("at_synthetic_secret\n", "q_0123456789a"),
+])
+@respx.mock
+async def test_token_item_methods_refuse_wrong_ids_without_echo_or_http(
+    client, method, resource_id, token_id
+):
+    with pytest.raises(ValueError) as error:
+        await invoke(getattr(client, method), resource_id, token_id)
+    assert "synthetic_secret" not in str(error.value)
+    assert not respx.calls
+
+
+@pytest.mark.parametrize("client_type", [QURLClient, AsyncQURLClient])
+@respx.mock
+async def test_token_revoke_retries_pending_enforcement(client_type):
+    instance = client_type(api_key="lv_test", base_url=BASE, max_retries=1)
+    token_id = "q_0123456789a"
+    route = respx.delete(f"{BASE}/v1/resources/{CRID}/qurls/{token_id}").mock(side_effect=[
+        httpx.Response(503, headers={"Retry-After": "0"}, json={"error": {
+            "status": 503, "code": "protection_update_failed", "title": "Enforcement pending"}}),
+        httpx.Response(204),
+    ])
+    try:
+        assert await invoke(instance.revoke_resource_qurl, CRID, token_id) is None
+        assert route.call_count == 2
+    finally:
+        await invoke(instance.close)

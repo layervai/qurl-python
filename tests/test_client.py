@@ -4220,10 +4220,10 @@ def test_resource_qurl_token_contract_methods(client: QURLClient) -> None:
             201,
             json={
                 "data": {
-                    "qurl_id": "q_newtoken12",
+                    "qurl_id": "q_0123456789a",
                     "resource_id": "r_tunnel12345",
                     "qurl_link": "https://qurl.link/#at_new",
-                    "qurl_site": "https://q_newtoken12.qurl.site",
+                    "qurl_site": "https://q_0123456789a.qurl.site",
                     "type": "tunnel",
                 },
             },
@@ -4234,17 +4234,17 @@ def test_resource_qurl_token_contract_methods(client: QURLClient) -> None:
         session_duration="1h",
         idempotency_key="idem-resource-mint",
     )
-    assert minted.qurl_id == "q_newtoken12"
+    assert minted.qurl_id == "q_0123456789a"
     assert mint_route.calls[0].request.headers["idempotency-key"] == "idem-resource-mint"
 
     update_token_route = respx.patch(
-        f"{BASE_URL}/v1/resources/r_tunnel12345/qurls/q_newtoken12"
+        f"{BASE_URL}/v1/resources/r_tunnel12345/qurls/q_0123456789a"
     ).mock(
         return_value=httpx.Response(
             200,
             json={
                 "data": {
-                    "qurl_id": "q_newtoken12",
+                    "qurl_id": "q_0123456789a",
                     "status": "active",
                     "label": "updated",
                     "max_sessions": 2,
@@ -4254,7 +4254,7 @@ def test_resource_qurl_token_contract_methods(client: QURLClient) -> None:
     )
     token = client.update_resource_qurl(
         "r_tunnel12345",
-        "q_newtoken12",
+        "q_0123456789a",
         label="updated",
         idempotency_key="idem-token-update",
     )
@@ -4272,7 +4272,7 @@ def test_resource_session_contract_methods(client: QURLClient) -> None:
                 "data": [
                     {
                         "session_id": "s_active123",
-                        "qurl_id": "q_newtoken12",
+                        "qurl_id": "q_0123456789a",
                         "src_ip": "203.0.113.42",
                     }
                 ],
@@ -4376,12 +4376,12 @@ def test_update_resource_methods_reject_empty_updates(client: QURLClient) -> Non
         client.update_resource("r_tunnel12345")
 
     with pytest.raises(ValueError, match="at least one field"):
-        client.update_resource_qurl("r_tunnel12345", "q_newtoken12")
+        client.update_resource_qurl("r_tunnel12345", "q_0123456789a")
 
     with pytest.raises(ValueError, match="mutually exclusive"):
         client.update_resource_qurl(
             "r_tunnel12345",
-            "q_newtoken12",
+            "q_0123456789a",
             extend_by="1h",
             expires_at="2026-04-01T00:00:00Z",
         )
@@ -5055,10 +5055,10 @@ async def test_async_resource_scoped_mint_parity(async_client: AsyncQURLClient) 
             201,
             json={
                 "data": {
-                    "qurl_id": "q_async12345",
+                    "qurl_id": "q_abcdef01234",
                     "resource_id": "r_async",
                     "qurl_link": "https://qurl.link/#at_async",
-                    "qurl_site": "https://q_async12345.qurl.site",
+                    "qurl_site": "https://q_abcdef01234.qurl.site",
                     "branded_domain": "async.example.com",
                     "type": "url",
                 },
@@ -5678,7 +5678,7 @@ async def test_async_usage_billing_and_resource_qurl_validation_contracts(
     with pytest.raises(ValueError, match="mutually exclusive"):
         await async_client.update_resource_qurl(
             "r_asyncresource",
-            "q_async12345",
+            "q_abcdef01234",
             extend_by="7d",
             expires_at="2026-04-01T00:00:00Z",
         )
