@@ -21,11 +21,15 @@ from layerv_qurl._utils import (
     UNSET,
     UnsetType,
     build_body,
+    build_credential_scopes,
+    build_device_grants,
     build_list_params,
     build_portal_body,
     build_protect_body,
     build_query_params,
+    build_share_body,
     build_string_list,
+    check_response_crid,
     default_user_agent,
     domain_path_segment,
     ensure_mutation_idempotency,
@@ -63,13 +67,13 @@ from layerv_qurl._utils import (
     parse_resource_list_output,
     parse_session_list_output,
     parse_session_terminate_output,
+    parse_share_link,
     parse_webhook,
     parse_webhook_delivery_list_output,
     parse_webhook_event_types_output,
     parse_webhook_list_output,
     require_connector_resource,
     require_nonempty_update,
-    require_resource_id_prefix,
     resource_handle_from_resolve,
     retry_delay,
     validate_alias,
@@ -78,11 +82,15 @@ from layerv_qurl._utils import (
     validate_id,
     validate_mint_input,
     validate_nonnegative_int,
+    validate_optional_bool,
     validate_portal_target_url,
     validate_required_string,
+    validate_resource_locator,
     validate_update_input,
     validate_webhook_url,
 )
+from layerv_qurl.crid import matches_shape
+from layerv_qurl.crid import validate as validate_crid
 from layerv_qurl.errors import QURLError, QURLNetworkError, QURLTimeoutError
 
 if TYPE_CHECKING:
@@ -107,6 +115,7 @@ if TYPE_CHECKING:
         CheckoutSession,
         ConnectorInstallationListOutput,
         CreateOutput,
+        CredentialClaim,
         CurrentPeriodUsage,
         Customer,
         DailyUsage,
@@ -128,6 +137,7 @@ if TYPE_CHECKING:
         ResourceListOutput,
         SessionListOutput,
         SessionTerminateOutput,
+        ShareLink,
         Webhook,
         WebhookDeliveryListOutput,
         WebhookEventTypesOutput,
@@ -157,8 +167,8 @@ class QURLClient:
         # REST-shaped compatibility surface
         result = client.create(target_url="https://example.com", expires_in="24h")
         access = client.resolve("at_k8xqp9h2sj9lx7r4a")
-        qurl = client.extend("r_xxx", "7d")
-        qurl = client.update("r_xxx", description="updated")
+        qurl = client.extend(saved_crid, "7d")
+        qurl = client.update(saved_crid, description="updated")
         for qurl in client.list_all(status="active"):
             print(qurl.resource_id)
 
@@ -223,6 +233,7 @@ class QURLClient:
         tags: builtins.list[str] | None = None,
         custom_domain: str | None = None,
         alias: str | None = None,
+        private: bool | None = None,
         idempotency_key: str | None = None,
     ) -> ProtectedResource:
         """Protect a private URL — create or reuse its LayerV resource.
@@ -260,26 +271,50 @@ class QURLClient:
                 tags=tags,
                 custom_domain=custom_domain,
                 alias=alias,
+                private=private,
             ),
             headers=idempotency_headers(idempotency_key),
         )
         resource = parse_resource(resp)
         return ProtectedResource(
             self,
-            resource.resource_id,
+            resource.crid or resource.resource_id,
             # Some resource types redact target_url in responses; fall
             # back to the caller-supplied URL so the handle stays useful.
             target_url=resource.target_url or target_url,
             details=resource,
         )
 
+    def resource_by_crid(self, crid: str) -> ProtectedResource:
+        """Bind a validated CRID without network I/O, like Go ResourceByCRID."""
+        return ProtectedResource(self, validate_crid(crid))
+
+    def share_resource(
+        self,
+        crid: str,
+        *,
+        ttl: timedelta | None = None,
+        session_duration: timedelta | None = None,
+    ) -> ShareLink:
+        """Mint a fresh CRID-addressed link, matching Go ShareResource.
+
+        Durations must be nonnegative whole seconds; zero/None use server
+        defaults. Each call mints a new link: the service excludes this route
+        from idempotency replay. Signed links can be opened in a browser or
+        with qurl-go; Python enter_portal still only opens platform tokens.
+        """
+        validate_crid(crid)
+        body = build_share_body(ttl, session_duration)
+        resp = self._request("POST", f"/v1/resources/{crid}/share", body=body, retry=False)
+        return parse_share_link(resp, crid)
+
     def resource_by_id(self, resource_id: str) -> ProtectedResource:
         """Return a portal-minting handle for a stored resource id (no API call).
 
         Use when you persisted a LayerV resource id and want to mint more
-        portals for it (qurl-go: ``Client.ResourceByID``)::
+        portals for it. Prefer :meth:`resource_by_crid` for current resources::
 
-            resource = client.resource_by_id("r_demo1234567")
+            resource = client.resource_by_id(saved_resource_public_key)
             portal = resource.create_portal(valid_for="1h")
 
         The handle carries no server metadata; use :meth:`get_resource`
@@ -293,10 +328,9 @@ class QURLClient:
 
         Use when qURL Connector already protects the service — do not
         call :meth:`protect_url` again for the same service. The
-        connector id is the resource slug LayerV stores for that
-        connector; the SDK confirms the returned alias matches
-        ``connector_id`` before binding the handle (qurl-go:
-        ``Client.ConnectorResource``).
+        connector id is the resource's immutable slug; the SDK confirms
+        the returned slug matches ``connector_id`` before binding the
+        handle. The optional alias is display metadata and may differ.
 
         Raises:
             NotFoundError: If no resource exists for the connector id
@@ -304,7 +338,7 @@ class QURLClient:
             QURLError: With ``code="ambiguous_resource"`` if the lookup
                 returns more than one resource.
             ValidationError: With ``code="unexpected_response"`` if the
-                returned resource's alias is missing or does not match.
+                returned resource's slug is missing or does not match.
         """
         validate_required_string(connector_id, "connector_id")
         connector_id = connector_id.strip()
@@ -313,7 +347,7 @@ class QURLClient:
         )
         return ProtectedResource(
             self,
-            resource.resource_id,
+            resource.crid or resource.resource_id,
             target_url=resource.target_url,
             details=resource,
         )
@@ -339,10 +373,9 @@ class QURLClient:
 
         Args:
             resource: A :class:`ProtectedResource` handle, or a resource
-                id string — the ``r_`` id a handle carries or that
-                :meth:`protect_url` returns. Passing a display id or any
-                non-resource id is not rejected client-side; it reaches
-                the mint endpoint and fails there.
+                id string — the CRID a handle carries or that
+                :meth:`protect_url` returns. CRID-shaped IDs are validated
+                locally; the service validates other identifier forms.
             valid_for: How long the link stays valid — a duration string
                 (``"5m"``, ``"24h"``) or :class:`datetime.timedelta`. A
                 timedelta must be whole seconds and **at least one minute**;
@@ -388,6 +421,8 @@ class QURLClient:
                 "resource id string"
             )
         validate_id(resource_id)
+        if matches_shape(resource_id):
+            validate_crid(resource_id)
         body = build_portal_body(
             valid_for=valid_for,
             label=label,
@@ -401,6 +436,8 @@ class QURLClient:
             body=body,
             headers=idempotency_headers(idempotency_key),
         )
+        if matches_shape(resource_id):
+            check_response_crid(resp, resource_id)
         return parse_portal(resp)
 
     def create_portal_for_url(
@@ -412,6 +449,7 @@ class QURLClient:
         one_time_use: bool | None = None,
         max_sessions: int | None = None,
         session_duration: str | timedelta | None = None,
+        private: bool | None = None,
         idempotency_key: str | None = None,
     ) -> tuple[Portal, ProtectedResource]:
         """Protect ``target_url`` and mint a portal in one API call.
@@ -425,6 +463,7 @@ class QURLClient:
         the same malformed-URL and embedded-credentials rejection as
         :meth:`protect_url`.
         """
+        validate_optional_bool(private, "private")
         validate_portal_target_url(target_url)
         body = build_portal_body(
             valid_for=valid_for,
@@ -434,6 +473,8 @@ class QURLClient:
             session_duration=session_duration,
         )
         body["target_url"] = target_url
+        if private is not None:
+            body["private"] = private
         resp = self._request(
             "POST",
             "/v1/qurls",
@@ -442,7 +483,7 @@ class QURLClient:
         )
         portal = parse_portal(resp)
         return portal, ProtectedResource(
-            self, portal.resource_id, target_url=target_url
+            self, portal.crid or portal.resource_id, target_url=target_url
         )
 
     def enter_portal(
@@ -561,7 +602,7 @@ class QURLClient:
     def get(self, resource_id: str) -> QURL:
         """Get a qURL resource and its access tokens.
 
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
         automatically.
 
@@ -673,32 +714,19 @@ class QURLClient:
             cursor = page.next_cursor
 
     def delete(self, resource_id: str) -> None:
-        """Delete (revoke) a qURL resource and all its access tokens.
+        """Revoke a resource and all its links using its CRID or public key.
 
-        Only accepts a resource ID (``r_`` prefix), not a qURL display ID
-        (``q_`` prefix). Per the OpenAPI spec:
-        *"Requires a resource ID (r_ prefix). To revoke a single token,
-        use DELETE /v1/resources/:id/qurls/:qurl_id"*.
-
-        A client-side prefix check catches the mistake before the API
-        round-trip.
-
-        Args:
-            resource_id: The resource ID (must start with ``r_``).
-
-        Raises:
-            ValueError: If ``resource_id`` is malformed or does not start
-                with ``r_``.
+        For one link use revoke_resource_qurl instead. Legacy resource IDs
+        are forwarded for compatibility; the current service rejects them.
         """
-        validate_id(resource_id)
-        require_resource_id_prefix(resource_id, "delete")
+        validate_resource_locator(resource_id)
         self._request("DELETE", f"/v1/qurls/{resource_id}")
 
     def extend(self, resource_id: str, duration: str) -> QURL:
         """Extend a qURL's expiration.
 
         Convenience method — equivalent to ``update(resource_id, extend_by=duration)``.
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix); the API resolves ``q_`` IDs to the parent resource
         automatically.
 
@@ -720,7 +748,7 @@ class QURLClient:
     ) -> QURL:
         """Update a qURL — extend expiration, change description, set tags.
 
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix). All fields are optional, but at least one must be
         provided. ``extend_by`` and ``expires_at`` are mutually exclusive.
 
@@ -801,7 +829,7 @@ class QURLClient:
 
         Portal-flow equivalent: :meth:`create_portal`.
 
-        Accepts either a resource ID (``r_`` prefix) or a qURL display ID
+        Accepts a resource CRID, resource public key, or a qURL display ID
         (``q_`` prefix). ``expires_in`` and ``expires_at`` are mutually
         exclusive — if neither is set, the link defaults to 24 hours.
 
@@ -998,6 +1026,8 @@ class QURLClient:
         alias: str | None = None,
         slug: str | None = None,
         find_or_create: bool | None = None,
+        private: bool | None = None,
+        allowed_device_keys: Iterable[str] | None = None,
         idempotency_key: str | None = None,
     ) -> Resource:
         """Create or find a resource.
@@ -1010,6 +1040,7 @@ class QURLClient:
         ``find_or_create=False`` is treated the same as omitting it because
         the API default is false.
         """
+        validate_optional_bool(private, "private")
         validate_alias(alias)
         if target_url is not None:
             validate_create_input(target_url=target_url, custom_domain=custom_domain)
@@ -1029,6 +1060,8 @@ class QURLClient:
                 custom_domain,
                 alias,
                 slug,
+                private,
+                allowed_device_keys,
             )
         ):
             raise ValueError(
@@ -1037,6 +1070,7 @@ class QURLClient:
             )
         body = build_body(
             {
+                "private": private,
                 "type": resource_type,
                 "target_url": target_url,
                 "description": description,
@@ -1047,6 +1081,7 @@ class QURLClient:
                 "find_or_create": True if find_or_create is True else None,
             }
         )
+        body.update(build_device_grants(allowed_device_keys=allowed_device_keys))
         require_nonempty_update(
             body,
             "create_resource",
@@ -1075,6 +1110,9 @@ class QURLClient:
         custom_domain: str | None = None,
         preserve_host: bool | None = None,
         alias: str | None | UnsetType = UNSET,
+        allowed_device_keys: Iterable[str] | None = None,
+        allowed_device_keys_add: Iterable[str] | None = None,
+        allowed_device_keys_remove: Iterable[str] | None = None,
         idempotency_key: str | None = None,
     ) -> Resource:
         """Update resource metadata.
@@ -1098,6 +1136,12 @@ class QURLClient:
         )
         if alias is not UNSET:
             body["alias"] = alias
+        body.update(build_device_grants(
+            allowed_device_keys=allowed_device_keys,
+            allowed_device_keys_add=allowed_device_keys_add,
+            allowed_device_keys_remove=allowed_device_keys_remove,
+            custom_domain=custom_domain,
+        ))
         require_nonempty_update(
             body,
             "update_resource",
@@ -1421,29 +1465,38 @@ class QURLClient:
         self,
         *,
         name: str,
-        scopes: Iterable[str],
+        kind: str = "api_key",
+        scopes: Iterable[str] | None = None,
+        target: str | None = None,
+        claims: Iterable[CredentialClaim] | None = None,
         expires_in: str | None = None,
-        purpose: str | None = None,
-        tunnel_slug: str | None = None,
         idempotency_key: str | None = None,
     ) -> APIKey:
-        """Create an API key.
+        """Create a credential.
 
-        JWT auth is required for normal key management; API-key auth may
-        only create restricted tunnel-bootstrap keys.
+        ``kind="api_key"`` mints an account key with caller-chosen
+        ``scopes``. JWT callers can mint durable keys; account keys with
+        ``qurl:keys`` can mint bounded children under the API's delegation
+        rules. ``kind="enrollment_token"``
+        mints a one-shot (<=24h) Connector/agent enrollment credential:
+        pass ``target`` and ``claims`` instead of ``scopes`` (the server
+        assigns them), and the caller must hold ``qurl:agent``.
 
         If provided, ``idempotency_key`` must be 32-256 characters for
         this security-sensitive endpoint so replay keys have enough
         caller-controlled entropy.
         """
         validate_required_string(name, "name")
+        validate_required_string(kind, "kind")
+        claim_list = list(claims) if claims is not None else None
         body = build_body(
             {
+                "kind": kind,
                 "name": name,
-                "scopes": build_string_list(scopes, "scopes"),
+                "scopes": build_credential_scopes(kind, scopes, target, claim_list),
+                "target": target,
+                "claims": claim_list,
                 "expires_in": expires_in,
-                "purpose": purpose,
-                "tunnel_slug": tunnel_slug,
             }
         )
         resp = self._request(
@@ -1659,6 +1712,7 @@ class QURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
+        retry: bool = True,
     ) -> Any:
         return self._raw_request(
             method,
@@ -1668,6 +1722,7 @@ class QURLClient:
             allow_statuses=allow_statuses,
             headers=headers,
             include_auth=include_auth,
+            retry=retry,
         )[0]
 
     def _raw_request(
@@ -1680,8 +1735,12 @@ class QURLClient:
         allow_statuses: tuple[int, ...] = (),
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
+        retry: bool = True,
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
+
+        ``retry=False`` prevents an ambiguous transport failure from repeating
+        a mutation that has no server-side replay protection (resource sharing).
 
         ``include_auth=False`` is for public flows such as
         :meth:`redeem_access_code`, where the bearer token should stay off
@@ -1726,7 +1785,8 @@ class QURLClient:
             request_headers.update(headers)
         ensure_mutation_idempotency(method, request_headers)
 
-        for attempt in range(self._max_retries + 1):
+        max_retries = self._max_retries if retry else 0
+        for attempt in range(max_retries + 1):
             if attempt > 0:
                 delay = retry_delay(attempt, last_error)
                 logger.debug("Retry %d/%d after %.1fs", attempt, self._max_retries, delay)
@@ -1744,13 +1804,13 @@ class QURLClient:
                 )
             except httpx.TimeoutException as exc:
                 logger.debug("%s %s timed out", method, url)
-                if attempt < self._max_retries:
+                if attempt < max_retries:
                     last_error = exc
                     continue
                 raise QURLTimeoutError(str(exc), cause=exc) from exc
             except httpx.TransportError as exc:
                 logger.debug("%s %s transport error: %s", method, url, exc)
-                if attempt < self._max_retries:
+                if attempt < max_retries:
                     last_error = exc
                     continue
                 raise QURLNetworkError(str(exc), cause=exc) from exc
@@ -1783,7 +1843,7 @@ class QURLClient:
             # 429-only because resolve can consume one-time tokens on server
             # failures.
             retryable = RETRYABLE_STATUS_POST if method == "POST" else RETRYABLE_STATUS
-            if response.status_code in retryable and attempt < self._max_retries:
+            if response.status_code in retryable and attempt < max_retries:
                 last_error = err
                 continue
             raise err
@@ -1807,7 +1867,7 @@ class ProtectedResource:
     (qurl-go: ``qurl.Resource``).
 
     Attributes:
-        id: The LayerV resource id (``r_`` prefix).
+        id: The resource CRID, or public key for older responses.
         target_url: The private URL protected by this resource, when known.
         details: Full server-populated :class:`~layerv_qurl.types.Resource`
             metadata when the handle came from an API response; ``None``

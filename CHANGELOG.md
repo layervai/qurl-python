@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/layervai/qurl-python/compare/v0.3.0...v0.4.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* preserve canonical resource quotas and monthly usage ([#157](https://github.com/layervai/qurl-python/issues/157))
+
+### Bug Fixes
+
+* preserve canonical resource quotas and monthly usage ([#157](https://github.com/layervai/qurl-python/issues/157)) ([e017e78](https://github.com/layervai/qurl-python/commit/e017e7807c5012a93de387ec73a57043d1028806))
+
 ## [0.3.0](https://github.com/layervai/qurl-python/compare/v0.2.2...v0.3.0) (2026-09-08)
 
 
