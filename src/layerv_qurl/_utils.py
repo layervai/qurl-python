@@ -10,6 +10,7 @@ not import them directly.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import functools
 import logging
@@ -25,6 +26,7 @@ from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
+from layerv_qurl.crid import key_matches
 from layerv_qurl.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -56,6 +58,7 @@ from layerv_qurl.types import (
     ConnectorInstallationListOutput,
     ConnectorInstallationStats,
     CreateOutput,
+    CredentialClaim,
     CurrentPeriodUsage,
     Customer,
     DailyUsage,
@@ -69,6 +72,7 @@ from layerv_qurl.types import (
     MintOutput,
     Portal,
     PortalSession,
+    Publisher,
     Quota,
     RateLimits,
     RedeemAccessCodeOutput,
@@ -80,6 +84,7 @@ from layerv_qurl.types import (
     Session,
     SessionListOutput,
     SessionTerminateOutput,
+    ShareLink,
     Usage,
     UsageCostEstimate,
     UsageDailyEntry,
@@ -197,7 +202,33 @@ def build_body(kwargs: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
-def build_string_list(value: Any, field: str) -> list[str]:
+def build_credential_scopes(
+    kind: str, scopes: Any, target: Any = None, claims: Any = None
+) -> list[str] | None:
+    """Validate the kind-dependent credential fields and return ``scopes``.
+
+    The three fields are mutually exclusive by kind, and the server
+    returns 400 ``invalid_input`` for either mismatch. Account ``api_key``
+    credentials carry caller-chosen ``scopes`` and accept neither
+    ``target`` nor ``claims``; ``enrollment_token`` scopes are
+    server-assigned from ``target``, so sending ``scopes`` is rejected.
+    """
+    if kind == "enrollment_token":
+        if scopes is not None:
+            raise ValueError(
+                "scopes: not accepted for kind='enrollment_token'; the server "
+                "assigns them from target"
+            )
+        return None
+    for field, value in (("target", target), ("claims", claims)):
+        if value is not None:
+            raise ValueError(f"{field}: only accepted for kind='enrollment_token'")
+    if scopes is None:
+        raise ValueError(f"scopes: required for kind={kind!r}")
+    return build_string_list(scopes, "scopes")
+
+
+def build_string_list(value: Any, field: str, *, allow_empty: bool = False) -> list[str]:
     """Build a non-empty list of strings without accepting strings or mappings."""
     if isinstance(value, str):
         raise ValueError(f"{field}: must be an iterable of strings, not a string")
@@ -208,7 +239,7 @@ def build_string_list(value: Any, field: str) -> list[str]:
     if not isinstance(value, Iterable):
         raise ValueError(f"{field}: must be an iterable of strings")
     items = list(value)
-    if not items:
+    if not items and not allow_empty:
         raise ValueError(f"{field}: cannot be empty; pass at least one value")
     if any(not isinstance(item, str) for item in items):
         raise ValueError(f"{field}: all values must be strings")
@@ -371,7 +402,6 @@ _RESERVED_ALIASES = frozenset(
         "*",
     }
 )
-RESOURCE_ID_PREFIX = "r_"
 # target_url must use an http(s) scheme per the API's SSRF protection.
 # This is a cheap client-side sanity check — the server is still the
 # authoritative validator (e.g. it rejects localhost, cloud metadata,
@@ -507,29 +537,13 @@ def validate_mint_input(
     _require_max_sessions_in_range(max_sessions)
 
 
-def require_resource_id_prefix(resource_id: str, operation: str = "delete") -> None:
-    """Enforce the ``r_`` prefix on endpoints that only accept resource IDs.
-
-    Per the OpenAPI spec, ``DELETE /v1/qurls/:id`` explicitly requires a
-    resource ID (r_ prefix) — the token-scoped endpoint is
-    ``DELETE /v1/resources/:id/qurls/:qurl_id``. Catch the common mistake
-    of passing a ``q_`` display ID here with a clear client-side error.
-    """
-    if not resource_id.startswith(RESOURCE_ID_PREFIX):
-        # Don't echo the raw ID — even truncated to 16 chars it may
-        # contain caller-sensitive data that ends up in error logs.
-        # Echo only the 2-char prefix so the caller sees which kind of
-        # ID they passed without leaking the value.
-        observed_prefix = resource_id[:2]
-        # TODO: update the "not yet available in this SDK version"
-        # wording once a token-scoped `revoke_token()` / equivalent
-        # method lands on the client. Until then, the error points
-        # users at the API-level endpoint without a concrete SDK call.
+def validate_resource_locator(resource_id: str) -> None:
+    """Keep token IDs off resource-wide deletion; the API validates public keys."""
+    validate_id(resource_id)
+    if resource_id.startswith(("q_", "at_")):
         raise ValueError(
-            f"{operation}: only resource IDs ({RESOURCE_ID_PREFIX} prefix) are accepted — "
-            f"got an ID starting with {observed_prefix!r}. To revoke a single "
-            "access token, use the token-scoped revoke endpoint (not yet "
-            "available in this SDK version)."
+            f"resource locator cannot start with {resource_id[:2]!r}; "
+            "use a CRID or resource public key, or revoke_resource_qurl for one token"
         )
 
 
@@ -754,9 +768,11 @@ def build_protect_body(
     tags: list[str] | None,
     custom_domain: str | None,
     alias: str | None,
+    private: bool | None = None,
 ) -> dict[str, Any]:
     """Validate protect-url inputs and build the create-resource request body."""
     validate_portal_target_url(target_url)
+    validate_optional_bool(private, "private")
     validate_update_input(
         description=description, tags=tags, custom_domain=custom_domain
     )
@@ -768,6 +784,7 @@ def build_protect_body(
             "tags": tags,
             "custom_domain": custom_domain,
             "alias": alias,
+            "private": private,
         }
     )
 
@@ -775,11 +792,12 @@ def build_protect_body(
 def require_connector_resource(
     resources: list[Resource], connector_id: str
 ) -> Resource:
-    """Select the single alias-matching resource from a connector lookup.
+    """Select the single slug-matching resource from a connector lookup.
 
-    Mirrors qurl-go's ``ConnectorResource`` checks: the slug lookup must
-    return exactly one resource, and its alias must equal the connector
-    id. Raises the portal surface's client-detected errors (``status=0``)
+    Like qurl-go's ``GetConnectorResourceBySlug``, validate the immutable
+    slug rather than the optional, mutable alias. The lookup must return
+    exactly one resource whose slug equals the connector id.
+    Raises the portal surface's client-detected errors (``status=0``)
     otherwise — see :meth:`QURLClient.connector_resource` for the mapping.
 
     ASSUMPTION: ``resources`` is the complete result set for the slug —
@@ -809,14 +827,14 @@ def require_connector_resource(
             ),
         )
     resource = resources[0]
-    if resource.alias != connector_id:
+    if resource.slug != connector_id:
         raise ValidationError(
             status=0,
             code="unexpected_response",
             title="Unexpected Response",
             detail=(
                 f"connector_resource: connector {connector_id!r} returned a "
-                "resource with a missing or different alias"
+                "resource with a missing or different slug"
             ),
         )
     return resource
@@ -873,8 +891,10 @@ def parse_portal(data: dict[str, Any]) -> Portal:
             title="Unexpected Response",
             detail="create portal: API response is missing resource_id or qurl_link",
         )
+    validate_response_identity(data)
     return Portal(
         resource_id=resource_id,
+        crid=data.get("crid"),
         link=qurl_link,
         site=data.get("qurl_site"),
         expires_at=_parse_dt(data.get("expires_at")),
@@ -989,8 +1009,10 @@ def _parse_rate_limits(data: dict[str, Any] | None) -> RateLimits | None:
         create_per_hour=data.get("create_per_hour", 0),
         list_per_minute=data.get("list_per_minute", 0),
         resolve_per_minute=data.get("resolve_per_minute", 0),
-        max_active_qurls=data.get("max_active_qurls", 0),
+        max_active_qurls=data.get("max_active_qurls"),
         max_expiry_seconds=data.get("max_expiry_seconds", 0),
+        max_active_resources=data.get("max_active_resources"),
+        max_data_transfer_bytes=data.get("max_data_transfer_bytes"),
     )
 
 
@@ -999,11 +1021,14 @@ def _parse_usage_block(data: dict[str, Any] | None) -> Usage | None:
         return None
     return Usage(
         qurls_created=data.get("qurls_created", 0),
-        active_qurls=data.get("active_qurls", 0),
+        active_qurls=data.get("active_qurls"),
         # Nullable per the API spec — the field is null when
         # max_active_qurls is unlimited.
         active_qurls_percent=data.get("active_qurls_percent"),
         total_accesses=data.get("total_accesses", 0),
+        active_resources=data.get("active_resources"),
+        active_resources_percent=data.get("active_resources_percent"),
+        data_transfer_bytes=data.get("data_transfer_bytes"),
     )
 
 
@@ -1017,8 +1042,23 @@ def parse_list_output(data: Any, meta: dict[str, Any] | None) -> ListOutput:
 def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
     resource_id = data["resource_id"] if strict_identity else data.get("resource_id", "")
     status = data["status"] if strict_identity else data.get("status", "unknown")
+    validate_response_identity(data)
+    private = data.get("private")
+    access_requests = data.get("access_requests")
+    for value in (private, access_requests):
+        if value is not None and not isinstance(value, bool):
+            raise unexpected_response("invalid resource privacy or access_requests")
+    device_keys = data.get("allowed_device_keys")
+    if device_keys is not None and (
+        not isinstance(device_keys, list) or any(not isinstance(key, str) for key in device_keys)
+    ):
+        raise unexpected_response("invalid resource allowed_device_keys")
     return Resource(
         resource_id=resource_id,
+        crid=data.get("crid"),
+        private=private,
+        access_requests=access_requests,
+        allowed_device_keys=device_keys,
         status=status,
         resource_type=data.get("type"),
         target_url=data.get("target_url"),
@@ -1216,20 +1256,25 @@ def parse_webhook_event_types_output(data: Any) -> WebhookEventTypesOutput:
     return WebhookEventTypesOutput(events=events)
 
 
+def _parse_credential_claim(data: dict[str, Any]) -> CredentialClaim:
+    return CredentialClaim(type=data.get("type", ""), id=data.get("id", ""))
+
+
 def parse_api_key(data: dict[str, Any]) -> APIKey:
-    """Parse API key metadata."""
+    """Parse credential metadata."""
     return APIKey(
         key_id=data["key_id"],
         key_prefix=data["key_prefix"],
         name=data.get("name", ""),
+        kind=data.get("kind"),
         scopes=data.get("scopes") or [],
         status=data.get("status"),
         created_at=_parse_dt(data.get("created_at")),
         updated_at=_parse_dt(data.get("updated_at")),
         last_used_at=_parse_dt(data.get("last_used_at")),
         expires_at=_parse_dt(data.get("expires_at")),
-        purpose=data.get("purpose"),
-        tunnel_slug=data.get("tunnel_slug"),
+        target=data.get("target"),
+        claims=_parse_list_items(data.get("claims"), _parse_credential_claim),
         api_key=data.get("api_key"),
     )
 
@@ -1289,8 +1334,10 @@ def parse_current_period_usage(data: dict[str, Any]) -> CurrentPeriodUsage:
         period_start=_parse_dt(data.get("period_start")),
         period_end=_parse_dt(data.get("period_end")),
         qurls_created=data.get("qurls_created", 0),
-        active_qurls=data.get("active_qurls", 0),
+        active_qurls=data.get("active_qurls"),
         cost_estimate=_parse_usage_cost(data.get("cost_estimate")),
+        active_resources=data.get("active_resources"),
+        data_transfer_bytes=data.get("data_transfer_bytes"),
     )
 
 
@@ -1699,3 +1746,142 @@ def mask_key(api_key: str) -> str:
     if len(api_key) > 8:
         return api_key[:4] + "***" + api_key[-4:]
     return "***"
+
+
+def validate_optional_bool(value: bool | None, name: str) -> None:
+    if value is not None and not isinstance(value, bool):
+        raise ValueError(f"{name}: must be a bool")
+
+
+def check_response_crid(data: dict[str, Any], expected: str) -> None:
+    if data.get("crid") != expected:
+        raise unexpected_response("resource CRID is missing or differs from request")
+
+
+def build_share_body(ttl: timedelta | None, session_duration: timedelta | None) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    for name, value in (("ttl", ttl), ("session_duration", session_duration)):
+        if value is None:
+            continue
+        if not isinstance(value, timedelta) or value < timedelta(0) or value.microseconds:
+            raise ValueError(f"{name}: must be a nonnegative timedelta of whole seconds")
+        seconds = value.days * 86400 + value.seconds
+        if seconds:
+            if name == "ttl":
+                body["ttl_seconds"] = seconds
+            else:
+                body["session_duration"] = f"{seconds}s"
+    return body
+
+
+def parse_share_link(data: dict[str, Any], expected: str) -> ShareLink:
+    if not isinstance(data, dict):
+        raise unexpected_response("share response must be an object")
+    check_response_crid(data, expected)
+    for field_name, expected_type in (
+        ("qurl_id", str), ("type", str), ("expires_in_seconds", int), ("single_use", bool)
+    ):
+        value = data.get(field_name)
+        if value is not None and type(value) is not expected_type:
+            raise unexpected_response(f"invalid share field: {field_name}")
+    if (data.get("expires_in_seconds") or 0) < 0:
+        raise unexpected_response("negative share expires_in_seconds")
+    link = data.get("qurl")
+    if not isinstance(link, str) or not link.strip():
+        raise unexpected_response("share response is missing qurl")
+    publisher = data.get("publisher")
+    if publisher is None:
+        publisher = {}
+    if not isinstance(publisher, dict):
+        raise unexpected_response("invalid publisher metadata")
+    name = publisher.get("name")
+    if name is None:
+        name = ""
+    verified = publisher.get("verified")
+    if not isinstance(name, str) or (verified is not None and not isinstance(verified, bool)):
+        raise unexpected_response("invalid publisher metadata")
+    return ShareLink(
+        link=link, crid=expected, qurl_id=data.get("qurl_id") or None,
+        type=data.get("type"), expires_at=parse_share_timestamp(data.get("expires_at")),
+        expires_in_seconds=data.get("expires_in_seconds") or 0,
+        single_use=data.get("single_use") is True,
+        resource_created_at=parse_share_timestamp(data.get("resource_created_at")),
+        publisher=Publisher(name=name, verified=verified is True),
+    )
+
+
+def build_device_grants(
+    *, allowed_device_keys: Iterable[str] | None = None,
+    allowed_device_keys_add: Iterable[str] | None = None,
+    allowed_device_keys_remove: Iterable[str] | None = None,
+    custom_domain: str | None = None,
+) -> dict[str, Any]:
+    """Preserve explicit empty lists; validate the API's two grant update forms."""
+    body: dict[str, Any] = {}
+    for name, value in (("allowed_device_keys", allowed_device_keys),
+                        ("allowed_device_keys_add", allowed_device_keys_add),
+                        ("allowed_device_keys_remove", allowed_device_keys_remove)):
+        if value is None:
+            continue
+        keys = build_string_list(value, name, allow_empty=True)
+        if len(keys) > 256 or len(set(keys)) != len(keys):
+            raise ValueError(f"{name}: at most 256 unique keys are allowed")
+        for key in keys:
+            try:
+                decoded = base64.b64decode(key, validate=True)
+            except ValueError:
+                raise ValueError(
+                    f"{name}: keys must be canonical base64 X25519 public keys"
+                ) from None
+            if len(decoded) != 32 or base64.b64encode(decoded).decode() != key:
+                raise ValueError(f"{name}: keys must be canonical base64 X25519 public keys")
+        body[name] = keys
+    if "allowed_device_keys" in body and len(body) > 1:
+        raise ValueError("allowed_device_keys cannot be combined with add/remove")
+    if body and custom_domain is not None:
+        raise ValueError("device grants and custom_domain must be updated separately")
+    added = set(body.get("allowed_device_keys_add", []))
+    if added & set(body.get("allowed_device_keys_remove", [])):
+        raise ValueError("a device key cannot be added and removed together")
+    return body
+
+
+def unexpected_response(detail: str) -> ValidationError:
+    return ValidationError(status=0, code="unexpected_response", title="Unexpected Response",
+                           detail=detail)
+
+
+def validate_response_identity(data: dict[str, Any]) -> None:
+    """Bind a reported CRID to its resource key, matching Go's resource parser.
+
+    Older responses omit CRID; REST compatibility callers can still use their
+    resource_id. A reported CRID must never be accepted without its key binding.
+    """
+    crid = data.get("crid")
+    if crid is None:
+        return
+    key = data.get("resource_id")
+    if not isinstance(crid, str) or not isinstance(key, str):
+        raise unexpected_response("invalid resource identity")
+    try:
+        der = base64.b64decode(key + "=" * (-len(key) % 4), altchars=b"-_", validate=True)
+        canonical = base64.urlsafe_b64encode(der).decode().rstrip("=") == key
+        if not canonical or not key_matches(crid, der):
+            raise ValueError("key binding")
+    except ValueError:
+        raise unexpected_response("invalid resource key-bound CRID") from None
+
+
+def parse_share_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+        r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})", value
+    ):
+        raise unexpected_response("invalid share timestamp")
+    try:
+        parsed = _parse_dt(value)
+    except ValueError:
+        raise unexpected_response("invalid share timestamp") from None
+    return None if value == "0001-01-01T00:00:00Z" else parsed
