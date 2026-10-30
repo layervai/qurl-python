@@ -349,8 +349,7 @@ async def test_revoke_one_token_keeps_parent_resource(client):
 @pytest.mark.parametrize("method", ["revoke_resource_qurl", "update_resource_qurl"])
 @pytest.mark.parametrize("resource_id,token_id", [
     (CRID, "at_synthetic_secret"), (CRID, "q_0123456789a\n"),
-    (CRID, "q_0123456789A"), (CRID, "q_0123456789"),
-    (CRID, "q_0123456789ab"), (CRID, "r_parent"), (CRID, ".."), (CRID, "q_0123456789a/path"),
+    (CRID, "q_"), (CRID, "r_parent"), (CRID, ".."), (CRID, "q_0123456789a/path"),
     ("at_synthetic_secret", "q_0123456789a"),
     ("at_synthetic_secret\n", "q_0123456789a"),
 ])
@@ -389,3 +388,11 @@ async def test_resource_deletes_refuse_credentials_without_echo(client, method, 
         await invoke(getattr(client, method), credential)
     assert "synthetic_secret" not in str(error.value)
     assert not respx.calls
+
+
+@respx.mock
+async def test_token_revoke_leaves_opaque_display_id_grammar_to_service(client):
+    token_id = "q_LegacyOrFutureDisplayId_123"
+    route = respx.delete(f"{BASE}/v1/resources/{CRID}/qurls/{token_id}").respond(204)
+    await invoke(client.revoke_resource_qurl, CRID, token_id)
+    assert route.called
