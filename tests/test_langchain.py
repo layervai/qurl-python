@@ -33,7 +33,7 @@ pytestmark = pytest.mark.skipif(not _HAS_LANGCHAIN, reason="langchain-core not i
 
 
 def test_langchain_import_does_not_load_incompatible_pydantic_v1() -> None:
-    subprocess.run(
+    result = subprocess.run(
         [
             sys.executable,
             "-W",
@@ -41,10 +41,11 @@ def test_langchain_import_does_not_load_incompatible_pydantic_v1() -> None:
             "-c",
             "from layerv_qurl.langchain import _HAS_LANGCHAIN; assert _HAS_LANGCHAIN",
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, result.stderr
 
 
 def _mock_client() -> MagicMock:
