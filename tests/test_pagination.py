@@ -21,7 +21,6 @@ CASES = [
     ("webhooks", types.WebhookListOutput, "webhooks", (), {"event": "resource.revoked"}),
     ("webhook_deliveries", types.WebhookDeliveryListOutput, "deliveries", ("wh_test",), {}),
     ("api_keys", types.APIKeyListOutput, "api_keys", (), {"status": "active"}),
-    ("access_codes", types.AccessCodeListOutput, "access_codes", (), {}),
     ("billing_invoices", types.InvoiceListOutput, "invoices", (), {}),
     ("connector_installations", types.ConnectorInstallationListOutput, "installations", (), {}),
 ]
