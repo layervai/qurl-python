@@ -26,6 +26,8 @@ from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
+import httpx
+
 from layerv_qurl.crid import key_matches
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -100,7 +102,6 @@ from layerv_qurl.types import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    import httpx
 
 logger = logging.getLogger("layerv_qurl")
 _T = TypeVar("_T")
@@ -1693,6 +1694,13 @@ def parse_error(response: httpx.Response) -> QURLError:
             detail=response.text or f"HTTP {response.status_code}",
             retry_after=retry_after,
         )
+
+
+def should_retry_transport(method: str, error: httpx.TransportError) -> bool:
+    """Only replay a POST when HTTPX reports failure before sending it."""
+    return method != "POST" or isinstance(
+        error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+    )
 
 
 def retry_delay(attempt: int, last_error: Exception | None) -> float:

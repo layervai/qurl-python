@@ -76,6 +76,7 @@ from layerv_qurl._utils import (
     require_nonempty_update,
     resource_handle_from_resolve,
     retry_delay,
+    should_retry_transport,
     validate_alias,
     validate_create_input,
     validate_domain_input,
@@ -1790,13 +1791,13 @@ class AsyncQURLClient:
                 )
             except httpx.TimeoutException as exc:
                 logger.debug("%s %s timed out", method, url)
-                if attempt < max_retries:
+                if attempt < max_retries and should_retry_transport(method, exc):
                     last_error = exc
                     continue
                 raise QURLTimeoutError(str(exc), cause=exc) from exc
             except httpx.TransportError as exc:
                 logger.debug("%s %s transport error: %s", method, url, exc)
-                if attempt < max_retries:
+                if attempt < max_retries and should_retry_transport(method, exc):
                     last_error = exc
                     continue
                 raise QURLNetworkError(str(exc), cause=exc) from exc
