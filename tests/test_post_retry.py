@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from layerv_qurl import AsyncQURLClient, QURLClient, QURLError, QURLNetworkError
+from layerv_qurl import AsyncQURLClient, QURLClient, QURLError, QURLNetworkError, QURLTimeoutError
 from tests.client_support import _QUOTA_OK, BASE_URL
 
 pytestmark = pytest.mark.asyncio
@@ -40,7 +40,13 @@ async def invoke(method, *args, **kwargs):
 
 @pytest.mark.parametrize(
     "error_type",
-    [httpx.ReadTimeout, httpx.WriteError, httpx.RemoteProtocolError, httpx.TransportError],
+    [
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.WriteError,
+        httpx.RemoteProtocolError,
+        httpx.TransportError,
+    ],
 )
 @pytest.mark.parametrize(
     "method,path,args,kwargs",
@@ -64,6 +70,8 @@ async def test_ambiguous_post_failure_is_not_replayed(
     with pytest.raises(QURLNetworkError) as raised:
         await invoke(getattr(retrying_client, method), *args, **kwargs)
     assert isinstance(raised.value.__cause__, error_type)
+    if issubclass(error_type, httpx.TimeoutException):
+        assert isinstance(raised.value, QURLTimeoutError)
     assert route.call_count == 1
     assert len(accepted) == 1
 

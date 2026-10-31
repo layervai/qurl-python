@@ -1860,7 +1860,7 @@ class QURLClient:
         1. ``response.status_code < 400 or in allow_statuses`` →
            return the parsed body immediately as a success.
         2. Otherwise, build an error and check the retry filter
-           (``RETRYABLE_STATUS_NON_IDEMPOTENT`` for POST, ``RETRYABLE_STATUS``
+           (``RETRYABLE_STATUS_NON_IDEMPOTENT`` for POST/PATCH, ``RETRYABLE_STATUS``
            for everything else).
 
         This means a status listed in ``allow_statuses`` is returned
