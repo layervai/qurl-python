@@ -6,6 +6,8 @@ All tests are skipped when ``langchain-core`` is not installed.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -28,6 +30,21 @@ from layerv_qurl.types import (
 )
 
 pytestmark = pytest.mark.skipif(not _HAS_LANGCHAIN, reason="langchain-core not installed")
+
+
+def test_langchain_import_does_not_load_incompatible_pydantic_v1() -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error:Core Pydantic V1 functionality:UserWarning",
+            "-c",
+            "from layerv_qurl.langchain import _HAS_LANGCHAIN; assert _HAS_LANGCHAIN",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _mock_client() -> MagicMock:
