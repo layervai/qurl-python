@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.5.0](https://github.com/layervai/qurl-python/compare/v0.4.0...v0.5.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* list_access_codes no longer accepts limit or cursor, and list_access_codes_all no longer accepts page_size. The API does not support these parameters. Remove them from calls.
+* **client:** adopt the kind-first credential API ([#133](https://github.com/layervai/qurl-python/issues/133))
+
+### Features
+
+* align resource identity and sharing with Go SDK ([#169](https://github.com/layervai/qurl-python/issues/169)) ([91018dd](https://github.com/layervai/qurl-python/commit/91018dd645613e4a5d506eab620597f29a4bff6e))
+* **client:** adopt the kind-first credential API ([#133](https://github.com/layervai/qurl-python/issues/133)) ([b5c579b](https://github.com/layervai/qurl-python/commit/b5c579b67fbad0d2c9989a404cf3c9c4dd0d3101))
+* paginate the contract list APIs in both clients ([#174](https://github.com/layervai/qurl-python/issues/174)) ([0a8f7e4](https://github.com/layervai/qurl-python/commit/0a8f7e43f13a3a90776d48e9715a75959cee083f))
+
+
+### Bug Fixes
+
+* avoid replaying uncertain POST and PATCH operations ([#177](https://github.com/layervai/qurl-python/issues/177)) ([717f8ec](https://github.com/layervai/qurl-python/commit/717f8ecd61ae8a8b7bd1b9dd1780436debd8405d)), closes [#71](https://github.com/layervai/qurl-python/issues/71) [#20](https://github.com/layervai/qurl-python/issues/20)
+* match the unpaginated access-code list contract ([#178](https://github.com/layervai/qurl-python/issues/178)) ([8254f75](https://github.com/layervai/qurl-python/commit/8254f75ff5d7efd7978e9e258dfc1f1d8e5bdf54))
+* redact invalid resolve tokens before transport ([#171](https://github.com/layervai/qurl-python/issues/171)) ([b7f3546](https://github.com/layervai/qurl-python/commit/b7f3546978b5a40fc603211731158bac739346ed))
+* require the LangChain Python 3.14 import fix ([#175](https://github.com/layervai/qurl-python/issues/175)) ([9a7f274](https://github.com/layervai/qurl-python/commit/9a7f2745b43261b64fee943907ad8ae1753ddd47))
+* validate connector lookups by immutable slug ([#168](https://github.com/layervai/qurl-python/issues/168)) ([2b68486](https://github.com/layervai/qurl-python/commit/2b68486b32a8b24ff2486640f0cd8541ff962350))
+* validate single-token management IDs before transport ([#172](https://github.com/layervai/qurl-python/issues/172)) ([2b40d5d](https://github.com/layervai/qurl-python/commit/2b40d5dd3826cb8c42a556e11b103660872a07aa))
+
+
+### Documentation
+
+* explain qURL sharing workflows in Python ([#167](https://github.com/layervai/qurl-python/issues/167)) ([4770030](https://github.com/layervai/qurl-python/commit/47700308e531bb9e7507a45c6d68038d663a4a85))
+
 ## [0.4.0](https://github.com/layervai/qurl-python/compare/v0.3.0...v0.4.0) (2026-10-08)
 
 
