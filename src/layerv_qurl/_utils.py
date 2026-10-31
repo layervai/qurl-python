@@ -26,6 +26,8 @@ from importlib.metadata import version as _pkg_version
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import quote, urlsplit
 
+import httpx
+
 from layerv_qurl.crid import key_matches
 from layerv_qurl.errors import (
     AuthenticationError,
@@ -100,7 +102,6 @@ from layerv_qurl.types import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    import httpx
 
 logger = logging.getLogger("layerv_qurl")
 _T = TypeVar("_T")
@@ -109,9 +110,9 @@ DEFAULT_BASE_URL = "https://api.layerv.ai"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 3
 RETRYABLE_STATUS = {429, 502, 503, 504}
-# POST requests still only retry rate limits: resolve can consume one-time
-# tokens after an NHP knock failure, and service errors are not cached.
-RETRYABLE_STATUS_POST = {429}
+# POST and PATCH can consume tokens or extend expiry after committing;
+# service 5xx responses are not cached for durable replay.
+RETRYABLE_STATUS_NON_IDEMPOTENT = {429}
 # POST/PATCH, plus any future PUT endpoints from the API contract, carry a
 # qurl-service replay key so retried writes are tied to one logical operation.
 # DELETE keeps the wider HTTP retry set without a key because repeated deletes
@@ -1693,6 +1694,13 @@ def parse_error(response: httpx.Response) -> QURLError:
             detail=response.text or f"HTTP {response.status_code}",
             retry_after=retry_after,
         )
+
+
+def should_retry_transport(method: str, error: httpx.TransportError) -> bool:
+    """Only replay POST/PATCH before sending; retain idempotent method retries."""
+    return method not in {"POST", "PATCH"} or isinstance(
+        error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+    )
 
 
 def retry_delay(attempt: int, last_error: Exception | None) -> float:

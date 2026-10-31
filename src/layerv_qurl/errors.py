@@ -128,7 +128,12 @@ class ServerError(QURLError):
 
 
 class QURLNetworkError(Exception):
-    """Error raised for transport-level failures (DNS, connection refused)."""
+    """Error raised for transport failures, including uncertain POST/PATCH outcomes.
+
+    A failure after sending a POST/PATCH can follow a committed operation. Check
+    the resulting state before repeating it; the original HTTPX exception
+    remains available through ``__cause__``.
+    """
 
     def __init__(self, message: str, cause: Exception | None = None) -> None:
         super().__init__(message)

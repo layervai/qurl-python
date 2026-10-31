@@ -17,7 +17,7 @@ from layerv_qurl._utils import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_TIMEOUT,
     RETRYABLE_STATUS,
-    RETRYABLE_STATUS_POST,
+    RETRYABLE_STATUS_NON_IDEMPOTENT,
     UNSET,
     UnsetType,
     build_body,
@@ -76,6 +76,7 @@ from layerv_qurl._utils import (
     require_nonempty_update,
     resource_handle_from_resolve,
     retry_delay,
+    should_retry_transport,
     validate_alias,
     validate_create_input,
     validate_domain_input,
@@ -1744,7 +1745,7 @@ class AsyncQURLClient:
         1. ``response.status_code < 400 or in allow_statuses`` →
            return the parsed body immediately as a success.
         2. Otherwise, build an error and check the retry filter
-           (``RETRYABLE_STATUS_POST`` for POST, ``RETRYABLE_STATUS``
+           (``RETRYABLE_STATUS_NON_IDEMPOTENT`` for POST/PATCH, ``RETRYABLE_STATUS``
            for everything else).
 
         This means a status listed in ``allow_statuses`` is returned
@@ -1790,13 +1791,13 @@ class AsyncQURLClient:
                 )
             except httpx.TimeoutException as exc:
                 logger.debug("%s %s timed out", method, url)
-                if attempt < max_retries:
+                if attempt < max_retries and should_retry_transport(method, exc):
                     last_error = exc
                     continue
                 raise QURLTimeoutError(str(exc), cause=exc) from exc
             except httpx.TransportError as exc:
                 logger.debug("%s %s transport error: %s", method, url, exc)
-                if attempt < max_retries:
+                if attempt < max_retries and should_retry_transport(method, exc):
                     last_error = exc
                     continue
                 raise QURLNetworkError(str(exc), cause=exc) from exc
@@ -1824,11 +1825,13 @@ class AsyncQURLClient:
                 return envelope.get("data"), envelope.get("meta")
 
             err = parse_error(response)
-            # PATCH already uses the wider retry set; attaching a stable
-            # per-call idempotency key makes those retries safe. POST remains
-            # 429-only because resolve can consume one-time tokens on server
-            # failures.
-            retryable = RETRYABLE_STATUS_POST if method == "POST" else RETRYABLE_STATUS
+            # 429-only for POST/PATCH: resolve can consume tokens and PATCH
+            # can extend expiry before an error response.
+            retryable = (
+                RETRYABLE_STATUS_NON_IDEMPOTENT
+                if method in {"POST", "PATCH"}
+                else RETRYABLE_STATUS
+            )
             if response.status_code in retryable and attempt < max_retries:
                 last_error = err
                 continue

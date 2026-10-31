@@ -509,7 +509,7 @@ def test_ensure_mutation_idempotency_preserves_explicit_header() -> None:
 def test_patch_retry_reuses_auto_idempotency_key(retry_client: QURLClient) -> None:
     route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc123def45")
     route.side_effect = [
-        httpx.Response(503, json=_ERR_503),
+        httpx.Response(429, json=_ERR_429),
         httpx.Response(
             200,
             json={
@@ -567,7 +567,7 @@ async def test_async_patch_retry_reuses_auto_idempotency_key() -> None:
     try:
         route = respx.patch(f"{BASE_URL}/v1/qurls/r_abc")
         route.side_effect = [
-            httpx.Response(503, json=_ERR_503),
+            httpx.Response(429, json=_ERR_429),
             httpx.Response(
                 200,
                 json={
