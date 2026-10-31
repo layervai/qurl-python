@@ -93,6 +93,5 @@ jobs:
     with:
       header: "qURL Python SDK Build"
       gates: '{"Tests": "${{ needs.test.result }}", "Conformance schema 1": "${{ needs.test-schema1.result }}", "Type check": "${{ needs.type-check.result }}"}'
-      extra_fields: '{"Python": "3.10, 3.12, 3.13"}'
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
