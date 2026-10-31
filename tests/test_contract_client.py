@@ -1024,16 +1024,15 @@ def test_api_key_and_access_code_contracts(client: QURLClient) -> None:
                         "status": "active",
                     }
                 ],
-                "meta": {"next_cursor": "cur_codes", "has_more": True},
+                "meta": {"has_more": False},
             },
         )
     )
-    access_codes = client.list_access_codes(limit=10, cursor="cur_prev_codes")
+    access_codes = client.list_access_codes()
     assert access_codes.access_codes[0].access_code_id == "acd_list123"
-    assert access_codes.next_cursor == "cur_codes"
-    assert access_codes.has_more is True
-    assert access_codes_route.calls[0].request.url.params["limit"] == "10"
-    assert access_codes_route.calls[0].request.url.params["cursor"] == "cur_prev_codes"
+    assert access_codes.next_cursor is None
+    assert access_codes.has_more is False
+    assert not access_codes_route.calls[0].request.url.query
 
 
 @respx.mock

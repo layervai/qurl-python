@@ -1557,28 +1557,16 @@ class AsyncQURLClient:
         )
         return parse_access_code(resp)
 
-    async def list_access_codes(
-        self, *, limit: int | None = None, cursor: str | None = None
-    ) -> AccessCodeListOutput:
-        """List access codes."""
-        data, meta = await self._raw_request(
-            "GET",
-            "/v1/access-codes",
-            params=build_list_params(limit, cursor),
-        )
+    async def list_access_codes(self) -> AccessCodeListOutput:
+        """List all access codes. The API does not accept pagination parameters."""
+        data, meta = await self._raw_request("GET", "/v1/access-codes")
         return parse_access_code_list_output(data, meta)
 
-    async def list_access_codes_all(
-        self,
-        *,
-        page_size: int = 50,
-    ) -> AsyncIterator[AccessCode]:
-        """Iterate all access codes, fetching pages only as needed."""
-        async for page in async_pages(
-            lambda cursor: self.list_access_codes(limit=page_size, cursor=cursor)
-        ):
-            for item in page.access_codes:
-                yield item
+    async def list_access_codes_all(self) -> AsyncIterator[AccessCode]:
+        """Lazily fetch the complete list once and yield its access codes."""
+        page = await self.list_access_codes()
+        for item in page.access_codes:
+            yield item
 
     async def revoke_access_code(self, access_code_id: str) -> None:
         """Revoke an access code."""

@@ -1203,7 +1203,7 @@ async def test_async_delete_list_and_secret_contracts(
                         "status": "active",
                     }
                 ],
-                "meta": {"next_cursor": "cur_async_codes", "has_more": True},
+                "meta": {"has_more": False},
             },
         )
     )
@@ -1234,7 +1234,7 @@ async def test_async_delete_list_and_secret_contracts(
         )
     )
 
-    access_codes = await async_client.list_access_codes(limit=5, cursor="cur_async_prev")
+    access_codes = await async_client.list_access_codes()
     await async_client.delete_resource("r_asyncdelete")
     await async_client.terminate_resource_session("r_asyncdelete", "s_async123")
     await async_client.delete_webhook("wh_asyncabcdefghijkl")
@@ -1245,9 +1245,9 @@ async def test_async_delete_list_and_secret_contracts(
     )
 
     assert access_codes.access_codes[0].access_code_id == "acd_async123"
-    assert access_codes.next_cursor == "cur_async_codes"
-    assert access_codes_route.calls[0].request.url.params["limit"] == "5"
-    assert access_codes_route.calls[0].request.url.params["cursor"] == "cur_async_prev"
+    assert access_codes.next_cursor is None
+    assert access_codes.has_more is False
+    assert not access_codes_route.calls[0].request.url.query
     assert webhook.secret == "whsec_async"
     assert secret_route.calls[0].request.headers["idempotency-key"] == "idem-async-secret"
     assert access_codes_route.called

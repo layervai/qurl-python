@@ -1319,12 +1319,15 @@ def parse_access_code(data: dict[str, Any]) -> AccessCode:
 def parse_access_code_list_output(
     data: Any, meta: dict[str, Any] | None
 ) -> AccessCodeListOutput:
-    """Parse an access-code list response."""
+    """Require the complete, unpaginated access-code contract."""
     next_cursor, has_more = _meta_page(meta)
-    access_codes = _parse_list_items(data, parse_access_code)
-    return AccessCodeListOutput(
-        access_codes=access_codes, next_cursor=next_cursor, has_more=has_more
-    )
+    if next_cursor or has_more:
+        raise QURLError(
+            status=0,
+            code="unexpected_response",
+            title="Access-code listing unexpectedly returned pagination metadata",
+        )
+    return AccessCodeListOutput(access_codes=_parse_list_items(data, parse_access_code))
 
 
 def _parse_usage_cost(data: dict[str, Any] | None) -> UsageCostEstimate | None:
