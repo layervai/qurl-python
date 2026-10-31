@@ -119,3 +119,63 @@ async def test_get_can_still_retry_a_read_timeout(retrying_client):
     result = await invoke(retrying_client.get_quota)
     assert result.plan == "growth"
     assert route.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "error_type", [httpx.ReadTimeout, httpx.WriteError, httpx.RemoteProtocolError]
+)
+@respx.mock
+async def test_ambiguous_patch_extension_is_not_replayed(retrying_client, error_type):
+    route = respx.patch(BASE_URL + "/v1/qurls/r_patch").mock(
+        side_effect=error_type("extension may have committed")
+    )
+    with pytest.raises(QURLNetworkError):
+        await invoke(retrying_client.update, "r_patch", extend_by="7d")
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+@respx.mock
+async def test_patch_server_error_is_not_replayed(retrying_client, status):
+    route = respx.patch(BASE_URL + "/v1/qurls/r_patch").mock(
+        return_value=httpx.Response(
+            status,
+            json={"error": {"status": status, "code": "unavailable", "title": "Unavailable"}},
+        )
+    )
+    with pytest.raises(QURLError):
+        await invoke(retrying_client.update, "r_patch", extend_by="7d")
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_unsent_patch_can_retry(retrying_client):
+    route = respx.patch(BASE_URL + "/v1/qurls/r_patch")
+    route.side_effect = [
+        httpx.ConnectError("not sent"),
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "resource_id": "r_patch",
+                    "target_url": "https://example.com",
+                    "status": "active",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "tags": [],
+                }
+            },
+        ),
+    ]
+    await invoke(retrying_client.update, "r_patch", extend_by="7d")
+    assert route.call_count == 2
+    first, second = [call.request for call in route.calls]
+    assert first.content == second.content
+    assert first.headers["Idempotency-Key"] == second.headers["Idempotency-Key"]
+
+
+@respx.mock
+async def test_delete_can_still_retry_a_read_timeout(retrying_client):
+    route = respx.delete(BASE_URL + "/v1/qurls/r_delete")
+    route.side_effect = [httpx.ReadTimeout("response lost"), httpx.Response(204)]
+    await invoke(retrying_client.delete, "r_delete")
+    assert route.call_count == 2

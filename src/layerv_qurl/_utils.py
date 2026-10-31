@@ -110,9 +110,9 @@ DEFAULT_BASE_URL = "https://api.layerv.ai"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 3
 RETRYABLE_STATUS = {429, 502, 503, 504}
-# POST requests still only retry rate limits: resolve can consume one-time
-# tokens after an NHP knock failure, and service errors are not cached.
-RETRYABLE_STATUS_POST = {429}
+# POST and PATCH can consume tokens or extend expiry after committing;
+# service 5xx responses are not cached for durable replay.
+RETRYABLE_STATUS_NON_IDEMPOTENT = {429}
 # POST/PATCH, plus any future PUT endpoints from the API contract, carry a
 # qurl-service replay key so retried writes are tied to one logical operation.
 # DELETE keeps the wider HTTP retry set without a key because repeated deletes
@@ -1697,8 +1697,8 @@ def parse_error(response: httpx.Response) -> QURLError:
 
 
 def should_retry_transport(method: str, error: httpx.TransportError) -> bool:
-    """Only replay a POST when HTTPX reports failure before sending it."""
-    return method != "POST" or isinstance(
+    """Only replay POST/PATCH before sending; retain idempotent method retries."""
+    return method not in {"POST", "PATCH"} or isinstance(
         error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
     )
 

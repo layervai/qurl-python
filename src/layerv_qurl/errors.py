@@ -128,9 +128,9 @@ class ServerError(QURLError):
 
 
 class QURLNetworkError(Exception):
-    """Error raised for transport failures, including uncertain POST outcomes.
+    """Error raised for transport failures, including uncertain POST/PATCH outcomes.
 
-    A failure after sending a POST can follow a committed operation. Check
+    A failure after sending a POST/PATCH can follow a committed operation. Check
     the resulting state before repeating it; the original HTTPX exception
     remains available through ``__cause__``.
     """

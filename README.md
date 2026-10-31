@@ -331,11 +331,11 @@ Mutating SDK methods generate a per-call `Idempotency-Key` when you do not
 provide one and reuse it across the client's internal retries; qurl-service
 supports that header on mutating endpoints, including `POST /v1/resolve`,
 except that `share_resource` always mints a new link.
-Automatic POST status-code retries remain limited to rate limits. POST transport
+Automatic POST and PATCH status-code retries are limited to rate limits. Their transport
 retries are limited to connection or pool failures before sending the request.
 Read, write, and protocol failures can follow a committed operation, so the SDK
 raises them without replay. Check the resulting state before repeating a create,
-one-time resolve, or access-code redemption.
+one-time resolve, expiry extension, or access-code redemption.
 
 Pass a stable `idempotency_key` for your own retry loop, process restart, or job
 replay. Keep it unchanged for the same logical operation; it does not by itself
