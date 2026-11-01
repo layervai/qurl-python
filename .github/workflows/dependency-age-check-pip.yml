@@ -10,6 +10,7 @@ name: Dependency Age Check (pip)
 # no requirements/poetry.lock/pyproject.toml changes are in the diff.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 # Cancel superseded runs on the same PR branch — pypi.org calls are
