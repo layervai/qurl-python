@@ -10,6 +10,7 @@ name: Dependency Age Check (Actions)
 # no workflow/composite-action changes are in the diff.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 # Cancel superseded runs on the same PR branch — the reusable workflow
