@@ -239,3 +239,58 @@ async def test_link_defaults_set_clear_and_read(client):
 async def test_link_defaults_rejects_bad_input_locally(client, kwargs):
     with pytest.raises(ValueError):
         await invoke(client.update_resource, "r_1", **kwargs)
+
+
+@respx.mock
+async def test_missing_quick_share_and_empty_exceptions(client):
+    rule = AccessRule(RULE_ID, "Domain", "email_domain", email_domain="example.com",
+                      allowed_emails=[])
+    respx.get(f"{BASE_URL}/v1/me/access-rules").respond(
+        200, json={"data": {k: v for k, v in LIBRARY.items() if k != "quick_share_rule_id"}}
+    )
+    assert (await invoke(client.get_access_rules)).quick_share_rule_id is None
+    put = respx.put(f"{BASE_URL}/v1/me/access-rules").respond(200, json={"data": LIBRARY})
+    await invoke(client.save_access_rules, version=0, items=[rule])
+    assert sent(put)["items"] == [
+        {"id": RULE_ID, "name": "Domain", "mode": "email_domain", "email_domain": "example.com"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path,method,data",
+    [
+        ("inbox-state", "get_inbox_state", {"dismissed": []}),
+        ("inbox-state", "get_inbox_state", {"version": 1}),
+        ("inbox-state", "get_inbox_state", {"version": 1, "dismissed": [3]}),
+        ("received-history", "get_received_history", {"items": []}),
+        ("received-history", "get_received_history", {"version": True, "items": []}),
+        ("received-history", "get_received_history", {"version": 1, "items": [{"crid": CRID}]}),
+    ],
+)
+@respx.mock
+async def test_incomplete_documents_fail_closed(client, path, method, data):
+    respx.get(f"{BASE_URL}/v1/me/{path}").respond(200, json={"data": data})
+    with pytest.raises(QURLError) as raised:
+        await invoke(getattr(client, method))
+    assert raised.value.code == "unexpected_response"
+
+
+@respx.mock
+async def test_clear_received_history_raises_after_retries(client):
+    route = respx.delete(f"{BASE_URL}/v1/me/received-history").respond(
+        409, json={"error": {"status": 409, "code": "conflict", "title": "Conflict"}}
+    )
+    with pytest.raises(ConflictError):
+        await invoke(client.clear_received_history)
+    assert route.call_count == 3  # max_retries=2
+
+
+@respx.mock
+async def test_malformed_link_defaults_fail_closed(client):
+    respx.get(f"{BASE_URL}/v1/resources/r_1").respond(
+        200, json={"data": {"resource": {"resource_id": "r_1", "status": "active",
+                                         "link_defaults": {"one_time_use": True}}}}
+    )
+    with pytest.raises(QURLError) as raised:
+        await invoke(client.get_resource, "r_1")
+    assert raised.value.code == "unexpected_response"

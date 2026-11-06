@@ -427,7 +427,8 @@ link-create request. Update them separately from `custom_domain`.
 Saved access rules, the approvals-inbox state, and received-link history are
 versioned documents. Each save replaces the whole document only if `version`
 matches your last read; otherwise it raises `ConflictError`, so read again,
-merge, and retry.
+merge, and retry. The service never replays these saves, so a save retried after
+a lost response can raise `ConflictError` even though it landed.
 
 ```python
 import uuid
@@ -443,7 +444,8 @@ except ConflictError:
 ```
 
 `get_access_rules()` also returns the read-only `built_ins` and Desktop's
-`quick_share_rule_id`. The SDK never sends that choice, and the service keeps it.
+`quick_share_rule_id`. The SDK never sends that choice; the service keeps it
+unless a save removes the custom rule it names.
 Saving a rule grants no access and changes no existing share.
 
 `get_inbox_state()` / `save_inbox_state()` and `get_received_history()` /

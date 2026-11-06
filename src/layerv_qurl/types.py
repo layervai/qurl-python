@@ -753,7 +753,6 @@ class ConnectorInstallationListOutput:
     has_more: bool = False
 
 
-
 @dataclass
 class AccessRuleLinkLimits:
     """Limits of the temporary link a ``public`` rule shares.
@@ -843,6 +842,7 @@ class ReceivedHistory:
     version: int
     items: list[ReceivedLink] = field(default_factory=list)
     cleared_at: int | None = None
+
 
 # ---- batch_create input shape -------------------------------------------
 # TypedDicts for :meth:`QURLClient.batch_create` items. Split into a

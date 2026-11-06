@@ -21,7 +21,7 @@ from layerv_qurl._utils import (
     RETRYABLE_STATUS_NON_IDEMPOTENT,
     UNSET,
     UnsetType,
-    build_access_rule_items,
+    build_access_rules_body,
     build_body,
     build_credential_scopes,
     build_device_grants,
@@ -1184,10 +1184,7 @@ class QURLClient:
             allowed_device_keys_remove=allowed_device_keys_remove,
             custom_domain=custom_domain,
         ))
-        if link_defaults is not UNSET:
-            body.update(build_link_defaults(
-                cast("LinkDefaults | None", link_defaults), custom_domain
-            ))
+        body.update(build_link_defaults(link_defaults, custom_domain))
         require_nonempty_update(
             body,
             "update_resource",
@@ -1742,6 +1739,9 @@ class QURLClient:
         return parse_customer(resp)
 
     # --- Account sync (saved rules, inbox state, received history) ---
+    # Saves are version-checked and the service never replays them, so a save
+    # retried after a lost response can raise ConflictError although it landed:
+    # re-read before merging.
 
     def get_access_rules(self) -> AccessRules:
         """Get the account's saved access rules and the built-in choices.
@@ -1757,21 +1757,18 @@ class QURLClient:
         *,
         version: int,
         items: Iterable[AccessRule],
-        idempotency_key: str | None = None,
     ) -> AccessRules:
         """Replace the custom rule library if ``version`` matches the last read.
 
         ``items`` is the complete library; built-ins are read-only. A stale
         version raises :class:`ConflictError`: read, merge, and retry. The
-        saved quick-share choice is Desktop's and is never sent, so the
-        service keeps it.
+        saved quick-share choice is Desktop's and is never sent; the service
+        keeps it unless ``items`` drops the custom rule it names.
         """
-        validate_nonnegative_int(version, "version")
         resp = self._request(
             "PUT",
             "/v1/me/access-rules",
-            body={"version": version, "items": build_access_rule_items(items)},
-            headers=idempotency_headers(idempotency_key),
+            body=build_access_rules_body(version, items),
         )
         return parse_access_rules(resp)
 
@@ -1786,7 +1783,6 @@ class QURLClient:
         version: int,
         dismissed: Iterable[str],
         seen_through: datetime | None = None,
-        idempotency_key: str | None = None,
     ) -> InboxState:
         """Replace the inbox state at ``version``. JWT auth is required by the API.
 
@@ -1799,7 +1795,6 @@ class QURLClient:
             "PUT",
             "/v1/me/inbox-state",
             body=build_inbox_state_body(version, dismissed, seen_through),
-            headers=idempotency_headers(idempotency_key),
         )
         return parse_inbox_state(resp)
 
@@ -1813,7 +1808,6 @@ class QURLClient:
         *,
         version: int,
         items: Iterable[ReceivedLink],
-        idempotency_key: str | None = None,
     ) -> ReceivedHistory:
         """Replace the received-link history at ``version``. JWT auth is required.
 
@@ -1825,7 +1819,6 @@ class QURLClient:
             "PUT",
             "/v1/me/received-history",
             body=build_received_history_body(version, items),
-            headers=idempotency_headers(idempotency_key),
         )
         return parse_received_history(resp)
 
@@ -1949,6 +1942,8 @@ class QURLClient:
         retry_statuses: frozenset[int] = frozenset(),
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
+
+        ``retry_statuses`` adds statuses the caller knows are safe to retry.
 
         ``retry=False`` prevents an ambiguous transport failure from repeating
         a mutation that has no server-side replay protection (resource sharing).

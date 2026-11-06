@@ -1458,14 +1458,19 @@ def parse_access_rules(data: Any) -> AccessRules:
     )
 
 
-def build_access_rule_items(items: Iterable[AccessRule]) -> list[Any]:
-    """Serialize a complete rule library for ``PUT /v1/me/access-rules``."""
-    rules = list(items)
-    for rule in rules:
+def build_access_rules_body(version: int, items: Iterable[AccessRule]) -> dict[str, Any]:
+    """Build ``PUT /v1/me/access-rules``; ``quick_share_rule_id`` is never sent."""
+    validate_nonnegative_int(version, "version")
+    rules = []
+    for rule in items:
         if not isinstance(rule, AccessRule):
             raise ValueError("items: every rule must be an AccessRule")
         require_utf8(rule.name, "access rule name")
-    return [_serialize_value(rule) for rule in rules]
+        data = _serialize_value(rule)
+        if not data.get("allowed_emails", True):
+            del data["allowed_emails"]  # the API requires one or more; empty means none
+        rules.append(data)
+    return {"version": version, "items": rules}
 
 
 def require_utf8(value: str | None, field: str) -> None:
@@ -1494,15 +1499,13 @@ def build_inbox_state_body(
 ) -> dict[str, Any]:
     """Build ``PUT /v1/me/inbox-state``; ``dismissed`` is the complete list."""
     validate_nonnegative_int(version, "version")
-    body: dict[str, Any] = {
+    if seen_through is not None and seen_through.utcoffset() is None:
+        raise ValueError("seen_through: must be timezone-aware")
+    return build_body({
         "version": version,
         "dismissed": build_string_list(dismissed, "dismissed", allow_empty=True),
-    }
-    if seen_through is not None:
-        if seen_through.utcoffset() is None:
-            raise ValueError("seen_through: must be timezone-aware")
-        body["seen_through"] = seen_through.isoformat()
-    return body
+        "seen_through": seen_through,
+    })
 
 
 def _parse_received_link(data: dict[str, Any]) -> ReceivedLink:
@@ -1527,18 +1530,21 @@ def parse_received_history(data: Any) -> ReceivedHistory:
 def build_received_history_body(version: int, items: Iterable[ReceivedLink]) -> dict[str, Any]:
     """Build ``PUT /v1/me/received-history``; ``cleared_at`` is never sent."""
     validate_nonnegative_int(version, "version")
-    links = list(items)
-    for link in links:
+    links = []
+    for link in items:
         if not isinstance(link, ReceivedLink):
             raise ValueError("items: every entry must be a ReceivedLink")
         require_utf8(link.name, "received link name")
-    return {"version": version, "items": [_serialize_value(link) for link in links]}
+        links.append(_serialize_value(link))
+    return {"version": version, "items": links}
 
 
 def build_link_defaults(
-    link_defaults: LinkDefaults | None, custom_domain: str | None
+    link_defaults: LinkDefaults | None | UnsetType, custom_domain: str | None
 ) -> dict[str, Any]:
-    """``None`` clears saved defaults; an object replaces them whole."""
+    """``UNSET`` keeps saved defaults, ``None`` clears them, an object replaces them whole."""
+    if isinstance(link_defaults, UnsetType):
+        return {}
     if link_defaults is not None and not isinstance(link_defaults, LinkDefaults):
         raise ValueError("link_defaults: must be a LinkDefaults or None")
     if custom_domain is not None:
