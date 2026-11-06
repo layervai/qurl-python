@@ -1419,12 +1419,27 @@ def _parse_sync_items(
         raise unexpected_response(f"invalid {what} item") from None
 
 
+def _require_types(data: dict[str, Any], strs: tuple[str, ...], ints: tuple[str, ...] = ()) -> None:
+    """Raise TypeError (reported as unexpected_response) for mistyped required fields."""
+    if any(not isinstance(data[k], str) for k in strs) or any(
+        not isinstance(data[k], int) or isinstance(data[k], bool) for k in ints
+    ):
+        raise TypeError("mistyped field")
+
+
 def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
+    _require_types(data, ("id", "name", "mode"))
     limits = data.get("link_limits")
     payment = data.get("payment")
     allowed_emails = data.get("allowed_emails")
-    if allowed_emails is not None and not isinstance(allowed_emails, list):
+    if allowed_emails is not None and (
+        not isinstance(allowed_emails, list) or any(not isinstance(e, str) for e in allowed_emails)
+    ):
         raise TypeError("allowed_emails")
+    if limits is not None:
+        _require_types(limits, ("expires_in",))
+    if payment is not None:
+        _require_types(payment, ("price_id",), ("access_seconds",))
     return AccessRule(
         id=data["id"],
         name=data["name"],
@@ -1474,7 +1489,11 @@ def build_access_rules_body(version: int, items: Iterable[AccessRule]) -> dict[s
 
 
 def require_utf8(value: str | None, field: str) -> None:
-    """Refuse lone surrogates, which JSON would carry as a different string."""
+    """Refuse lone surrogates, which JSON would carry as a different string.
+
+    Applied to free-text display names only; the service restricts the other
+    fields (ids, CRIDs, domains, inbox keys) to patterns that refuse them anyway.
+    """
     try:
         if value is not None:
             value.encode("utf-8")
@@ -1509,6 +1528,7 @@ def build_inbox_state_body(
 
 
 def _parse_received_link(data: dict[str, Any]) -> ReceivedLink:
+    _require_types(data, ("crid",), ("opened_at",))
     return ReceivedLink(
         crid=data["crid"],
         opened_at=data["opened_at"],

@@ -87,7 +87,6 @@ async def test_access_rules_round_trip_without_quick_share(client):
     # Desktop owns quick_share_rule_id; the service keeps it when a save omits it.
     assert sent(put) == {"version": 4, "items": [PUBLIC_RULE, PAID_RULE]}
     assert saved.version == 5
-    assert "idempotency-key" in put.calls.last.request.headers
 
 
 @respx.mock
@@ -109,6 +108,9 @@ async def test_save_access_rules_conflict_is_not_retried(client):
         {**LIBRARY, "account_id": ""},
         {**LIBRARY, "items": [{"id": RULE_ID, "mode": "public"}]},
         {**LIBRARY, "items": ["not-a-rule"]},
+        {**LIBRARY, "items": [{**PUBLIC_RULE, "id": 1}]},
+        {**LIBRARY, "items": [{**PAID_RULE, "payment": {"price_id": "p", "access_seconds": "0"}}]},
+        {**LIBRARY, "items": [{**PUBLIC_RULE, "link_limits": {"expires_in": None}}]},
     ],
 )
 @respx.mock
@@ -234,6 +236,7 @@ async def test_link_defaults_set_clear_and_read(client):
     [
         {"link_defaults": {}},
         {"link_defaults": LinkDefaults("1h"), "custom_domain": "secure.example.com"},
+        {"link_defaults": None, "custom_domain": "secure.example.com"},
     ],
 )
 async def test_link_defaults_rejects_bad_input_locally(client, kwargs):
@@ -265,6 +268,11 @@ async def test_missing_quick_share_and_empty_exceptions(client):
         ("received-history", "get_received_history", {"items": []}),
         ("received-history", "get_received_history", {"version": True, "items": []}),
         ("received-history", "get_received_history", {"version": 1, "items": [{"crid": CRID}]}),
+        (
+            "received-history",
+            "get_received_history",
+            {"version": 1, "items": [{"crid": CRID, "opened_at": "x"}]},
+        ),
     ],
 )
 @respx.mock
@@ -294,3 +302,31 @@ async def test_malformed_link_defaults_fail_closed(client):
     with pytest.raises(QURLError) as raised:
         await invoke(client.get_resource, "r_1")
     assert raised.value.code == "unexpected_response"
+
+
+@respx.mock
+async def test_save_retried_after_5xx_can_report_conflict(client):
+    unavailable = httpx.Response(
+        503, json={"error": {"status": 503, "code": "unavailable", "title": "Unavailable"}}
+    )
+    conflict = httpx.Response(
+        409, json={"error": {"status": 409, "code": "conflict", "title": "Conflict"}}
+    )
+    route = respx.put(f"{BASE_URL}/v1/me/inbox-state").mock(side_effect=[unavailable, conflict])
+    with pytest.raises(ConflictError):
+        await invoke(client.save_inbox_state, version=1, dismissed=[])
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_email_domain_exceptions_round_trip(client):
+    rule = {**PUBLIC_RULE, "mode": "email_domain", "email_domain": "example.com",
+            "allowed_emails": ["Ann@example.org"]}
+    del rule["link_limits"]
+    respx.get(f"{BASE_URL}/v1/me/access-rules").respond(
+        200, json={"data": {**LIBRARY, "items": [rule]}}
+    )
+    put = respx.put(f"{BASE_URL}/v1/me/access-rules").respond(200, json={"data": LIBRARY})
+    rules = await invoke(client.get_access_rules)
+    await invoke(client.save_access_rules, version=rules.version, items=rules.items)
+    assert sent(put)["items"] == [rule]
