@@ -487,7 +487,7 @@ def _require_valid_tags(tags: list[str] | None) -> None:
 
 
 def validate_resource_name(name: str | None) -> None:
-    """Mirror the API's resource-name shape rules; length stays server-side."""
+    """Mirror the API's ValidatePreviewName rule (100 characters, one line, no hidden chars)."""
     if name is None:
         return
     validate_required_string(name, "name")
