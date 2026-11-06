@@ -182,13 +182,15 @@ def _serialize_value(v: Any) -> Any:
     if isinstance(v, datetime):
         return v.isoformat()
     if dataclasses.is_dataclass(v) and not isinstance(v, type):
-        data = {
-            f.name: _serialize_value(getattr(v, f.name))
-            for f in dataclasses.fields(v)
-            if getattr(v, f.name) is not None and f.name != "extra"
-        }
-        # ``extra`` holds response fields the SDK does not model; send them back as read.
-        return {**getattr(v, "extra", {}), **data}
+        data: dict[str, Any] = {}
+        for f in dataclasses.fields(v):
+            value = getattr(v, f.name)
+            if f.metadata.get("unmodeled"):
+                # Response fields the SDK does not model: send them back as read.
+                data = {**value, **data}
+            elif value is not None:
+                data[f.name] = _serialize_value(value)
+        return data
     if isinstance(v, list):
         return [_serialize_value(item) for item in v]
     if isinstance(v, dict):
@@ -1435,7 +1437,7 @@ def _require_types(data: dict[str, Any], strs: tuple[str, ...], ints: tuple[str,
 
 def _unmodeled(data: dict[str, Any], cls: type[Any]) -> dict[str, Any]:
     """Keep the fields ``cls`` does not model so a save sends them back unchanged."""
-    known = {f.name for f in dataclasses.fields(cls)} - {"extra"}
+    known = {f.name for f in dataclasses.fields(cls) if not f.metadata.get("unmodeled")}
     return {k: v for k, v in data.items() if k not in known}
 
 

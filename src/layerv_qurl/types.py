@@ -765,7 +765,9 @@ class AccessRuleLinkLimits:
     one_time_use: bool | None = None
     session_duration: str | None = None
     # Fields this SDK does not model, sent back as read on save; excluded from ==.
-    extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
 
 
 @dataclass
@@ -775,7 +777,9 @@ class AccessRulePayment:
     price_id: str
     access_seconds: int
     # Fields this SDK does not model, sent back as read on save; excluded from ==.
-    extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
 
 
 @dataclass
@@ -799,7 +803,9 @@ class AccessRule:
     approval_expires_in: str | None = None
     payment: AccessRulePayment | None = None
     # Fields this SDK does not model, sent back as read on save; excluded from ==.
-    extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
 
 
 @dataclass
