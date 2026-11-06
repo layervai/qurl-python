@@ -110,6 +110,11 @@ def test_empty_name_rejected_before_sending(client: QURLClient) -> None:
     route = respx.post(url__startswith=BASE_URL)
     attempts: list[Callable[[], Any]] = [
         lambda: client.protect_url(TARGET, name=" "),
+        lambda: client.protect_url(TARGET, name=" Team"),
+        lambda: client.protect_url(TARGET, name="Team\ndashboard"),
+        lambda: client.create_resource(
+            resource_type="tunnel", slug="prod", find_or_create=True, name=""
+        ),
         lambda: client.create_resource(target_url=TARGET, name=""),
         lambda: client.create_portal_for_url(TARGET, name=""),
         lambda: client.create(TARGET, name=" "),
@@ -141,3 +146,15 @@ def test_name_required_refusal_is_a_validation_error(client: QURLClient) -> None
         client.protect_url(TARGET)
     assert excinfo.value.status == 400
     assert excinfo.value.code == "name_required"
+
+
+@respx.mock
+async def test_async_batch_create_and_empty_name(async_client: AsyncQURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/qurls/batch").mock(
+        return_value=httpx.Response(201, json={"data": _BATCH})
+    )
+    await async_client.batch_create([{"target_url": TARGET, "name": "Team dashboard"}])
+    assert _sent_name(route) == "Team dashboard"
+    with pytest.raises(ValueError, match="name"):
+        await async_client.protect_url(TARGET, name="")
+    assert route.call_count == 1

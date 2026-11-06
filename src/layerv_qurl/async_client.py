@@ -163,12 +163,12 @@ class AsyncQURLClient:
         async def main():
             async with AsyncQURLClient(api_key="lv_live_xxx") as client:
                 # Portal flow
-                resource = await client.protect_url("https://internal.example.com")
+                resource = await client.protect_url("https://internal.example.com", name="App")
                 portal = await resource.create_portal(valid_for="5m")
                 handle = await client.enter_portal(portal.link)
 
                 # REST-shaped compatibility surface
-                result = await client.create(target_url="https://example.com")
+                result = await client.create(target_url="https://example.com", name="Example")
                 access = await client.resolve("at_k8xqp9h2sj9lx7r4a")
 
         asyncio.run(main())
@@ -240,7 +240,7 @@ class AsyncQURLClient:
         then mint short-lived links with
         :meth:`AsyncProtectedResource.create_portal`::
 
-            resource = await client.protect_url("https://internal.example.com")
+            resource = await client.protect_url("https://internal.example.com", name="Internal app")
             portal = await resource.create_portal(valid_for="5m")
         """
         resp = await self._request(

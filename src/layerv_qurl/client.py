@@ -163,7 +163,7 @@ class QURLClient:
 
         # Portal flow: protect a private URL once, then mint short-lived
         # portal links for it. Recipients need no LayerV credentials.
-        resource = client.protect_url("https://internal.example.com/dashboard")
+        resource = client.protect_url("https://internal.example.com/dashboard", name="Dashboard")
         portal = resource.create_portal(valid_for="5m")
         print(portal.link)  # Share this link
 
@@ -172,7 +172,7 @@ class QURLClient:
         print(handle.resource_url)
 
         # REST-shaped compatibility surface
-        result = client.create(target_url="https://example.com", expires_in="24h")
+        result = client.create(target_url="https://example.com", name="Example", expires_in="24h")
         access = client.resolve("at_k8xqp9h2sj9lx7r4a")
         qurl = client.extend(saved_crid, "7d")
         qurl = client.update(saved_crid, description="updated")
@@ -250,7 +250,7 @@ class QURLClient:
         Protect the URL once, then mint short-lived links for it with
         :meth:`ProtectedResource.create_portal`::
 
-            resource = client.protect_url("https://internal.example.com/dashboard")
+            resource = client.protect_url("https://internal.example.com/app", name="App")
             portal = resource.create_portal(valid_for="5m")
             share(portal.link)
 
