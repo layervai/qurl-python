@@ -87,6 +87,7 @@ from layerv_qurl._utils import (
     validate_portal_target_url,
     validate_required_string,
     validate_resource_locator,
+    validate_resource_name,
     validate_resource_qurl_ids,
     validate_update_input,
     validate_webhook_url,
@@ -224,6 +225,7 @@ class AsyncQURLClient:
         self,
         target_url: str,
         *,
+        name: str | None = None,
         description: str | None = None,
         tags: builtins.list[str] | None = None,
         custom_domain: str | None = None,
@@ -246,6 +248,7 @@ class AsyncQURLClient:
             "/v1/resources",
             body=build_protect_body(
                 target_url=target_url,
+                name=name,
                 description=description,
                 tags=tags,
                 custom_domain=custom_domain,
@@ -371,6 +374,7 @@ class AsyncQURLClient:
         self,
         target_url: str,
         *,
+        name: str | None = None,
         valid_for: str | timedelta | None = None,
         label: str | None = None,
         one_time_use: bool | None = None,
@@ -385,6 +389,7 @@ class AsyncQURLClient:
         """
         validate_optional_bool(private, "private")
         validate_portal_target_url(target_url)
+        validate_resource_name(name)
         body = build_portal_body(
             valid_for=valid_for,
             label=label,
@@ -393,6 +398,8 @@ class AsyncQURLClient:
             session_duration=session_duration,
         )
         body["target_url"] = target_url
+        if name is not None:
+            body["name"] = name
         if private is not None:
             body["private"] = private
         resp = await self._request(
@@ -425,6 +432,7 @@ class AsyncQURLClient:
         self,
         target_url: str,
         *,
+        name: str | None = None,
         resource_type: str | None = None,
         expires_in: str | None = None,
         label: str | None = None,
@@ -449,6 +457,11 @@ class AsyncQURLClient:
 
         Args:
             target_url: The URL to protect. Max length 2048.
+            name: Public name recipients see on the qURL page, in link
+                previews, and on their saved passkey (``description`` stays
+                a private owner note). Required by the API when this call
+                creates a resource (HTTP 400 ``name_required`` otherwise);
+                ignored when an existing resource is reused.
             resource_type: Resource type to create. Defaults to ``"url"``
                 server-side. Public callers usually omit this.
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``). The API
@@ -468,6 +481,7 @@ class AsyncQURLClient:
         """
         validate_create_input(
             target_url=target_url,
+            name=name,
             label=label,
             max_sessions=max_sessions,
             custom_domain=custom_domain,
@@ -476,6 +490,7 @@ class AsyncQURLClient:
             {
                 "type": resource_type,
                 "target_url": target_url,
+                "name": name,
                 "expires_in": expires_in,
                 "label": label,
                 "one_time_use": one_time_use,
@@ -815,6 +830,7 @@ class AsyncQURLClient:
             try:
                 validate_create_input(
                     target_url=item["target_url"],
+                    name=item.get("name"),
                     label=item.get("label"),
                     max_sessions=item.get("max_sessions"),
                     custom_domain=item.get("custom_domain"),
@@ -932,6 +948,7 @@ class AsyncQURLClient:
     async def create_resource(
         self,
         *,
+        name: str | None = None,
         resource_type: str | None = None,
         target_url: str | None = None,
         description: str | None = None,
@@ -950,9 +967,11 @@ class AsyncQURLClient:
         Tunnel resources use ``slug`` and may set ``find_or_create=True``.
 
         ``find_or_create=False`` is treated the same as omitting it because
-        the API default is false.
+        the API default is false. ``name`` is the public resource name, as
+        on :meth:`QURLClient.protect_url`.
         """
         validate_optional_bool(private, "private")
+        validate_resource_name(name)
         validate_alias(alias)
         if target_url is not None:
             validate_create_input(target_url=target_url, custom_domain=custom_domain)
@@ -965,6 +984,7 @@ class AsyncQURLClient:
         if find_or_create is False and not any(
             value is not None
             for value in (
+                name,
                 resource_type,
                 target_url,
                 description,
@@ -983,6 +1003,7 @@ class AsyncQURLClient:
         body = build_body(
             {
                 "private": private,
+                "name": name,
                 "type": resource_type,
                 "target_url": target_url,
                 "description": description,

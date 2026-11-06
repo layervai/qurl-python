@@ -484,9 +484,16 @@ def _require_valid_tags(tags: list[str] | None) -> None:
             )
 
 
+def validate_resource_name(name: str | None) -> None:
+    """Shape-check a public resource name; the API owns length and grammar."""
+    if name is not None and (not isinstance(name, str) or not name.strip()):
+        raise ValueError("name: must be a non-empty string")
+
+
 def validate_create_input(
     *,
     target_url: str,
+    name: str | None = None,
     label: str | None = None,
     max_sessions: int | None = None,
     custom_domain: str | None = None,
@@ -501,6 +508,7 @@ def validate_create_input(
     # `target_url[:32]!r` trap for non-subscriptable inputs (None, int,
     # bool, ...), surfacing a clean ValueError instead of TypeError.
     _require_http_url(target_url, "target_url")
+    validate_resource_name(name)
     _require_max_length(label, "label", MAX_LABEL)
     _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
     _require_max_sessions_in_range(max_sessions)
@@ -774,6 +782,7 @@ def validate_portal_target_url(target_url: str) -> None:
 def build_protect_body(
     *,
     target_url: str,
+    name: str | None,
     description: str | None,
     tags: list[str] | None,
     custom_domain: str | None,
@@ -782,6 +791,7 @@ def build_protect_body(
 ) -> dict[str, Any]:
     """Validate protect-url inputs and build the create-resource request body."""
     validate_portal_target_url(target_url)
+    validate_resource_name(name)
     validate_optional_bool(private, "private")
     validate_update_input(
         description=description, tags=tags, custom_domain=custom_domain
@@ -790,6 +800,7 @@ def build_protect_body(
     return build_body(
         {
             "target_url": target_url,
+            "name": name,
             "description": description,
             "tags": tags,
             "custom_domain": custom_domain,

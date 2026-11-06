@@ -769,6 +769,8 @@ class BatchCreateItem(_BatchCreateItemRequired, total=False):
     request time via ``_serialize_value``.
     """
 
+    name: str
+    """Public resource name; required by the API when the item creates one."""
     type: str
     expires_in: str
     label: str

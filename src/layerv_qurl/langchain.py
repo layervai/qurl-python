@@ -36,19 +36,23 @@ class CreateQURLTool(BaseTool):
     description: str = (
         "Create a qURL — a secure, time-limited access link. "
         "Input should be a JSON string with 'target_url' (required), "
-        "and optionally 'expires_in' (e.g. '24h', '7d'), 'label'."
+        "'name' (required: a short public title recipients see for the "
+        "resource, never a secret), and optionally 'expires_in' "
+        "(e.g. '24h', '7d'), 'label'."
     )
     client: Any = None  # QURLClient, typed as Any for Pydantic compatibility
 
     def _run(
         self,
         target_url: str,
+        name: str,
         expires_in: str = "24h",
         label: str | None = None,
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> str:
         result = self.client.create(
             target_url=target_url,
+            name=name,
             expires_in=expires_in,
             label=label,
         )

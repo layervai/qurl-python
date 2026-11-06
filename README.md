@@ -144,11 +144,22 @@ from layerv_qurl import QURLClient
 
 client = QURLClient(api_key="lv_live_xxx")
 
-resource = client.protect_url("https://internal.example.com/dashboard")
+resource = client.protect_url(
+    "https://internal.example.com/dashboard",
+    name="Team dashboard",  # public name recipients see; required to create
+)
 portal = resource.create_portal(valid_for="5m")
 
 print(portal.link)  # Share this link — recipients need no credentials
 ```
+
+`name` is the public name recipients see on the qURL page, in link previews,
+and on the passkey they save; `description` stays a private owner note. The
+API requires it whenever a call creates a resource (`protect_url`,
+`create_resource`, `create_portal_for_url`, `create`, and each `batch_create`
+item) and refuses a create without it with a `ValidationError` whose `status`
+is 400 and `code` is `"name_required"`; nothing is written. It is ignored when
+the call reuses an existing resource.
 
 That is the core flow:
 
@@ -184,7 +195,7 @@ and returns both the portal and a reusable resource handle:
 
 ```python
 portal, resource = client.create_portal_for_url(
-    "https://internal.example.com/dashboard", valid_for="5m"
+    "https://internal.example.com/dashboard", name="Team dashboard", valid_for="5m"
 )
 ```
 
@@ -223,7 +234,9 @@ asking for a different value returns an API error. An omitted response
 `private` remains `None`, not an assertion that the resource is public.
 
 ```python
-resource = client.protect_url("https://internal.example.com/dashboard", private=True)
+resource = client.protect_url(
+    "https://internal.example.com/dashboard", name="Team dashboard", private=True
+)
 link = client.share_resource(resource.id, ttl=timedelta(minutes=5))
 print(link.link)
 # Revoke only this link, leaving the resource and other links intact:
@@ -283,7 +296,9 @@ from layerv_qurl import AsyncQURLClient
 
 async def main():
     async with AsyncQURLClient(api_key="lv_live_xxx") as client:
-        resource = await client.protect_url("https://internal.example.com/dashboard")
+        resource = await client.protect_url(
+            "https://internal.example.com/dashboard", name="Team dashboard"
+        )
         portal = await resource.create_portal(valid_for="5m")
         print(portal.link)
 
@@ -301,6 +316,7 @@ if you already build on them:
 # Create a protected link (portal equivalent: create_portal_for_url)
 result = client.create(
     target_url="https://api.example.com/data",
+    name="Agent data API",
     expires_in="24h",
     label="API access for agent",
 )
@@ -394,6 +410,7 @@ stopping or looping. Page request errors propagate to the caller.
 resource = client.create_resource(
     resource_type="url",
     target_url="https://api.example.com/data",
+    name="Reports API",
     alias="reports-api",
 )
 
