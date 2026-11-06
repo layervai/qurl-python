@@ -159,7 +159,8 @@ API requires it whenever a call creates a resource (`protect_url`,
 `create_resource`, `create_portal_for_url`, `create`, and each `batch_create`
 item) and refuses a create without it with a `ValidationError` whose `status`
 is 400 and `code` is `"name_required"`; nothing is written. It is ignored when
-the call reuses an existing resource.
+the call reuses an existing resource. The SDK sends `name` only when you pass
+it, and it needs a qURL API version that accepts the field.
 
 That is the core flow:
 

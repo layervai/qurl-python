@@ -489,8 +489,7 @@ def validate_resource_name(name: str | None) -> None:
     """Mirror the API's resource-name shape rules; length stays server-side."""
     if name is None:
         return
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("name: must be a non-empty string")
+    validate_required_string(name, "name")
     if name.strip() != name or any(unicodedata.category(c) == "Cc" for c in name):
         raise ValueError(
             "name: must be one line without control characters or surrounding whitespace"

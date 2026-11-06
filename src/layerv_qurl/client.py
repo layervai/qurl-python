@@ -263,9 +263,10 @@ class QURLClient:
             target_url: The private URL to protect. Max length 2048.
             name: Public name recipients see on the qURL page, in link
                 previews, and on their saved passkey (``description`` stays
-                a private owner note). Required by the API when this call
-                creates a resource (HTTP 400 ``name_required`` otherwise);
-                ignored when an existing resource is reused.
+                a private owner note). Sent only when given, and needs a
+                qURL API version that accepts it. The API requires it when
+                this call creates a resource (HTTP 400 ``name_required``
+                otherwise) and ignores it when a resource is reused.
             description: Optional resource-level metadata. Max length 500.
             tags: Optional resource-level tags. Max 10 items.
             custom_domain: Custom domain already verified in LayerV.
@@ -576,11 +577,7 @@ class QURLClient:
 
         Args:
             target_url: The URL to protect. Max length 2048.
-            name: Public name recipients see on the qURL page, in link
-                previews, and on their saved passkey (``description`` stays
-                a private owner note). Required by the API when this call
-                creates a resource (HTTP 400 ``name_required`` otherwise);
-                ignored when an existing resource is reused.
+            name: Public resource name, as on :meth:`protect_url`.
             resource_type: Resource type to create. Defaults to ``"url"``
                 server-side. Public callers usually omit this.
             expires_in: Duration string (e.g. ``"24h"``, ``"7d"``). The API
