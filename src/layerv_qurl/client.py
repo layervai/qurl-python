@@ -1943,7 +1943,8 @@ class QURLClient:
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
 
-        ``retry_statuses`` adds statuses the caller knows are safe to retry.
+        ``retry_statuses`` adds statuses that are safe to repeat for this method
+        and endpoint; it also widens the POST/PATCH set, so pass it with care.
 
         ``retry=False`` prevents an ambiguous transport failure from repeating
         a mutation that has no server-side replay protection (resource sharing).

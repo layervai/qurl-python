@@ -1099,11 +1099,15 @@ def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
 def _parse_link_defaults(data: Any) -> LinkDefaults | None:
     if data is None:
         return None
-    if not isinstance(data, dict) or not isinstance(data.get("expires_in"), str):
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("expires_in"), str)
+        or not isinstance(data.get("one_time_use", False), bool)
+    ):
         raise unexpected_response("invalid resource link_defaults")
     return LinkDefaults(
         expires_in=data["expires_in"],
-        one_time_use=data.get("one_time_use") is True,
+        one_time_use=data.get("one_time_use", False),
         session_duration=data.get("session_duration"),
         rule_name=data.get("rule_name"),
     )
@@ -1480,7 +1484,7 @@ def build_access_rules_body(version: int, items: Iterable[AccessRule]) -> dict[s
     for rule in items:
         if not isinstance(rule, AccessRule):
             raise ValueError("items: every rule must be an AccessRule")
-        require_utf8(rule.name, "access rule name")
+        _require_utf8(rule.name, "access rule name")
         data = _serialize_value(rule)
         if not data.get("allowed_emails", True):
             del data["allowed_emails"]  # the API requires one or more; empty means none
@@ -1488,7 +1492,7 @@ def build_access_rules_body(version: int, items: Iterable[AccessRule]) -> dict[s
     return {"version": version, "items": rules}
 
 
-def require_utf8(value: str | None, field: str) -> None:
+def _require_utf8(value: str | None, field: str) -> None:
     """Refuse lone surrogates, which JSON would carry as a different string.
 
     Applied to free-text display names only; the service restricts the other
@@ -1554,7 +1558,7 @@ def build_received_history_body(version: int, items: Iterable[ReceivedLink]) -> 
     for link in items:
         if not isinstance(link, ReceivedLink):
             raise ValueError("items: every entry must be a ReceivedLink")
-        require_utf8(link.name, "received link name")
+        _require_utf8(link.name, "received link name")
         links.append(_serialize_value(link))
     return {"version": version, "items": links}
 
@@ -1570,7 +1574,7 @@ def build_link_defaults(
     if custom_domain is not None:
         raise ValueError("link_defaults and custom_domain must be updated separately")
     if link_defaults is not None:
-        require_utf8(link_defaults.rule_name, "link_defaults.rule_name")
+        _require_utf8(link_defaults.rule_name, "link_defaults.rule_name")
     return {"link_defaults": _serialize_value(link_defaults)}
 
 

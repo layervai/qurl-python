@@ -293,11 +293,14 @@ async def test_clear_received_history_raises_after_retries(client):
     assert route.call_count == 3  # max_retries=2
 
 
+@pytest.mark.parametrize(
+    "link_defaults", [{"one_time_use": True}, {"expires_in": "1h", "one_time_use": "true"}]
+)
 @respx.mock
-async def test_malformed_link_defaults_fail_closed(client):
+async def test_malformed_link_defaults_fail_closed(client, link_defaults):
     respx.get(f"{BASE_URL}/v1/resources/r_1").respond(
         200, json={"data": {"resource": {"resource_id": "r_1", "status": "active",
-                                         "link_defaults": {"one_time_use": True}}}}
+                                         "link_defaults": link_defaults}}}
     )
     with pytest.raises(QURLError) as raised:
         await invoke(client.get_resource, "r_1")
@@ -330,3 +333,17 @@ async def test_email_domain_exceptions_round_trip(client):
     rules = await invoke(client.get_access_rules)
     await invoke(client.save_access_rules, version=rules.version, items=rules.items)
     assert sent(put)["items"] == [rule]
+
+
+@pytest.mark.parametrize(
+    "method,kwargs",
+    [
+        ("save_received_history", {"version": 0, "items": [{"crid": CRID, "opened_at": 1}]}),
+        ("save_received_history", {"version": 0, "items": [ReceivedLink(CRID, 1, "bad\ud800")]}),
+        ("update_resource", {"link_defaults": LinkDefaults("1h", rule_name="bad\ud800")}),
+    ],
+)
+async def test_bad_write_input_rejected_locally(client, method, kwargs):
+    args = ("r_1",) if method == "update_resource" else ()
+    with pytest.raises(ValueError):
+        await invoke(getattr(client, method), *args, **kwargs)
