@@ -21,13 +21,17 @@ from layerv_qurl._utils import (
     RETRYABLE_STATUS_NON_IDEMPOTENT,
     UNSET,
     UnsetType,
+    build_access_rules_body,
     build_body,
     build_credential_scopes,
     build_device_grants,
+    build_inbox_state_body,
+    build_link_defaults,
     build_list_params,
     build_portal_body,
     build_protect_body,
     build_query_params,
+    build_received_history_body,
     build_share_body,
     build_string_list,
     check_response_crid,
@@ -40,6 +44,7 @@ from layerv_qurl._utils import (
     mask_key,
     parse_access_code,
     parse_access_code_list_output,
+    parse_access_rules,
     parse_access_token,
     parse_api_key,
     parse_api_key_list_output,
@@ -54,6 +59,7 @@ from layerv_qurl._utils import (
     parse_domain_list_output,
     parse_domain_verify_output,
     parse_error,
+    parse_inbox_state,
     parse_invoice_list_output,
     parse_list_output,
     parse_mint_output,
@@ -61,6 +67,7 @@ from layerv_qurl._utils import (
     parse_portal_session,
     parse_quota,
     parse_qurl,
+    parse_received_history,
     parse_redeem_access_code_output,
     parse_resolve_output,
     parse_resource,
@@ -110,6 +117,8 @@ if TYPE_CHECKING:
         AccessCode,
         AccessCodeListOutput,
         AccessPolicy,
+        AccessRule,
+        AccessRules,
         AccessToken,
         APIKey,
         APIKeyListOutput,
@@ -126,14 +135,18 @@ if TYPE_CHECKING:
         Domain,
         DomainListOutput,
         DomainVerifyOutput,
+        InboxState,
         Invoice,
         InvoiceListOutput,
+        LinkDefaults,
         ListOutput,
         MintOutput,
         Portal,
         PortalSession,
         Quota,
         QURLStatus,
+        ReceivedHistory,
+        ReceivedLink,
         RedeemAccessCodeOutput,
         ResolveOutput,
         Resource,
@@ -1141,6 +1154,7 @@ class QURLClient:
         allowed_device_keys: Iterable[str] | None = None,
         allowed_device_keys_add: Iterable[str] | None = None,
         allowed_device_keys_remove: Iterable[str] | None = None,
+        link_defaults: LinkDefaults | None | UnsetType = UNSET,
         idempotency_key: str | None = None,
     ) -> Resource:
         """Update resource metadata.
@@ -1170,10 +1184,11 @@ class QURLClient:
             allowed_device_keys_remove=allowed_device_keys_remove,
             custom_domain=custom_domain,
         ))
+        body.update(build_link_defaults(link_defaults, custom_domain))
         require_nonempty_update(
             body,
             "update_resource",
-            "description, tags, custom_domain, preserve_host, alias",
+            "description, tags, custom_domain, preserve_host, alias, link_defaults",
         )
         resp = self._request(
             "PATCH",
@@ -1723,6 +1738,104 @@ class QURLClient:
         )
         return parse_customer(resp)
 
+    # --- Account sync (saved rules, inbox state, received history) ---
+    # Saves are version-checked and the service never replays them, so they are
+    # never retried automatically: a repeated save that landed would raise
+    # ConflictError. After a lost response, re-read before saving again.
+
+    def get_access_rules(self) -> AccessRules:
+        """Get the account's saved access rules and the built-in choices.
+
+        Accepts an account JWT, an account API key, or a registered device
+        linked to the account (``qurl:read``).
+        """
+        resp = self._request("GET", "/v1/me/access-rules")
+        return parse_access_rules(resp)
+
+    def save_access_rules(
+        self,
+        *,
+        version: int,
+        items: Iterable[AccessRule],
+    ) -> AccessRules:
+        """Replace the custom rule library if ``version`` matches the last read.
+
+        ``items`` is the complete library; built-ins are read-only. A stale
+        version raises :class:`ConflictError`: read, merge, and retry. The
+        saved quick-share choice is Desktop's and is never sent; the service
+        keeps it unless ``items`` drops the custom rule it names.
+        """
+        resp = self._request(
+            "PUT",
+            "/v1/me/access-rules",
+            body=build_access_rules_body(version, items),
+            retry=False,
+        )
+        return parse_access_rules(resp)
+
+    def get_inbox_state(self) -> InboxState:
+        """Get the approvals-inbox state. JWT auth is required by the API."""
+        resp = self._request("GET", "/v1/me/inbox-state")
+        return parse_inbox_state(resp)
+
+    def save_inbox_state(
+        self,
+        *,
+        version: int,
+        dismissed: Iterable[str],
+        seen_through: datetime | None = None,
+    ) -> InboxState:
+        """Replace the inbox state at ``version``. JWT auth is required by the API.
+
+        ``dismissed`` is the complete cleared list, oldest first; the service
+        keeps the newest 500 keys. ``seen_through`` never moves backwards, and
+        omitting it keeps the stored time. A stale version raises
+        :class:`ConflictError`: read, merge, and retry.
+        """
+        resp = self._request(
+            "PUT",
+            "/v1/me/inbox-state",
+            body=build_inbox_state_body(version, dismissed, seen_through),
+            retry=False,
+        )
+        return parse_inbox_state(resp)
+
+    def get_received_history(self) -> ReceivedHistory:
+        """Get the received-link history. JWT auth is required by the API."""
+        resp = self._request("GET", "/v1/me/received-history")
+        return parse_received_history(resp)
+
+    def save_received_history(
+        self,
+        *,
+        version: int,
+        items: Iterable[ReceivedLink],
+    ) -> ReceivedHistory:
+        """Replace the received-link history at ``version``. JWT auth is required.
+
+        The service merges repeated CRIDs, drops entries opened at or before
+        ``cleared_at``, and keeps the newest 200. A save that changes nothing
+        keeps the version. A stale version raises :class:`ConflictError`.
+        """
+        resp = self._request(
+            "PUT",
+            "/v1/me/received-history",
+            body=build_received_history_body(version, items),
+            retry=False,
+        )
+        return parse_received_history(resp)
+
+    def clear_received_history(self) -> ReceivedHistory:
+        """Clear the received-link history regardless of version. JWT auth is required.
+
+        The service sets ``cleared_at`` so other devices do not save older
+        entries again. A 409 from racing clears is retried like a 503.
+        """
+        resp = self._request(
+            "DELETE", "/v1/me/received-history", retry_statuses=frozenset({409})
+        )
+        return parse_received_history(resp)
+
     def create_billing_checkout(
         self, *, plan: str, idempotency_key: str | None = None
     ) -> CheckoutSession:
@@ -1804,6 +1917,7 @@ class QURLClient:
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
         retry: bool = True,
+        retry_statuses: frozenset[int] = frozenset(),
     ) -> Any:
         return self._raw_request(
             method,
@@ -1814,6 +1928,7 @@ class QURLClient:
             headers=headers,
             include_auth=include_auth,
             retry=retry,
+            retry_statuses=retry_statuses,
         )[0]
 
     def _raw_request(
@@ -1827,8 +1942,12 @@ class QURLClient:
         headers: dict[str, str] | None = None,
         include_auth: bool = True,
         retry: bool = True,
+        retry_statuses: frozenset[int] = frozenset(),
     ) -> tuple[Any, dict[str, Any] | None]:
         """Issue an HTTP request and parse the JSON envelope.
+
+        ``retry_statuses`` adds statuses that are safe to repeat for this method
+        and endpoint; it also widens the POST/PATCH set, so pass it with care.
 
         ``retry=False`` prevents an ambiguous transport failure from repeating
         a mutation that has no server-side replay protection (resource sharing).
@@ -1935,7 +2054,7 @@ class QURLClient:
                 RETRYABLE_STATUS_NON_IDEMPOTENT
                 if method in {"POST", "PATCH"}
                 else RETRYABLE_STATUS
-            )
+            ) | retry_statuses
             if response.status_code in retryable and attempt < max_retries:
                 last_error = err
                 continue
