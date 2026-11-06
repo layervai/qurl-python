@@ -18,6 +18,7 @@ import random
 import re
 import secrets
 import time
+import unicodedata
 import uuid
 from collections.abc import Iterable, Mapping, Set
 from datetime import datetime, timedelta
@@ -356,6 +357,7 @@ def require_nonempty_update(body: dict[str, Any], method: str, fields: str) -> N
 MAX_TARGET_URL = 2048
 MAX_LABEL = 500
 MAX_DESCRIPTION = 500
+MAX_RESOURCE_NAME = 100
 MAX_CUSTOM_DOMAIN = 253
 MAX_MAX_SESSIONS = 1000
 MAX_TAGS = 10
@@ -484,9 +486,26 @@ def _require_valid_tags(tags: list[str] | None) -> None:
             )
 
 
+def validate_resource_name(name: str | None) -> None:
+    """Mirror the API's ValidatePreviewName rule (100 characters, one line, no hidden chars)."""
+    if name is None:
+        return
+    validate_required_string(name, "name")
+    _require_max_length(name, "name", MAX_RESOURCE_NAME)
+    # Same rule as the service's ValidatePreviewName (100 code points; refuses
+    # Cc, Cf -- including ZWJ emoji sequences -- U+2028/9 and padding).
+    if name.strip() != name or any(
+        unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp"} for c in name
+    ):
+        raise ValueError(
+            "name: must be one line without hidden characters or surrounding whitespace"
+        )
+
+
 def validate_create_input(
     *,
     target_url: str,
+    name: str | None = None,
     label: str | None = None,
     max_sessions: int | None = None,
     custom_domain: str | None = None,
@@ -501,6 +520,7 @@ def validate_create_input(
     # `target_url[:32]!r` trap for non-subscriptable inputs (None, int,
     # bool, ...), surfacing a clean ValueError instead of TypeError.
     _require_http_url(target_url, "target_url")
+    validate_resource_name(name)
     _require_max_length(label, "label", MAX_LABEL)
     _require_max_length(custom_domain, "custom_domain", MAX_CUSTOM_DOMAIN)
     _require_max_sessions_in_range(max_sessions)
@@ -774,6 +794,7 @@ def validate_portal_target_url(target_url: str) -> None:
 def build_protect_body(
     *,
     target_url: str,
+    name: str | None,
     description: str | None,
     tags: list[str] | None,
     custom_domain: str | None,
@@ -782,6 +803,7 @@ def build_protect_body(
 ) -> dict[str, Any]:
     """Validate protect-url inputs and build the create-resource request body."""
     validate_portal_target_url(target_url)
+    validate_resource_name(name)
     validate_optional_bool(private, "private")
     validate_update_input(
         description=description, tags=tags, custom_domain=custom_domain
@@ -790,6 +812,7 @@ def build_protect_body(
     return build_body(
         {
             "target_url": target_url,
+            "name": name,
             "description": description,
             "tags": tags,
             "custom_domain": custom_domain,
