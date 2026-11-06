@@ -112,6 +112,9 @@ def test_empty_name_rejected_before_sending(client: QURLClient) -> None:
         lambda: client.protect_url(TARGET, name=" "),
         lambda: client.protect_url(TARGET, name=" Team"),
         lambda: client.protect_url(TARGET, name="Team\ndashboard"),
+        lambda: client.protect_url(TARGET, name="Team\u2028dashboard"),
+        lambda: client.protect_url(TARGET, name="Team\u202edashboard"),
+        lambda: client.protect_url(TARGET, name=123),  # type: ignore[arg-type]
         lambda: client.create_resource(
             resource_type="tunnel", slug="prod", find_or_create=True, name=""
         ),
@@ -158,3 +161,50 @@ async def test_async_batch_create_and_empty_name(async_client: AsyncQURLClient) 
     with pytest.raises(ValueError, match="name"):
         await async_client.protect_url(TARGET, name="")
     assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize(("path", "data", "call"), _CALLS)
+def test_name_left_out_when_not_given(
+    client: QURLClient, path: str, data: dict[str, Any], call: Callable[[Any], Any]
+) -> None:
+    route = respx.post(f"{BASE_URL}{path}").mock(
+        return_value=httpx.Response(201, json={"data": data})
+    )
+
+    class Unnamed:
+        """Proxy that drops the name keyword from the shared call table."""
+
+        def __getattr__(self, attr: str) -> Any:
+            method = getattr(client, attr)
+            return lambda *a, **kw: method(*a, **{k: v for k, v in kw.items() if k != "name"})
+
+    call(Unnamed())
+    assert "name" not in json.loads(route.calls[0].request.content)
+
+
+@respx.mock
+async def test_async_empty_name_rejected_before_sending(
+    async_client: AsyncQURLClient,
+) -> None:
+    route = respx.post(url__startswith=BASE_URL)
+    for name in ("", " Team", "Team\ndashboard"):
+        for attempt in (
+            lambda n=name: async_client.protect_url(TARGET, name=n),
+            lambda n=name: async_client.create_resource(target_url=TARGET, name=n),
+            lambda n=name: async_client.create_portal_for_url(TARGET, name=n),
+            lambda n=name: async_client.create(TARGET, name=n),
+            lambda n=name: async_client.batch_create([{"target_url": TARGET, "name": n}]),
+        ):
+            with pytest.raises(ValueError, match="name"):
+                await attempt()
+    assert not route.called
+
+
+@respx.mock
+def test_find_or_create_false_with_only_name_is_sent(client: QURLClient) -> None:
+    route = respx.post(f"{BASE_URL}/v1/resources").mock(
+        return_value=httpx.Response(201, json={"data": _RESOURCE})
+    )
+    client.create_resource(find_or_create=False, name="Team dashboard")
+    assert json.loads(route.calls[0].request.content) == {"name": "Team dashboard"}

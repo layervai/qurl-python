@@ -490,9 +490,12 @@ def validate_resource_name(name: str | None) -> None:
     if name is None:
         return
     validate_required_string(name, "name")
-    if name.strip() != name or any(unicodedata.category(c) == "Cc" for c in name):
+    # Same refusal set as the service's ValidatePreviewName.
+    if name.strip() != name or any(
+        unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp"} for c in name
+    ):
         raise ValueError(
-            "name: must be one line without control characters or surrounding whitespace"
+            "name: must be one line without hidden characters or surrounding whitespace"
         )
 
 
