@@ -357,6 +357,7 @@ def require_nonempty_update(body: dict[str, Any], method: str, fields: str) -> N
 MAX_TARGET_URL = 2048
 MAX_LABEL = 500
 MAX_DESCRIPTION = 500
+MAX_RESOURCE_NAME = 100
 MAX_CUSTOM_DOMAIN = 253
 MAX_MAX_SESSIONS = 1000
 MAX_TAGS = 10
@@ -490,8 +491,9 @@ def validate_resource_name(name: str | None) -> None:
     if name is None:
         return
     validate_required_string(name, "name")
-    # Same refusal set as the service's ValidatePreviewName, which refuses all
-    # of Cf -- so ZWJ emoji sequences such as a technologist emoji are refused.
+    _require_max_length(name, "name", MAX_RESOURCE_NAME)
+    # Same rule as the service's ValidatePreviewName (100 code points; refuses
+    # Cc, Cf -- including ZWJ emoji sequences -- U+2028/9 and padding).
     if name.strip() != name or any(
         unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp"} for c in name
     ):

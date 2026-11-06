@@ -159,7 +159,7 @@ API requires it whenever a call creates a resource (`protect_url`,
 `create_resource`, `create_portal_for_url`, `create`, and each `batch_create`
 item). It is ignored when the call reuses an existing resource. The SDK sends
 `name` only when you pass it, and it needs a qURL API version that accepts the
-field. Names must be one line without surrounding whitespace or hidden
+field. Names must be at most 100 characters, one line, without surrounding whitespace or hidden
 characters (control, format such as zero-width joiners, or line separators).
 
 A create without a name is refused with a `ValidationError` whose `status` is

@@ -115,6 +115,7 @@ def test_empty_name_rejected_before_sending(client: QURLClient) -> None:
         lambda: client.protect_url(TARGET, name="Team\u2028dashboard"),
         lambda: client.protect_url(TARGET, name="Team\u202edashboard"),
         lambda: client.protect_url(TARGET, name=123),  # type: ignore[arg-type]
+        lambda: client.protect_url(TARGET, name="x" * 101),
         lambda: client.create_resource(
             resource_type="tunnel", slug="prod", find_or_create=True, name=""
         ),
@@ -207,7 +208,7 @@ def test_find_or_create_false_with_only_name_is_refused(client: QURLClient) -> N
 
 
 @respx.mock
-@pytest.mark.parametrize("name", ["Café ダッシュボード", "Ünïcode — dashboard ✓"])
+@pytest.mark.parametrize("name", ["Café ダッシュボード", "Ünïcode — dashboard ✓", "x" * 100])
 def test_non_ascii_name_is_accepted(client: QURLClient, name: str) -> None:
     route = respx.post(f"{BASE_URL}/v1/resources").mock(
         return_value=httpx.Response(201, json={"data": _RESOURCE})
