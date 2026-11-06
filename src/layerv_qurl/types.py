@@ -790,7 +790,8 @@ class AccessRule:
     for ``email_domain`` mode, ``contract_id``/``payment`` for ``contract``,
     ``link_limits`` for ``public``, and ``approval_expires_in`` for ``review``
     and ``keys``. ``name`` is display text; escape it when shown. Rule fields
-    this SDK does not model are kept in ``extra`` and sent back unchanged.
+    this SDK does not model are kept in ``extra`` and sent back unchanged,
+    even if you change ``mode``.
     """
 
     id: str
