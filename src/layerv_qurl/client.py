@@ -1739,9 +1739,9 @@ class QURLClient:
         return parse_customer(resp)
 
     # --- Account sync (saved rules, inbox state, received history) ---
-    # Saves are version-checked and the service never replays them, so a save
-    # retried after a lost response can raise ConflictError although it landed:
-    # re-read before merging.
+    # Saves are version-checked and the service never replays them, so they are
+    # never retried automatically: a repeated save that landed would raise
+    # ConflictError. After a lost response, re-read before saving again.
 
     def get_access_rules(self) -> AccessRules:
         """Get the account's saved access rules and the built-in choices.
@@ -1769,6 +1769,7 @@ class QURLClient:
             "PUT",
             "/v1/me/access-rules",
             body=build_access_rules_body(version, items),
+            retry=False,
         )
         return parse_access_rules(resp)
 
@@ -1795,6 +1796,7 @@ class QURLClient:
             "PUT",
             "/v1/me/inbox-state",
             body=build_inbox_state_body(version, dismissed, seen_through),
+            retry=False,
         )
         return parse_inbox_state(resp)
 
@@ -1819,6 +1821,7 @@ class QURLClient:
             "PUT",
             "/v1/me/received-history",
             body=build_received_history_body(version, items),
+            retry=False,
         )
         return parse_received_history(resp)
 

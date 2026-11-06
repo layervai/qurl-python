@@ -18,6 +18,7 @@ from layerv_qurl import (
     LinkDefaults,
     QURLClient,
     QURLError,
+    QURLNetworkError,
     ReceivedLink,
 )
 from tests.client_support import BASE_URL
@@ -307,18 +308,26 @@ async def test_malformed_link_defaults_fail_closed(client, link_defaults):
     assert raised.value.code == "unexpected_response"
 
 
+@pytest.mark.parametrize(
+    "path,method,kwargs",
+    [
+        ("access-rules", "save_access_rules", {"version": 1, "items": []}),
+        ("inbox-state", "save_inbox_state", {"version": 1, "dismissed": []}),
+        ("received-history", "save_received_history", {"version": 1, "items": []}),
+    ],
+)
+@pytest.mark.parametrize("failure", [503, 429, httpx.ConnectError("reset")])
 @respx.mock
-async def test_save_retried_after_5xx_can_report_conflict(client):
-    unavailable = httpx.Response(
-        503, json={"error": {"status": 503, "code": "unavailable", "title": "Unavailable"}}
-    )
-    conflict = httpx.Response(
-        409, json={"error": {"status": 409, "code": "conflict", "title": "Conflict"}}
-    )
-    route = respx.put(f"{BASE_URL}/v1/me/inbox-state").mock(side_effect=[unavailable, conflict])
-    with pytest.raises(ConflictError):
-        await invoke(client.save_inbox_state, version=1, dismissed=[])
-    assert route.call_count == 2
+async def test_saves_are_never_retried(client, path, method, kwargs, failure):
+    # The client has max_retries=2; a replayed save that landed would raise ConflictError.
+    route = respx.put(f"{BASE_URL}/v1/me/{path}")
+    if isinstance(failure, int):
+        route.respond(failure, json={"error": {"status": failure, "code": "x", "title": "x"}})
+    else:
+        route.mock(side_effect=failure)
+    with pytest.raises((QURLError, QURLNetworkError)):
+        await invoke(getattr(client, method), **kwargs)
+    assert route.call_count == 1
 
 
 @respx.mock
