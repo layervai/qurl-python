@@ -118,8 +118,11 @@ async def test_unmodeled_rule_fields_round_trip(client):
     rules = await invoke(client.get_access_rules)
     assert rules.items[0].extra == {"audience": {"kind": "team", "ids": ["t1"]}, "extra": None}
     assert "audience" not in repr(rules.items[0])
+    # A modeled name in extra never overrides the modeled field, even when it is unset.
+    rules.items[1].extra["contract_id"] = "stale"
+    rules.items[1].contract_id = None
     await invoke(client.save_access_rules, version=rules.version, items=rules.items)
-    assert sent(put)["items"] == [future, paid]
+    assert sent(put)["items"] == [future, {k: v for k, v in paid.items() if k != "contract_id"}]
 
 
 @pytest.mark.parametrize(
@@ -397,7 +400,13 @@ async def test_clear_received_history_raises_after_retries(client):
 
 
 @pytest.mark.parametrize(
-    "link_defaults", [{"one_time_use": True}, {"expires_in": "1h", "one_time_use": "true"}]
+    "link_defaults",
+    [
+        {"one_time_use": True},
+        {"expires_in": "1h", "one_time_use": "true"},
+        {"expires_in": "1h", "rule_name": 5},
+        {"expires_in": "1h", "session_duration": 60},
+    ],
 )
 @respx.mock
 async def test_malformed_link_defaults_fail_closed(client, link_defaults):

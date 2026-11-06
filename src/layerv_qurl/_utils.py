@@ -186,8 +186,9 @@ def _serialize_value(v: Any) -> Any:
         for f in dataclasses.fields(v):
             value = getattr(v, f.name)
             if f.metadata.get("unmodeled"):
-                # Response fields the SDK does not model: send them back as read.
-                data = {**value, **data}
+                # Response fields the SDK does not model, sent back as read (raw JSON);
+                # a modeled name in it never overrides the modeled field, even when unset.
+                data = {**_unmodeled(value, type(v)), **data}
             elif value is not None:
                 data[f.name] = _serialize_value(value)
         return data
@@ -1107,6 +1108,7 @@ def _parse_link_defaults(data: Any) -> LinkDefaults | None:
         not isinstance(data, dict)
         or not isinstance(data.get("expires_in"), str)
         or not isinstance(data.get("one_time_use", False), bool)
+        or _mistyped(data, ("session_duration", "rule_name"), optional=True)
     ):
         raise unexpected_response("invalid resource link_defaults")
     return LinkDefaults(
@@ -1435,7 +1437,10 @@ def _mistyped(
     *,
     optional: bool = False,
 ) -> bool:
-    """Whether a field has the wrong type; ``optional`` fields may also be absent or null."""
+    """Whether a field has the wrong type; ``optional`` fields may also be absent or null.
+
+    A missing required key raises ``KeyError``: call it through ``_parse_sync_items``.
+    """
     checks = (
         [(k, str) for k in strs] + [(k, int) for k in ints] + [(k, bool) for k in bools]
     )
