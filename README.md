@@ -157,10 +157,13 @@ print(portal.link)  # Share this link — recipients need no credentials
 and on the passkey they save; `description` stays a private owner note. The
 API requires it whenever a call creates a resource (`protect_url`,
 `create_resource`, `create_portal_for_url`, `create`, and each `batch_create`
-item) and refuses a create without it with a `ValidationError` whose `status`
-is 400 and `code` is `"name_required"`; nothing is written. It is ignored when
-the call reuses an existing resource. The SDK sends `name` only when you pass
-it, and it needs a qURL API version that accepts the field.
+item). It is ignored when the call reuses an existing resource. The SDK sends
+`name` only when you pass it, and it needs a qURL API version that accepts the
+field. Names must be one line without surrounding whitespace or hidden
+characters (control, format such as zero-width joiners, or line separators).
+
+A create without a name is refused with a `ValidationError` whose `status` is
+400 and `code` is `"name_required"`; nothing is written.
 
 That is the core flow:
 

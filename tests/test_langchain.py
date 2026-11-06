@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from layerv_qurl.langchain import (
     _HAS_LANGCHAIN,
@@ -46,6 +47,24 @@ def test_langchain_import_does_not_load_incompatible_pydantic_v1() -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_create_qurl_tool_schema_requires_name() -> None:
+    client = _mock_client()
+    client.create.return_value = CreateOutput(
+        resource_id="r_abc123def45",
+        qurl_link="https://qurl.link/#at_test",
+        qurl_site="https://r_abc123def45.qurl.site",
+        expires_at=None,
+    )
+    tool = CreateQURLTool(client=client)
+    assert set(tool.args) == {"target_url", "name", "expires_in", "label"}
+    tool.invoke({"target_url": "https://example.com", "name": "Example"})
+    client.create.assert_called_once_with(
+        target_url="https://example.com", name="Example", expires_in="24h", label=None
+    )
+    with pytest.raises(PydanticValidationError, match="name"):
+        tool.invoke({"target_url": "https://example.com"})
 
 
 def _mock_client() -> MagicMock:

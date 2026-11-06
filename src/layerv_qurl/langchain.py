@@ -9,11 +9,21 @@ from typing import TYPE_CHECKING, Any
 
 try:
     from langchain_core.tools import BaseTool
+    from pydantic import BaseModel, Field
+
+    class _CreateQURLInput(BaseModel):
+        target_url: str = Field(description="The private URL to protect.")
+        name: str = Field(
+            description="Short public title recipients see for the resource; never a secret."
+        )
+        expires_in: str = Field("24h", description="Link lifetime, e.g. '24h' or '7d'.")
+        label: str | None = Field(None, description="Optional label for this link.")
 
     _HAS_LANGCHAIN = True
 except ImportError:
     _HAS_LANGCHAIN = False
     BaseTool = object  # type: ignore[misc,assignment]
+    _CreateQURLInput = None  # type: ignore[assignment,misc]
 
 if TYPE_CHECKING:
     from langchain_core.callbacks import CallbackManagerForToolRun
@@ -35,11 +45,11 @@ class CreateQURLTool(BaseTool):
     name: str = "create_qurl"
     description: str = (
         "Create a qURL — a secure, time-limited access link. "
-        "Input should be a JSON string with 'target_url' (required), "
-        "'name' (required: a short public title recipients see for the "
-        "resource, never a secret), and optionally 'expires_in' "
-        "(e.g. '24h', '7d'), 'label'."
+        "Arguments: 'target_url' (required), 'name' (required: a short public "
+        "title recipients see for the resource, never a secret), and optionally "
+        "'expires_in' (e.g. '24h', '7d') and 'label'."
     )
+    args_schema: Any = _CreateQURLInput
     client: Any = None  # QURLClient, typed as Any for Pydantic compatibility
 
     def _run(

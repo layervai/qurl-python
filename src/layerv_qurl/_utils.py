@@ -490,7 +490,8 @@ def validate_resource_name(name: str | None) -> None:
     if name is None:
         return
     validate_required_string(name, "name")
-    # Same refusal set as the service's ValidatePreviewName.
+    # Same refusal set as the service's ValidatePreviewName, which refuses all
+    # of Cf -- so ZWJ emoji sequences such as a technologist emoji are refused.
     if name.strip() != name or any(
         unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp"} for c in name
     ):

@@ -201,10 +201,56 @@ async def test_async_empty_name_rejected_before_sending(
     assert not route.called
 
 
+def test_find_or_create_false_with_only_name_is_refused(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="find_or_create"):
+        client.create_resource(find_or_create=False, name="Team dashboard")
+
+
 @respx.mock
-def test_find_or_create_false_with_only_name_is_sent(client: QURLClient) -> None:
+@pytest.mark.parametrize("name", ["Café ダッシュボード", "Ünïcode — dashboard ✓"])
+def test_non_ascii_name_is_accepted(client: QURLClient, name: str) -> None:
     route = respx.post(f"{BASE_URL}/v1/resources").mock(
         return_value=httpx.Response(201, json={"data": _RESOURCE})
     )
-    client.create_resource(find_or_create=False, name="Team dashboard")
-    assert json.loads(route.calls[0].request.content) == {"name": "Team dashboard"}
+    client.protect_url(TARGET, name=name)
+    assert _sent_name(route) == name
+
+
+def test_zwj_emoji_name_is_refused_like_the_service(client: QURLClient) -> None:
+    with pytest.raises(ValueError, match="name"):
+        client.protect_url(TARGET, name="\U0001f469\u200d\U0001f4bb Dev portal")
+
+
+@respx.mock
+@pytest.mark.parametrize(("path", "data", "call"), _CALLS)
+async def test_async_name_left_out_when_not_given(
+    async_client: AsyncQURLClient,
+    path: str,
+    data: dict[str, Any],
+    call: Callable[[Any], Any],
+) -> None:
+    route = respx.post(f"{BASE_URL}{path}").mock(
+        return_value=httpx.Response(201, json={"data": data})
+    )
+
+    class Unnamed:
+        def __getattr__(self, attr: str) -> Any:
+            method = getattr(async_client, attr)
+            return lambda *a, **kw: method(*a, **{k: v for k, v in kw.items() if k != "name"})
+
+    await call(Unnamed())
+    assert "name" not in json.loads(route.calls[0].request.content)
+
+
+@respx.mock
+async def test_async_name_required_refusal_is_a_validation_error(
+    async_client: AsyncQURLClient,
+) -> None:
+    respx.post(f"{BASE_URL}/v1/resources").mock(
+        return_value=httpx.Response(
+            400, json={"error": {"status": 400, "code": "name_required", "title": "Bad Request"}}
+        )
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        await async_client.protect_url(TARGET)
+    assert excinfo.value.code == "name_required"

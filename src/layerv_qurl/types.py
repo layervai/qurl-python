@@ -770,7 +770,7 @@ class BatchCreateItem(_BatchCreateItemRequired, total=False):
     """
 
     name: str
-    """Public resource name; required by the API when the item creates one."""
+    """Public resource name; required when the item creates a new resource."""
     type: str
     expires_in: str
     label: str

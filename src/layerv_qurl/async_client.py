@@ -980,7 +980,6 @@ class AsyncQURLClient:
         if find_or_create is False and not any(
             value is not None
             for value in (
-                name,
                 resource_type,
                 target_url,
                 description,
