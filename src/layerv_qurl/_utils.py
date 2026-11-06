@@ -1486,7 +1486,7 @@ def build_access_rules_body(version: int, items: Iterable[AccessRule]) -> dict[s
             raise ValueError("items: every rule must be an AccessRule")
         _require_utf8(rule.name, "access rule name")
         data = _serialize_value(rule)
-        if not data.get("allowed_emails", True):
+        if data.get("allowed_emails") == []:
             del data["allowed_emails"]  # the API requires one or more; empty means none
         rules.append(data)
     return {"version": version, "items": rules}
@@ -1498,6 +1498,8 @@ def _require_utf8(value: str | None, field: str) -> None:
     Applied to free-text display names only; the service restricts the other
     fields (ids, CRIDs, domains, inbox keys) to patterns that refuse them anyway.
     """
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{field}: must be a string")
     try:
         if value is not None:
             value.encode("utf-8")

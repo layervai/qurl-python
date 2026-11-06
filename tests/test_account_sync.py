@@ -341,6 +341,7 @@ async def test_email_domain_exceptions_round_trip(client):
         ("save_received_history", {"version": 0, "items": [{"crid": CRID, "opened_at": 1}]}),
         ("save_received_history", {"version": 0, "items": [ReceivedLink(CRID, 1, "bad\ud800")]}),
         ("update_resource", {"link_defaults": LinkDefaults("1h", rule_name="bad\ud800")}),
+        ("save_access_rules", {"version": 0, "items": [AccessRule(RULE_ID, 5, "public")]}),
     ],
 )
 async def test_bad_write_input_rejected_locally(client, method, kwargs):
