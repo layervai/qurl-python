@@ -46,6 +46,10 @@ from layerv_qurl.types import (
     AccessCodeListOutput,
     AccessGrant,
     AccessPolicy,
+    AccessRule,
+    AccessRuleLinkLimits,
+    AccessRulePayment,
+    AccessRules,
     AccessToken,
     AIAgentPolicy,
     APIKey,
@@ -68,8 +72,10 @@ from layerv_qurl.types import (
     Domain,
     DomainListOutput,
     DomainVerifyOutput,
+    InboxState,
     Invoice,
     InvoiceListOutput,
+    LinkDefaults,
     ListOutput,
     MintOutput,
     Portal,
@@ -77,6 +83,8 @@ from layerv_qurl.types import (
     Publisher,
     Quota,
     RateLimits,
+    ReceivedHistory,
+    ReceivedLink,
     RedeemAccessCodeOutput,
     ResolveOutput,
     Resource,
@@ -1084,6 +1092,20 @@ def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
         tombstoned_at=_parse_dt(data.get("tombstoned_at")),
+        link_defaults=_parse_link_defaults(data.get("link_defaults")),
+    )
+
+
+def _parse_link_defaults(data: Any) -> LinkDefaults | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("expires_in"), str):
+        raise unexpected_response("invalid resource link_defaults")
+    return LinkDefaults(
+        expires_in=data["expires_in"],
+        one_time_use=data.get("one_time_use") is True,
+        session_duration=data.get("session_duration"),
+        rule_name=data.get("rule_name"),
     )
 
 
@@ -1369,6 +1391,161 @@ def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
             if isinstance(item, dict)
         ],
     )
+
+
+def _sync_document(data: Any, what: str, *lists: str) -> dict[str, Any]:
+    """Fail closed: a missing version or list must not read as a new, empty document.
+
+    These documents are replaced whole on save, so a partial read written back
+    would delete the missing entries.
+    """
+    version = data.get("version") if isinstance(data, dict) else None
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version < 0
+        or any(not isinstance(data.get(name), list) for name in lists)
+    ):
+        raise unexpected_response(f"incomplete {what}")
+    return data  # type: ignore[no-any-return]
+
+
+def _parse_sync_items(
+    items: list[Any], parser: Callable[[dict[str, Any]], _T], what: str
+) -> list[_T]:
+    try:
+        return [parser(item) for item in items]
+    except (AttributeError, KeyError, TypeError):
+        raise unexpected_response(f"invalid {what} item") from None
+
+
+def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
+    limits = data.get("link_limits")
+    payment = data.get("payment")
+    allowed_emails = data.get("allowed_emails")
+    if allowed_emails is not None and not isinstance(allowed_emails, list):
+        raise TypeError("allowed_emails")
+    return AccessRule(
+        id=data["id"],
+        name=data["name"],
+        mode=data["mode"],
+        email_domain=data.get("email_domain"),
+        allowed_emails=allowed_emails,
+        contract_id=data.get("contract_id"),
+        link_limits=None if limits is None else AccessRuleLinkLimits(
+            expires_in=limits["expires_in"],
+            one_time_use=limits.get("one_time_use"),
+            session_duration=limits.get("session_duration"),
+        ),
+        approval_expires_in=data.get("approval_expires_in"),
+        payment=None if payment is None else AccessRulePayment(
+            price_id=payment["price_id"], access_seconds=payment["access_seconds"]
+        ),
+    )
+
+
+def parse_access_rules(data: Any) -> AccessRules:
+    """Parse the account access-rule library."""
+    doc = _sync_document(data, "access rules", "items", "built_ins")
+    if not isinstance(doc.get("account_id"), str) or not doc["account_id"]:
+        raise unexpected_response("incomplete access rules")
+    return AccessRules(
+        account_id=doc["account_id"],
+        version=doc["version"],
+        items=_parse_sync_items(doc["items"], _parse_access_rule, "access rule"),
+        built_ins=_parse_sync_items(doc["built_ins"], _parse_access_rule, "access rule"),
+        quick_share_rule_id=doc.get("quick_share_rule_id"),
+    )
+
+
+def build_access_rule_items(items: Iterable[AccessRule]) -> list[Any]:
+    """Serialize a complete rule library for ``PUT /v1/me/access-rules``."""
+    rules = list(items)
+    for rule in rules:
+        if not isinstance(rule, AccessRule):
+            raise ValueError("items: every rule must be an AccessRule")
+        require_utf8(rule.name, "access rule name")
+    return [_serialize_value(rule) for rule in rules]
+
+
+def require_utf8(value: str | None, field: str) -> None:
+    """Refuse lone surrogates, which JSON would carry as a different string."""
+    try:
+        if value is not None:
+            value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError(f"{field}: must be valid Unicode text") from None
+
+
+def parse_inbox_state(data: Any) -> InboxState:
+    """Parse the approvals-inbox state."""
+    doc = _sync_document(data, "inbox state", "dismissed")
+    if any(not isinstance(key, str) for key in doc["dismissed"]):
+        raise unexpected_response("invalid inbox state dismissed key")
+    return InboxState(
+        version=doc["version"],
+        dismissed=doc["dismissed"],
+        seen_through=_parse_dt(doc.get("seen_through")),
+    )
+
+
+def build_inbox_state_body(
+    version: int, dismissed: Iterable[str], seen_through: datetime | None
+) -> dict[str, Any]:
+    """Build ``PUT /v1/me/inbox-state``; ``dismissed`` is the complete list."""
+    validate_nonnegative_int(version, "version")
+    body: dict[str, Any] = {
+        "version": version,
+        "dismissed": build_string_list(dismissed, "dismissed", allow_empty=True),
+    }
+    if seen_through is not None:
+        if seen_through.utcoffset() is None:
+            raise ValueError("seen_through: must be timezone-aware")
+        body["seen_through"] = seen_through.isoformat()
+    return body
+
+
+def _parse_received_link(data: dict[str, Any]) -> ReceivedLink:
+    return ReceivedLink(
+        crid=data["crid"],
+        opened_at=data["opened_at"],
+        name=data.get("name"),
+        added_at=data.get("added_at"),
+    )
+
+
+def parse_received_history(data: Any) -> ReceivedHistory:
+    """Parse the received-link history."""
+    doc = _sync_document(data, "received history", "items")
+    return ReceivedHistory(
+        version=doc["version"],
+        items=_parse_sync_items(doc["items"], _parse_received_link, "received link"),
+        cleared_at=doc.get("cleared_at"),
+    )
+
+
+def build_received_history_body(version: int, items: Iterable[ReceivedLink]) -> dict[str, Any]:
+    """Build ``PUT /v1/me/received-history``; ``cleared_at`` is never sent."""
+    validate_nonnegative_int(version, "version")
+    links = list(items)
+    for link in links:
+        if not isinstance(link, ReceivedLink):
+            raise ValueError("items: every entry must be a ReceivedLink")
+        require_utf8(link.name, "received link name")
+    return {"version": version, "items": [_serialize_value(link) for link in links]}
+
+
+def build_link_defaults(
+    link_defaults: LinkDefaults | None, custom_domain: str | None
+) -> dict[str, Any]:
+    """``None`` clears saved defaults; an object replaces them whole."""
+    if link_defaults is not None and not isinstance(link_defaults, LinkDefaults):
+        raise ValueError("link_defaults: must be a LinkDefaults or None")
+    if custom_domain is not None:
+        raise ValueError("link_defaults and custom_domain must be updated separately")
+    if link_defaults is not None:
+        require_utf8(link_defaults.rule_name, "link_defaults.rule_name")
+    return {"link_defaults": _serialize_value(link_defaults)}
 
 
 def parse_customer(data: dict[str, Any]) -> Customer:

@@ -414,6 +414,42 @@ not the link's bearer token. This revokes that link and its sessions; other
 links stay active. A temporary enforcement error can be retried with the same
 IDs. With `AsyncQURLClient`, await the same method.
 
+### Link defaults
+
+`update_resource(..., link_defaults=LinkDefaults(expires_in="1h"))` saves the
+limits your client applies to new links for that resource, and
+`link_defaults=None` removes them. qURL stores them on the resource
+(`Resource.link_defaults`) but does not apply them: send the values with each
+link-create request. Update them separately from `custom_domain`.
+
+## Account Sync
+
+Saved access rules, the approvals-inbox state, and received-link history are
+versioned documents. Each save replaces the whole document only if `version`
+matches your last read; otherwise it raises `ConflictError`, so read again,
+merge, and retry.
+
+```python
+import uuid
+
+from layerv_qurl import AccessRule, ConflictError
+
+rules = client.get_access_rules()
+items = [*rules.items, AccessRule(id=str(uuid.uuid4()), name="Team review", mode="review")]
+try:
+    rules = client.save_access_rules(version=rules.version, items=items)
+except ConflictError:
+    ...  # another device saved first: re-read, merge, retry
+```
+
+`get_access_rules()` also returns the read-only `built_ins` and Desktop's
+`quick_share_rule_id`. The SDK never sends that choice, and the service keeps it.
+Saving a rule grants no access and changes no existing share.
+
+`get_inbox_state()` / `save_inbox_state()` and `get_received_history()` /
+`save_received_history()` work the same way and require JWT auth.
+`clear_received_history()` empties the history regardless of version.
+
 ## Custom Domains And Webhooks
 
 ```python
