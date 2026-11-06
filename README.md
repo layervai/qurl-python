@@ -428,8 +428,8 @@ Saved access rules, the approvals-inbox state, and received-link history are
 versioned documents. Each save replaces the whole document only if `version`
 matches your last read; otherwise it raises `ConflictError`, so read again,
 merge, and retry. The service never replays these saves, so the SDK never
-retries them automatically, even with `max_retries` set: after a timeout or 5xx,
-read again before saving, because the save may have landed.
+retries them automatically, even with `max_retries` set: after any error other
+than `ConflictError`, read again before saving, because the save may have landed.
 
 ```python
 import uuid
