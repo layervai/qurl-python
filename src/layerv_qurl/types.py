@@ -764,6 +764,8 @@ class AccessRuleLinkLimits:
     expires_in: str
     one_time_use: bool | None = None
     session_duration: str | None = None
+    # Fields this SDK does not model, kept as read and sent back on save.
+    extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
 
 @dataclass
@@ -772,6 +774,8 @@ class AccessRulePayment:
 
     price_id: str
     access_seconds: int
+    # Fields this SDK does not model, kept as read and sent back on save.
+    extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
 
 @dataclass
@@ -782,7 +786,7 @@ class AccessRule:
     for ``email_domain`` mode, ``contract_id``/``payment`` for ``contract``,
     ``link_limits`` for ``public``, and ``approval_expires_in`` for ``review``
     and ``keys``. ``name`` is display text; escape it when shown. Rule fields
-    this SDK does not model are not preserved when a read library is saved.
+    this SDK does not model are kept in ``extra`` and sent back unchanged.
     """
 
     id: str
@@ -794,6 +798,8 @@ class AccessRule:
     link_limits: AccessRuleLinkLimits | None = None
     approval_expires_in: str | None = None
     payment: AccessRulePayment | None = None
+    # Fields this SDK does not model, kept as read and sent back on save.
+    extra: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
 
 @dataclass

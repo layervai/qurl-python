@@ -101,6 +101,27 @@ async def test_save_access_rules_conflict_is_not_retried(client):
     assert sent(route) == {"version": 1, "items": []}
 
 
+@respx.mock
+async def test_unmodeled_rule_fields_round_trip(client):
+    # A field a newer service or client adds must survive an older SDK's save.
+    future = {
+        **PUBLIC_RULE,
+        "audience": {"kind": "team", "ids": ["t1"]},
+        "extra": None,
+        "link_limits": {**PUBLIC_RULE["link_limits"], "max_sessions": 3},
+    }
+    paid = {**PAID_RULE, "payment": {**PAID_RULE["payment"], "currency": "usd"}}
+    respx.get(f"{BASE_URL}/v1/me/access-rules").respond(
+        200, json={"data": {**LIBRARY, "items": [future, paid]}}
+    )
+    put = respx.put(f"{BASE_URL}/v1/me/access-rules").respond(200, json={"data": LIBRARY})
+    rules = await invoke(client.get_access_rules)
+    assert rules.items[0].extra == {"audience": {"kind": "team", "ids": ["t1"]}, "extra": None}
+    assert "audience" not in repr(rules.items[0])
+    await invoke(client.save_access_rules, version=rules.version, items=rules.items)
+    assert sent(put)["items"] == [future, paid]
+
+
 @pytest.mark.parametrize(
     "data",
     [

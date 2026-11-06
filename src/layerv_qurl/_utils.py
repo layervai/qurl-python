@@ -182,11 +182,13 @@ def _serialize_value(v: Any) -> Any:
     if isinstance(v, datetime):
         return v.isoformat()
     if dataclasses.is_dataclass(v) and not isinstance(v, type):
-        return {
+        data = {
             f.name: _serialize_value(getattr(v, f.name))
             for f in dataclasses.fields(v)
-            if getattr(v, f.name) is not None
+            if getattr(v, f.name) is not None and f.name != "extra"
         }
+        # ``extra`` holds response fields the SDK does not model; send them back as read.
+        return {**getattr(v, "extra", {}), **data}
     if isinstance(v, list):
         return [_serialize_value(item) for item in v]
     if isinstance(v, dict):
@@ -1431,6 +1433,12 @@ def _require_types(data: dict[str, Any], strs: tuple[str, ...], ints: tuple[str,
         raise TypeError("mistyped field")
 
 
+def _unmodeled(data: dict[str, Any], cls: type[Any]) -> dict[str, Any]:
+    """Keep the fields ``cls`` does not model so a save sends them back unchanged."""
+    known = {f.name for f in dataclasses.fields(cls)} - {"extra"}
+    return {k: v for k, v in data.items() if k not in known}
+
+
 def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
     _require_types(data, ("id", "name", "mode"))
     limits = data.get("link_limits")
@@ -1455,11 +1463,15 @@ def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
             expires_in=limits["expires_in"],
             one_time_use=limits.get("one_time_use"),
             session_duration=limits.get("session_duration"),
+            extra=_unmodeled(limits, AccessRuleLinkLimits),
         ),
         approval_expires_in=data.get("approval_expires_in"),
         payment=None if payment is None else AccessRulePayment(
-            price_id=payment["price_id"], access_seconds=payment["access_seconds"]
+            price_id=payment["price_id"],
+            access_seconds=payment["access_seconds"],
+            extra=_unmodeled(payment, AccessRulePayment),
         ),
+        extra=_unmodeled(data, AccessRule),
     )
 
 
