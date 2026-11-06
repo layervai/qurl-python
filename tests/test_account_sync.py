@@ -186,11 +186,28 @@ async def test_inbox_state_round_trip(client):
         {"version": -1, "dismissed": []},
         {"version": 0, "dismissed": "k1"},
         {"version": 0, "dismissed": [], "seen_through": datetime(2026, 11, 2)},
+        {"version": 0, "dismissed": [], "seen_through": "2026-11-02T00:00:00Z"},
+        {"version": 0, "dismissed": [], "seen_through": datetime(2026, 11, 2).date()},
     ],
 )
 async def test_save_inbox_state_rejects_bad_input_locally(client, kwargs):
     with pytest.raises(ValueError):
         await invoke(client.save_inbox_state, **kwargs)
+
+
+@respx.mock
+async def test_unmodeled_received_link_fields_round_trip(client):
+    entry = {"crid": CRID, "opened_at": 1, "source": {"app": "desktop"}, "extra": None}
+    respx.get(f"{BASE_URL}/v1/me/received-history").respond(
+        200, json={"data": {"version": 2, "items": [entry]}}
+    )
+    put = respx.put(f"{BASE_URL}/v1/me/received-history").respond(
+        200, json={"data": {"version": 3, "items": [entry]}}
+    )
+    history = await invoke(client.get_received_history)
+    assert history.items[0].extra == {"source": {"app": "desktop"}, "extra": None}
+    await invoke(client.save_received_history, version=history.version, items=history.items)
+    assert sent(put)["items"] == [entry]
 
 
 @respx.mock
@@ -294,6 +311,46 @@ async def test_missing_quick_share_and_empty_exceptions(client):
             "received-history",
             "get_received_history",
             {"version": 1, "items": [{"crid": CRID, "opened_at": "x"}]},
+        ),
+        # A malformed or mistyped optional field fails closed too.
+        ("inbox-state", "get_inbox_state", {"version": 1, "dismissed": [], "seen_through": "x"}),
+        ("inbox-state", "get_inbox_state", {"version": 1, "dismissed": [], "seen_through": 5}),
+        ("received-history", "get_received_history",
+         {"version": 1, "items": [], "cleared_at": "5"}),
+        (
+            "received-history",
+            "get_received_history",
+            {"version": 1, "items": [{"crid": CRID, "opened_at": 1, "name": 5}]},
+        ),
+        (
+            "received-history",
+            "get_received_history",
+            {"version": 1, "items": [{"crid": CRID, "opened_at": 1, "added_at": True}]},
+        ),
+        ("access-rules", "get_access_rules", {**LIBRARY, "quick_share_rule_id": 5}),
+        ("access-rules", "get_access_rules",
+         {**LIBRARY, "items": [{**PAID_RULE, "contract_id": 1}]}),
+        (
+            "access-rules",
+            "get_access_rules",
+            {**LIBRARY, "items": [{**PUBLIC_RULE, "approval_expires_in": ["1h"]}]},
+        ),
+        (
+            "access-rules",
+            "get_access_rules",
+            {**LIBRARY, "items": [{**PUBLIC_RULE, "email_domain": False}]},
+        ),
+        (
+            "access-rules",
+            "get_access_rules",
+            {**LIBRARY, "items": [{**PUBLIC_RULE, "link_limits": {"expires_in": "1h",
+                                                                   "one_time_use": "no"}}]},
+        ),
+        (
+            "access-rules",
+            "get_access_rules",
+            {**LIBRARY, "items": [{**PUBLIC_RULE, "link_limits": {"expires_in": "1h",
+                                                                   "session_duration": 60}}]},
         ),
     ],
 )

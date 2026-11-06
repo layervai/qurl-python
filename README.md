@@ -449,7 +449,8 @@ except ConflictError:
 unless a save removes the custom rule it names.
 Saving a rule grants no access and changes no existing share.
 Rule fields this SDK does not model are kept in `extra` (on `AccessRule`,
-`link_limits` and `payment`) and sent back unchanged when you save.
+`link_limits` and `payment`) and sent back unchanged when you save; so are
+unmodeled fields on each `ReceivedLink`.
 
 `get_inbox_state()` / `save_inbox_state()` and `get_received_history()` /
 `save_received_history()` work the same way and require JWT auth.

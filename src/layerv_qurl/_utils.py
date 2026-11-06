@@ -1427,11 +1427,37 @@ def _parse_sync_items(
         raise unexpected_response(f"invalid {what} item") from None
 
 
-def _require_types(data: dict[str, Any], strs: tuple[str, ...], ints: tuple[str, ...] = ()) -> None:
-    """Raise TypeError (reported as unexpected_response) for mistyped required fields."""
-    if any(not isinstance(data[k], str) for k in strs) or any(
-        not isinstance(data[k], int) or isinstance(data[k], bool) for k in ints
-    ):
+def _mistyped(
+    data: dict[str, Any],
+    strs: tuple[str, ...] = (),
+    ints: tuple[str, ...] = (),
+    bools: tuple[str, ...] = (),
+    *,
+    optional: bool = False,
+) -> bool:
+    """Whether a field has the wrong type; ``optional`` fields may also be absent or null."""
+    checks = (
+        [(k, str) for k in strs] + [(k, int) for k in ints] + [(k, bool) for k in bools]
+    )
+    for key, kind in checks:
+        value = data.get(key) if optional else data[key]
+        if optional and value is None:
+            continue
+        if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+            return True
+    return False
+
+
+def _require_types(
+    data: dict[str, Any],
+    strs: tuple[str, ...] = (),
+    ints: tuple[str, ...] = (),
+    bools: tuple[str, ...] = (),
+    *,
+    optional: bool = False,
+) -> None:
+    """Raise TypeError (reported as unexpected_response) for a mistyped field."""
+    if _mistyped(data, strs, ints, bools, optional=optional):
         raise TypeError("mistyped field")
 
 
@@ -1443,6 +1469,7 @@ def _unmodeled(data: dict[str, Any], cls: type[Any]) -> dict[str, Any]:
 
 def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
     _require_types(data, ("id", "name", "mode"))
+    _require_types(data, ("email_domain", "contract_id", "approval_expires_in"), optional=True)
     limits = data.get("link_limits")
     payment = data.get("payment")
     allowed_emails = data.get("allowed_emails")
@@ -1452,6 +1479,7 @@ def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
         raise TypeError("allowed_emails")
     if limits is not None:
         _require_types(limits, ("expires_in",))
+        _require_types(limits, ("session_duration",), bools=("one_time_use",), optional=True)
     if payment is not None:
         _require_types(payment, ("price_id",), ("access_seconds",))
     return AccessRule(
@@ -1480,7 +1508,11 @@ def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
 def parse_access_rules(data: Any) -> AccessRules:
     """Parse the account access-rule library."""
     doc = _sync_document(data, "access rules", "items", "built_ins")
-    if not isinstance(doc.get("account_id"), str) or not doc["account_id"]:
+    if (
+        not isinstance(doc.get("account_id"), str)
+        or not doc["account_id"]
+        or _mistyped(doc, ("quick_share_rule_id",), optional=True)
+    ):
         raise unexpected_response("incomplete access rules")
     return AccessRules(
         account_id=doc["account_id"],
@@ -1526,11 +1558,13 @@ def parse_inbox_state(data: Any) -> InboxState:
     doc = _sync_document(data, "inbox state", "dismissed")
     if any(not isinstance(key, str) for key in doc["dismissed"]):
         raise unexpected_response("invalid inbox state dismissed key")
-    return InboxState(
-        version=doc["version"],
-        dismissed=doc["dismissed"],
-        seen_through=_parse_dt(doc.get("seen_through")),
-    )
+    if _mistyped(doc, ("seen_through",), optional=True):
+        raise unexpected_response("invalid inbox state seen_through")
+    try:
+        seen_through = _parse_dt(doc.get("seen_through"))
+    except ValueError:
+        raise unexpected_response("invalid inbox state seen_through") from None
+    return InboxState(version=doc["version"], dismissed=doc["dismissed"], seen_through=seen_through)
 
 
 def build_inbox_state_body(
@@ -1538,6 +1572,8 @@ def build_inbox_state_body(
 ) -> dict[str, Any]:
     """Build ``PUT /v1/me/inbox-state``; ``dismissed`` is the complete list."""
     validate_nonnegative_int(version, "version")
+    if seen_through is not None and not isinstance(seen_through, datetime):
+        raise ValueError("seen_through: must be a datetime")
     if seen_through is not None and seen_through.utcoffset() is None:
         raise ValueError("seen_through: must be timezone-aware")
     return build_body({
@@ -1549,17 +1585,21 @@ def build_inbox_state_body(
 
 def _parse_received_link(data: dict[str, Any]) -> ReceivedLink:
     _require_types(data, ("crid",), ("opened_at",))
+    _require_types(data, ("name",), ("added_at",), optional=True)
     return ReceivedLink(
         crid=data["crid"],
         opened_at=data["opened_at"],
         name=data.get("name"),
         added_at=data.get("added_at"),
+        extra=_unmodeled(data, ReceivedLink),
     )
 
 
 def parse_received_history(data: Any) -> ReceivedHistory:
     """Parse the received-link history."""
     doc = _sync_document(data, "received history", "items")
+    if _mistyped(doc, ints=("cleared_at",), optional=True):
+        raise unexpected_response("invalid received history cleared_at")
     return ReceivedHistory(
         version=doc["version"],
         items=_parse_sync_items(doc["items"], _parse_received_link, "received link"),

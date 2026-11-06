@@ -842,6 +842,10 @@ class ReceivedLink:
     opened_at: int
     name: str | None = None
     added_at: int | None = None
+    # Fields this SDK does not model, sent back as read on save; excluded from ==.
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
 
 
 @dataclass
