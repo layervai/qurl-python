@@ -196,6 +196,28 @@ async def test_save_inbox_state_rejects_bad_input_locally(client, kwargs):
 
 
 @respx.mock
+async def test_null_optional_fields_read_as_absent(client):
+    respx.get(f"{BASE_URL}/v1/me/inbox-state").respond(
+        200, json={"data": {"version": 1, "dismissed": [], "seen_through": None}}
+    )
+    respx.get(f"{BASE_URL}/v1/me/received-history").respond(200, json={"data": {
+        "version": 1, "cleared_at": None,
+        "items": [{"crid": CRID, "opened_at": 1, "name": None, "added_at": None}],
+    }})
+    respx.get(f"{BASE_URL}/v1/me/access-rules").respond(200, json={"data": {
+        **LIBRARY, "quick_share_rule_id": None,
+        "items": [{**PUBLIC_RULE, "email_domain": None,
+                   "link_limits": {"expires_in": "1h", "one_time_use": None}}],
+    }})
+    assert (await invoke(client.get_inbox_state)).seen_through is None
+    history = await invoke(client.get_received_history)
+    assert history.cleared_at is None and history.items == [ReceivedLink(CRID, 1)]
+    rules = await invoke(client.get_access_rules)
+    assert rules.quick_share_rule_id is None
+    assert rules.items[0].link_limits == AccessRuleLinkLimits(expires_in="1h")
+
+
+@respx.mock
 async def test_unmodeled_received_link_fields_round_trip(client):
     entry = {"crid": CRID, "opened_at": 1, "source": {"app": "desktop"}, "extra": None}
     respx.get(f"{BASE_URL}/v1/me/received-history").respond(
@@ -315,6 +337,8 @@ async def test_missing_quick_share_and_empty_exceptions(client):
         # A malformed or mistyped optional field fails closed too.
         ("inbox-state", "get_inbox_state", {"version": 1, "dismissed": [], "seen_through": "x"}),
         ("inbox-state", "get_inbox_state", {"version": 1, "dismissed": [], "seen_through": 5}),
+        ("inbox-state", "get_inbox_state",
+         {"version": 1, "dismissed": [], "seen_through": "2026-11-02T00:00:00"}),
         ("received-history", "get_received_history",
          {"version": 1, "items": [], "cleared_at": "5"}),
         (

@@ -1562,6 +1562,8 @@ def parse_inbox_state(data: Any) -> InboxState:
         raise unexpected_response("invalid inbox state seen_through")
     try:
         seen_through = _parse_dt(doc.get("seen_through"))
+        if seen_through is not None and seen_through.utcoffset() is None:
+            raise ValueError("naive")  # RFC 3339 always carries an offset
     except ValueError:
         raise unexpected_response("invalid inbox state seen_through") from None
     return InboxState(version=doc["version"], dismissed=doc["dismissed"], seen_through=seen_through)
