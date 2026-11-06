@@ -45,9 +45,10 @@ class CreateQURLTool(BaseTool):
     def _run(
         self,
         target_url: str,
-        name: str,
         expires_in: str = "24h",
         label: str | None = None,
+        *,
+        name: str,
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> str:
         result = self.client.create(
