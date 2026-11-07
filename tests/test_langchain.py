@@ -63,7 +63,7 @@ def test_create_qurl_tool() -> None:
     )
 
     tool = CreateQURLTool(client=client)
-    result = tool._run(target_url="https://example.com", expires_in="24h")
+    result = tool._run(target_url="https://example.com", name="Example", expires_in="24h")
 
     assert result == (
         "Created qURL r_abc123def45\n"
@@ -73,6 +73,7 @@ def test_create_qurl_tool() -> None:
     )
     client.create.assert_called_once_with(
         target_url="https://example.com",
+        name="Example",
         expires_in="24h",
         label=None,
     )
@@ -88,7 +89,7 @@ def test_create_qurl_tool_no_expiration() -> None:
     )
 
     tool = CreateQURLTool(client=client)
-    result = tool._run(target_url="https://example.com", expires_in="24h")
+    result = tool._run(target_url="https://example.com", name="Example", expires_in="24h")
 
     assert result == (
         "Created qURL r_abc123def45\n"
@@ -98,6 +99,7 @@ def test_create_qurl_tool_no_expiration() -> None:
     )
     client.create.assert_called_once_with(
         target_url="https://example.com",
+        name="Example",
         expires_in="24h",
         label=None,
     )
