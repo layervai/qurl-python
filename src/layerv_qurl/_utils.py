@@ -47,6 +47,10 @@ from layerv_qurl.types import (
     AccessCodeListOutput,
     AccessGrant,
     AccessPolicy,
+    AccessRule,
+    AccessRuleLinkLimits,
+    AccessRulePayment,
+    AccessRules,
     AccessToken,
     AIAgentPolicy,
     APIKey,
@@ -69,8 +73,10 @@ from layerv_qurl.types import (
     Domain,
     DomainListOutput,
     DomainVerifyOutput,
+    InboxState,
     Invoice,
     InvoiceListOutput,
+    LinkDefaults,
     ListOutput,
     MintOutput,
     Portal,
@@ -78,6 +84,8 @@ from layerv_qurl.types import (
     Publisher,
     Quota,
     RateLimits,
+    ReceivedHistory,
+    ReceivedLink,
     RedeemAccessCodeOutput,
     ResolveOutput,
     Resource,
@@ -175,11 +183,16 @@ def _serialize_value(v: Any) -> Any:
     if isinstance(v, datetime):
         return v.isoformat()
     if dataclasses.is_dataclass(v) and not isinstance(v, type):
-        return {
-            f.name: _serialize_value(getattr(v, f.name))
-            for f in dataclasses.fields(v)
-            if getattr(v, f.name) is not None
-        }
+        data: dict[str, Any] = {}
+        for f in dataclasses.fields(v):
+            value = getattr(v, f.name)
+            if f.metadata.get("unmodeled"):
+                # Response fields the SDK does not model, sent back as read (raw JSON);
+                # a modeled name in it never overrides the modeled field, even when unset.
+                data = {**_unmodeled(value, type(v)), **data}
+            elif value is not None:
+                data[f.name] = _serialize_value(value)
+        return data
     if isinstance(v, list):
         return [_serialize_value(item) for item in v]
     if isinstance(v, dict):
@@ -1107,6 +1120,25 @@ def _parse_resource(data: dict[str, Any], *, strict_identity: bool) -> Resource:
         created_at=_parse_dt(data.get("created_at")),
         expires_at=_parse_dt(data.get("expires_at")),
         tombstoned_at=_parse_dt(data.get("tombstoned_at")),
+        link_defaults=_parse_link_defaults(data.get("link_defaults")),
+    )
+
+
+def _parse_link_defaults(data: Any) -> LinkDefaults | None:
+    if data is None:
+        return None
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("expires_in"), str)
+        or not isinstance(data.get("one_time_use", False), bool)
+        or _mistyped(data, ("session_duration", "rule_name"), optional=True)
+    ):
+        raise unexpected_response("invalid resource link_defaults")
+    return LinkDefaults(
+        expires_in=data["expires_in"],
+        one_time_use=data.get("one_time_use", False),
+        session_duration=data.get("session_duration"),
+        rule_name=data.get("rule_name"),
     )
 
 
@@ -1392,6 +1424,244 @@ def parse_daily_usage(data: dict[str, Any]) -> DailyUsage:
             if isinstance(item, dict)
         ],
     )
+
+
+def _sync_document(data: Any, what: str, *lists: str) -> dict[str, Any]:
+    """Fail closed: a missing version or list must not read as a new, empty document.
+
+    These documents are replaced whole on save, so a partial read written back
+    would delete the missing entries.
+    """
+    version = data.get("version") if isinstance(data, dict) else None
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version < 0
+        or any(not isinstance(data.get(name), list) for name in lists)
+    ):
+        raise unexpected_response(f"incomplete {what}")
+    return data  # type: ignore[no-any-return]
+
+
+def _parse_sync_items(
+    items: list[Any], parser: Callable[[dict[str, Any]], _T], what: str
+) -> list[_T]:
+    try:
+        return [parser(item) for item in items]
+    except (AttributeError, KeyError, TypeError):
+        raise unexpected_response(f"invalid {what} item") from None
+
+
+def _mistyped(
+    data: dict[str, Any],
+    strs: tuple[str, ...] = (),
+    ints: tuple[str, ...] = (),
+    bools: tuple[str, ...] = (),
+    *,
+    optional: bool = False,
+) -> bool:
+    """Whether a field has the wrong type; ``optional`` fields may also be absent or null.
+
+    A missing required key raises ``KeyError``: call it through ``_parse_sync_items``.
+    """
+    checks = (
+        [(k, str) for k in strs] + [(k, int) for k in ints] + [(k, bool) for k in bools]
+    )
+    for key, kind in checks:
+        value = data.get(key) if optional else data[key]
+        if optional and value is None:
+            continue
+        if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+            return True
+    return False
+
+
+def _require_types(
+    data: dict[str, Any],
+    strs: tuple[str, ...] = (),
+    ints: tuple[str, ...] = (),
+    bools: tuple[str, ...] = (),
+    *,
+    optional: bool = False,
+) -> None:
+    """Raise TypeError (reported as unexpected_response) for a mistyped field."""
+    if _mistyped(data, strs, ints, bools, optional=optional):
+        raise TypeError("mistyped field")
+
+
+def _unmodeled(data: dict[str, Any], cls: type[Any]) -> dict[str, Any]:
+    """Keep the fields ``cls`` does not model so a save sends them back unchanged."""
+    known = {f.name for f in dataclasses.fields(cls) if not f.metadata.get("unmodeled")}
+    return {k: v for k, v in data.items() if k not in known}
+
+
+def _parse_access_rule(data: dict[str, Any]) -> AccessRule:
+    _require_types(data, ("id", "name", "mode"))
+    _require_types(data, ("email_domain", "contract_id", "approval_expires_in"), optional=True)
+    limits = data.get("link_limits")
+    payment = data.get("payment")
+    allowed_emails = data.get("allowed_emails")
+    if allowed_emails is not None and (
+        not isinstance(allowed_emails, list) or any(not isinstance(e, str) for e in allowed_emails)
+    ):
+        raise TypeError("allowed_emails")
+    if limits is not None:
+        _require_types(limits, ("expires_in",))
+        _require_types(limits, ("session_duration",), bools=("one_time_use",), optional=True)
+    if payment is not None:
+        _require_types(payment, ("price_id",), ("access_seconds",))
+    return AccessRule(
+        id=data["id"],
+        name=data["name"],
+        mode=data["mode"],
+        email_domain=data.get("email_domain"),
+        allowed_emails=allowed_emails,
+        contract_id=data.get("contract_id"),
+        link_limits=None if limits is None else AccessRuleLinkLimits(
+            expires_in=limits["expires_in"],
+            one_time_use=limits.get("one_time_use"),
+            session_duration=limits.get("session_duration"),
+            extra=_unmodeled(limits, AccessRuleLinkLimits),
+        ),
+        approval_expires_in=data.get("approval_expires_in"),
+        payment=None if payment is None else AccessRulePayment(
+            price_id=payment["price_id"],
+            access_seconds=payment["access_seconds"],
+            extra=_unmodeled(payment, AccessRulePayment),
+        ),
+        extra=_unmodeled(data, AccessRule),
+    )
+
+
+def parse_access_rules(data: Any) -> AccessRules:
+    """Parse the account access-rule library."""
+    doc = _sync_document(data, "access rules", "items", "built_ins")
+    if (
+        not isinstance(doc.get("account_id"), str)
+        or not doc["account_id"]
+        or _mistyped(doc, ("quick_share_rule_id",), optional=True)
+    ):
+        raise unexpected_response("incomplete access rules")
+    return AccessRules(
+        account_id=doc["account_id"],
+        version=doc["version"],
+        items=_parse_sync_items(doc["items"], _parse_access_rule, "access rule"),
+        built_ins=_parse_sync_items(doc["built_ins"], _parse_access_rule, "access rule"),
+        quick_share_rule_id=doc.get("quick_share_rule_id"),
+    )
+
+
+def build_access_rules_body(version: int, items: Iterable[AccessRule]) -> dict[str, Any]:
+    """Build ``PUT /v1/me/access-rules``; ``quick_share_rule_id`` is never sent."""
+    validate_nonnegative_int(version, "version")
+    rules = []
+    for rule in items:
+        if not isinstance(rule, AccessRule):
+            raise ValueError("items: every rule must be an AccessRule")
+        _require_utf8(rule.name, "access rule name")
+        data = _serialize_value(rule)
+        if data.get("allowed_emails") == []:
+            del data["allowed_emails"]  # the API requires one or more; empty means none
+        rules.append(data)
+    return {"version": version, "items": rules}
+
+
+def _require_utf8(value: str | None, field: str) -> None:
+    """Refuse lone surrogates, which JSON would carry as a different string.
+
+    Applied to free-text display names only; the service restricts the other
+    fields (ids, CRIDs, domains, inbox keys) to patterns that refuse them anyway.
+    """
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{field}: must be a string")
+    try:
+        if value is not None:
+            value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError(f"{field}: must be valid Unicode text") from None
+
+
+def parse_inbox_state(data: Any) -> InboxState:
+    """Parse the approvals-inbox state."""
+    doc = _sync_document(data, "inbox state", "dismissed")
+    if any(not isinstance(key, str) for key in doc["dismissed"]):
+        raise unexpected_response("invalid inbox state dismissed key")
+    if _mistyped(doc, ("seen_through",), optional=True):
+        raise unexpected_response("invalid inbox state seen_through")
+    try:
+        seen_through = _parse_dt(doc.get("seen_through"))
+        if seen_through is not None and seen_through.utcoffset() is None:
+            raise ValueError("naive")  # RFC 3339 always carries an offset
+    except ValueError:
+        raise unexpected_response("invalid inbox state seen_through") from None
+    return InboxState(version=doc["version"], dismissed=doc["dismissed"], seen_through=seen_through)
+
+
+def build_inbox_state_body(
+    version: int, dismissed: Iterable[str], seen_through: datetime | None
+) -> dict[str, Any]:
+    """Build ``PUT /v1/me/inbox-state``; ``dismissed`` is the complete list."""
+    validate_nonnegative_int(version, "version")
+    if seen_through is not None and not isinstance(seen_through, datetime):
+        raise ValueError("seen_through: must be a datetime")
+    if seen_through is not None and seen_through.utcoffset() is None:
+        raise ValueError("seen_through: must be timezone-aware")
+    return build_body({
+        "version": version,
+        "dismissed": build_string_list(dismissed, "dismissed", allow_empty=True),
+        "seen_through": seen_through,
+    })
+
+
+def _parse_received_link(data: dict[str, Any]) -> ReceivedLink:
+    _require_types(data, ("crid",), ("opened_at",))
+    _require_types(data, ("name",), ("added_at",), optional=True)
+    return ReceivedLink(
+        crid=data["crid"],
+        opened_at=data["opened_at"],
+        name=data.get("name"),
+        added_at=data.get("added_at"),
+        extra=_unmodeled(data, ReceivedLink),
+    )
+
+
+def parse_received_history(data: Any) -> ReceivedHistory:
+    """Parse the received-link history."""
+    doc = _sync_document(data, "received history", "items")
+    if _mistyped(doc, ints=("cleared_at",), optional=True):
+        raise unexpected_response("invalid received history cleared_at")
+    return ReceivedHistory(
+        version=doc["version"],
+        items=_parse_sync_items(doc["items"], _parse_received_link, "received link"),
+        cleared_at=doc.get("cleared_at"),
+    )
+
+
+def build_received_history_body(version: int, items: Iterable[ReceivedLink]) -> dict[str, Any]:
+    """Build ``PUT /v1/me/received-history``; ``cleared_at`` is never sent."""
+    validate_nonnegative_int(version, "version")
+    links = []
+    for link in items:
+        if not isinstance(link, ReceivedLink):
+            raise ValueError("items: every entry must be a ReceivedLink")
+        _require_utf8(link.name, "received link name")
+        links.append(_serialize_value(link))
+    return {"version": version, "items": links}
+
+
+def build_link_defaults(
+    link_defaults: LinkDefaults | None | UnsetType, custom_domain: str | None
+) -> dict[str, Any]:
+    """``UNSET`` keeps saved defaults, ``None`` clears them, an object replaces them whole."""
+    if isinstance(link_defaults, UnsetType):
+        return {}
+    if link_defaults is not None and not isinstance(link_defaults, LinkDefaults):
+        raise ValueError("link_defaults: must be a LinkDefaults or None")
+    if custom_domain is not None:
+        raise ValueError("link_defaults and custom_domain must be updated separately")
+    if link_defaults is not None:
+        _require_utf8(link_defaults.rule_name, "link_defaults.rule_name")
+    return {"link_defaults": _serialize_value(link_defaults)}
 
 
 def parse_customer(data: dict[str, Any]) -> Customer:

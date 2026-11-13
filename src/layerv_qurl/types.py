@@ -355,6 +355,22 @@ class Resource:
     private: bool | None = None
     access_requests: bool | None = None
     allowed_device_keys: list[str] | None = None
+    link_defaults: LinkDefaults | None = None
+
+
+@dataclass
+class LinkDefaults:
+    """Limits a client applies to new links for a resource, synced across devices.
+
+    The service stores these but never applies them: send them with each
+    link-create request. Durations keep the form they were saved in (``1h``
+    and ``60m`` differ). ``rule_name`` is display text; escape it when shown.
+    """
+
+    expires_in: str
+    one_time_use: bool = False
+    session_duration: str | None = None
+    rule_name: str | None = None
 
 
 @dataclass
@@ -735,6 +751,114 @@ class ConnectorInstallationListOutput:
     installations: list[ConnectorInstallation] = field(default_factory=list)
     next_cursor: str | None = None
     has_more: bool = False
+
+
+@dataclass
+class AccessRuleLinkLimits:
+    """Limits of the temporary link a ``public`` rule shares.
+
+    ``one_time_use`` of ``None`` means ``False``; keeping it unset writes back
+    exactly what was read.
+    """
+
+    expires_in: str
+    one_time_use: bool | None = None
+    session_duration: str | None = None
+    # Fields this SDK does not model, sent back as read on save; excluded from ==.
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
+
+
+@dataclass
+class AccessRulePayment:
+    """A ``contract`` rule's Stripe price and access duration (zero = resource lifetime)."""
+
+    price_id: str
+    access_seconds: int
+    # Fields this SDK does not model, sent back as read on save; excluded from ==.
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
+
+
+@dataclass
+class AccessRule:
+    """A saved access-rule preset. Saving one grants no access.
+
+    The service validates each field: ``email_domain``/``allowed_emails`` are
+    for ``email_domain`` mode, ``contract_id``/``payment`` for ``contract``,
+    ``link_limits`` for ``public``, and ``approval_expires_in`` for ``review``
+    and ``keys``. ``name`` is display text; escape it when shown. Rule fields
+    this SDK does not model are kept in ``extra`` and sent back unchanged,
+    even if you change ``mode``.
+    """
+
+    id: str
+    name: str
+    mode: str
+    email_domain: str | None = None
+    allowed_emails: list[str] | None = None
+    contract_id: str | None = None
+    link_limits: AccessRuleLinkLimits | None = None
+    approval_expires_in: str | None = None
+    payment: AccessRulePayment | None = None
+    # Fields this SDK does not model, sent back as read on save; excluded from ==.
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
+
+
+@dataclass
+class AccessRules:
+    """The account's saved access-rule library and the read-only built-ins.
+
+    ``quick_share_rule_id`` is qURL Desktop's quick-share choice. It is
+    read-only here: saves from this SDK never send it, and the service keeps
+    it. ``account_id`` partitions a private sync cache.
+    """
+
+    account_id: str
+    version: int
+    items: list[AccessRule] = field(default_factory=list)
+    built_ins: list[AccessRule] = field(default_factory=list)
+    quick_share_rule_id: str | None = None
+
+
+@dataclass
+class InboxState:
+    """Approvals-inbox state synced across the account's devices."""
+
+    version: int
+    dismissed: list[str] = field(default_factory=list)
+    seen_through: datetime | None = None
+
+
+@dataclass
+class ReceivedLink:
+    """One received link. Times are Unix milliseconds."""
+
+    crid: str
+    opened_at: int
+    name: str | None = None
+    added_at: int | None = None
+    # Fields this SDK does not model, sent back as read on save; excluded from ==.
+    extra: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False, metadata={"unmodeled": True}
+    )
+
+
+@dataclass
+class ReceivedHistory:
+    """Links this account opened, newest first.
+
+    ``cleared_at`` (Unix milliseconds, read-only) is the last clear; drop local
+    entries opened at or before it before merging.
+    """
+
+    version: int
+    items: list[ReceivedLink] = field(default_factory=list)
+    cleared_at: int | None = None
 
 
 # ---- batch_create input shape -------------------------------------------
